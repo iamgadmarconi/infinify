@@ -773,6 +773,7 @@ impl Controller {
                 title: metadata.map(|m| m.title.clone()).unwrap_or_default(),
                 position: internal_to_rule(from_center, size)?,
                 size: [size[0] as i32, size[1] as i32],
+                pid: self.window_pid(window.id),
             });
         }
         pinned.sort_by(|a, b| (&a.output, a.position).cmp(&(&b.output, b.position)));

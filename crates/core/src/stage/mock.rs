@@ -2,7 +2,7 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/stage/mock.rs
 //   sha-256:    4b7117c342a887c3d06c94870c6032dd42d037c4bb47dc1249018d89b20ad91a (upstream file)
 // Changes from upstream: this header, and the two Smithay imports read

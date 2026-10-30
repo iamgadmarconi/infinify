@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The live-windows helper as a launch daemon, registered by the app with SMAppService. launchd starts it
+     when the app connects to the Mach service, and it quits a minute after its last request. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.spacefarm.sunlight.live-windows</string>
+	<key>BundleProgram</key>
+	<string>Contents/Helpers/SunlightLiveWindows</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>SunlightLiveWindows</string>
+		<string>daemon</string>
+	</array>
+	<key>MachServices</key>
+	<dict>
+		<key>com.spacefarm.sunlight.live-windows</key>
+		<true/>
+	</dict>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.spacefarm.sunlight</string>
+	</array>
+</dict>
+</plist>

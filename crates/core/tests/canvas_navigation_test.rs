@@ -2,7 +2,7 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       tests/canvas_navigation_test.rs
 //   sha-256:    231937c6c83cb17c24ac419f575cdd4de3474c60d87d27c1cf405a1198c0becf (upstream file)
 // Changes from upstream: this header, and crate paths only: `driftwm::`

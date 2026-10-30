@@ -9,5 +9,5 @@ task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-native-input.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
   native/desktop/native-input-regression.m native/desktop/native-tablet.m native/desktop/trackpad-gestures.m \
-  -framework AppKit -framework ApplicationServices -framework Carbon -o "$task_dir/native-input-policy"
+  -framework AppKit -framework ApplicationServices -framework Carbon -framework QuartzCore -o "$task_dir/native-input-policy"
 "$task_dir/native-input-policy"

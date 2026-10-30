@@ -3,22 +3,29 @@
     "path": "src/state/viewport.rs",
     "name": "align_point_on",
     "start": 203,
-    "end": 246,
-    "sha256": "ad939f73291c5c000482a552bfed8e5390c110983314a3fe119a1f82adbbb5aa"
+    "end": 245,
+    "sha256": "2ab8a63a66fc399aa74ac7263c497d531959b78b5b9cf729c4245833e26522ec"
   },
   {
     "path": "src/state/viewport.rs",
     "name": "set_camera_anchor",
-    "start": 257,
-    "end": 278,
+    "start": 256,
+    "end": 277,
     "sha256": "ee5a1cbbfefd6bb34d4e5f904e022595bd0b577e74945ebd8ad57e926857bb96"
   },
   {
     "path": "src/state/navigation.rs",
     "name": "navigation_target_zoom",
-    "start": 207,
-    "end": 213,
-    "sha256": "17e9d6add0809066e2aeedcbcbf5c84d339296f6e0ee98ad9eb048a25c409134"
+    "start": 399,
+    "end": 405,
+    "sha256": "1adcc7851618dfdedfcc5739dfafc82ce5dfcb90a03b3d50b49263efec736420"
+  },
+  {
+    "path": "src/state/viewport.rs",
+    "name": "landing_view_on",
+    "start": 290,
+    "end": 300,
+    "sha256": "d1dc0d21c71645e75e7dd2ca6bb1fff47c765288f9a869f965f07f916dd14d9f"
   },
   {
     "path": "src/state/viewport_animation.rs",
@@ -30,36 +37,36 @@
   {
     "path": "src/state/viewport_animation.rs",
     "name": "tick_zoom_animation_on",
-    "start": 693,
-    "end": 780,
+    "start": 739,
+    "end": 826,
     "sha256": "4b2a8d113db3c7357ce5c32aab9c26539eca86638c16081658add52eb4f4b5f1"
   },
   {
     "path": "src/state/viewport_animation.rs",
     "name": "tick_camera_animation_on",
-    "start": 663,
-    "end": 691,
+    "start": 709,
+    "end": 737,
     "sha256": "953bbc591eafb88cb472ba01713ee349b484376028a723d9ca06fe0d3993d497"
   },
   {
     "path": "src/config/mod.rs",
     "name": "outer_frame_inset",
-    "start": 310,
-    "end": 312,
+    "start": 311,
+    "end": 313,
     "sha256": "90b51f3b9706fbe661262599ccb952d92aa1c547ff73a9534853f0f7ed8f0357"
   },
   {
     "path": "src/canvas.rs",
     "name": "frame_size",
-    "start": 119,
-    "end": 124,
+    "start": 120,
+    "end": 125,
     "sha256": "20f87462b5992a66bb432470d320d549624d4f7963bb1e41026f3eb94fe4f249"
   },
   {
     "path": "src/config/types.rs",
     "name": "pull",
-    "start": 650,
-    "end": 662,
+    "start": 658,
+    "end": 670,
     "sha256": "2b851e61aad1b681efa4f240f9ad6c59a5542902cd8c76ec044ecbaf7659434f"
   },
   {
@@ -68,5 +75,12 @@
     "start": 161,
     "end": 170,
     "sha256": "57e6f215c99b1765ce9e43230b9e70613d406874157408f4be1345243a421670"
+  },
+  {
+    "path": "src/canvas.rs",
+    "name": "zoom_anchor_camera",
+    "start": 473,
+    "end": 482,
+    "sha256": "4f39336eca07973d35f821a3b71f9851a501653e8e4d09340c40a69072dc2867"
   }
 ]

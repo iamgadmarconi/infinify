@@ -321,9 +321,15 @@ The screenshot writer encodes the image, creates any missing parent directories,
 then writes the named PNG, following `capture_region_to_png` at the pinned
 revision (`src/render/screenshot.rs:117–122`). A non-directory parent reports
 `cannot create <parent>: …`; a failure opening or writing the final file reports
-`cannot write <path>: …`. Existing files retain the previous direct overwrite
-behavior. Encoding and writes run on the existing serial export worker; no
-parent directories are created when rendering or encoding fails.
+`cannot write <path>: …`. Since DriftWM v0.21.0 (`write_png`,
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`) the file is written to a new file
+beside the target, `.<name>.<pid>-<n>.tmp`, created with `O_EXCL`, and renamed
+into place; a failure removes the temporary and leaves what the path held, an
+existing file is replaced as a whole (it was truncated and rewritten in place),
+and a symbolic link at the path is replaced instead of written through. Encoding
+and writes run on the existing serial export worker; no parent directories are
+created when rendering or encoding fails. `msg screenshot -o -` hands the shell
+a file of the client's own to write ([IPC.md](IPC.md#msg-client)).
 
 **2. The result.** When the file is written the shell calls
 
@@ -375,7 +381,9 @@ In the order they are checked. All but the three marked are upstream's texts.
 | a window whose rounded frame has no area | `window has no capturable area` |
 | `All` on an empty canvas | `no windows to capture` |
 | `Region` with `w` or `h` not positive | `region width and height must be positive` |
+| a `Region` corner past ±1,050,000,000, or a side past 32767 (v0.21.0) | `coordinates must be within ±1050000000`, `sizes must be at most 32767` |
 | a `from_screen` region with no output under it and none active | `no output for the screen region` |
+| a `from_screen` region whose corner lands past ±1,050,000,000 on the canvas, as zoomed out far (v0.21.0) | `region lies past the canvas range` |
 | geometry that does not fit upstream's `i32` (not upstream's, which saturates) | `window geometry exceeds integer range`, `view geometry exceeds integer range` |
 | `scale` is not a positive finite number | `scale must be a positive number` |
 | the region has no area | `capture region is empty` |

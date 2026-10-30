@@ -13,6 +13,16 @@
 // checked by uid, connections are bounded and idle ones time out. Subscribers are
 // bounded as well, and where upstream keeps one that stopped reading, one that
 // takes nothing of an owed event for the idle time is hung up on.
+// The caps are v0.21.0's, df3de27b26c7998e8a460cffd8a4925cbed3a322,
+// third_party/driftwm/src/ipc/mod.rs: MAX_COMMAND_SIZE (1 MiB) and MAX_CONNECTIONS
+// (1024), refuse_connection (a connection past the cap is told why in one line
+// and closed, which also takes it off the level-triggered listener), and
+// serve_connection's rule that only the bytes just read can complete a request,
+// so a long partial one is not rescanned on every read. A connection needs one
+// descriptor, so the app raises its open-file limit at launch (main.m). The listen
+// backlog is 128, what Rust's UnixListener::bind ends up with on macOS (std passes -1
+// and the system caps it at 128), so a burst of clients is not refused while the
+// queue is still accepting them.
 #import "ipc-server.h"
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -87,7 +97,7 @@ static int existingServer(NSString *path,NSString **error) {
 - (void)dealloc { if(_secondFD>=0)close(_secondFD);if(_firstFD>=0)close(_firstFD); }
 @end
 
-enum { DWIPCMaxLine=64*1024,DWIPCMaxConnections=16,DWIPCMaxSubscribers=8,DWIPCIdleSeconds=30,DWIPCBacklog=16 };
+enum { DWIPCMaxLine=1<<20,DWIPCMaxConnections=1024,DWIPCMaxSubscribers=8,DWIPCIdleSeconds=30,DWIPCBacklog=128 };
 @interface DWIPCConnection : NSObject
 @property int fd;
 @property dispatch_source_t reader,idle;
@@ -148,6 +158,12 @@ static BOOL writeBytes(int fd,NSData *out) {
     return YES;
 }
 static NSData *terminated(NSData *line) { NSMutableData *out=[line mutableCopy];[out appendBytes:"\n" length:1];return out; }
+// Upstream's refuse_connection: a connection past the cap is told why, so `msg` reports more than a missing reply.
+// Never blocks: a fresh socket takes one short line, and a write that fails anyway changes nothing.
+static void refuse(int fd) {
+    NSData *line=terminated([NSJSONSerialization dataWithJSONObject:@{@"Err":[NSString stringWithFormat:@"%d IPC connections are already open",(int)DWIPCMaxConnections]} options:0 error:nil]);
+    (void)write(fd,line.bytes,line.length);close(fd);
+}
 @implementation DWIPCServer { atomic_uint _subscribers; }
 + (instancetype)serverAtPath:(NSString *)path handler:(DWIPCHandler)handler error:(NSString *__autoreleasing *)error {
     return [self serverAtPath:path asyncHandler:^(NSData *line,DWIPCReply completed){
@@ -170,7 +186,8 @@ static NSData *terminated(NSData *line) { NSMutableData *out=[line mutableCopy];
         uid_t user=0;gid_t group=0;int on=1;
         // Same user only. A flood is answered by hanging up, never by queueing. A
         // client that leaves mid-reply must not raise SIGPIPE in the app.
-        if(getpeereid(fd,&user,&group)||user!=geteuid()||self.connections.count>=DWIPCMaxConnections||!configure(fd)||setsockopt(fd,SOL_SOCKET,SO_NOSIGPIPE,&on,sizeof(on))){close(fd);continue;}
+        if(getpeereid(fd,&user,&group)||user!=geteuid()||!configure(fd)||setsockopt(fd,SOL_SOCKET,SO_NOSIGPIPE,&on,sizeof(on))){close(fd);continue;}
+        if(self.connections.count>=DWIPCMaxConnections){refuse(fd);continue;}
         DWIPCConnection *c=[DWIPCConnection new];c.fd=fd;c.buffer=[NSMutableData data];
         c.reader=dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,(uintptr_t)fd,0,self.queue);
         c.idle=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,self.queue);
@@ -244,6 +261,9 @@ static NSData *terminated(NSData *line) { NSMutableData *out=[line mutableCopy];
     if(n<0){[self close:c];return;}
     // End of input still answers every complete line already received.
     if(n)[c.buffer appendBytes:chunk length:(NSUInteger)n];else {c.eof=YES;c.paused=YES;dispatch_suspend(c.reader);}
+    // Only the bytes just read can complete a request (nothing before them is left unread while the reader runs):
+    // rescanning a long partial one on every read would stall the queue. A line past the cap hangs up.
+    if(n&&!memchr(chunk,'\n',(size_t)n)){if(c.buffer.length>DWIPCMaxLine)[self close:c];return;}
     [self drain:c];
 }
 // Hands over at most one request at a time and reads nothing more until it is

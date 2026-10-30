@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Dock-payload loader's launch daemon, registered by `Infinify native-desktop enable` with SMAppService.
+     Adapted from third_party/sunlight/Resources/LaunchDaemons/com.spacefarm.sunlight.live-windows.plist (Sunlight
+     afeea74, MIT, Copyright (c) 2026 spacefarm): the label, the program and the associated bundle are Infinify's. launchd
+     starts it when the app connects to the Mach service, and it quits a minute after its last request. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.marengox.infinify.loader</string>
+	<key>BundleProgram</key>
+	<string>Contents/Resources/NativeDesktop/loadd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>loadd</string>
+		<string>daemon</string>
+	</array>
+	<key>MachServices</key>
+	<dict>
+		<key>com.marengox.infinify.loader</key>
+		<true/>
+	</dict>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.marengox.infinify</string>
+	</array>
+</dict>
+</plist>

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/state/resize.rs (step_resize_focused, resize_element_to, PendingResize,
+// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
+// read at third_party/driftwm: src/state/resize.rs (step_resize_focused,
+// step_resize, step_target, resize_element_to, PendingResize,
 // requested_element_size, placed_element_size), src/state/fit.rs
 // (compute_fit_geometry, fit_window, unfit_window, fit_window_snapped,
 // unfit_window_snapped, snap_rects_with_primary, shift_cluster_around_primary,
@@ -53,7 +54,7 @@ use driftwm_core::layout::snap::SnapRect;
 use std::collections::{HashSet, VecDeque};
 
 /// A location or a size in upstream's whole logical pixels.
-type Px = [i64; 2];
+pub(crate) type Px = [i64; 2];
 
 /// What `place_window` says for a move during a gesture: a sizing action is
 /// refused the same way.
@@ -349,7 +350,7 @@ fn rect_at(loc: Px, size: Px) -> Rect {
         size: size_of(size),
     }
 }
-fn snap_rect(rect: Rect) -> SnapRect {
+pub(crate) fn snap_rect(rect: Rect) -> SnapRect {
     SnapRect {
         x_low: rect.origin.x,
         x_high: rect.right(),
@@ -358,7 +359,7 @@ fn snap_rect(rect: Rect) -> SnapRect {
     }
 }
 /// Upstream snap_rect_at, with no title bar strip and no border to add.
-fn snap_rect_at(loc: Px, size: Px) -> SnapRect {
+pub(crate) fn snap_rect_at(loc: Px, size: Px) -> SnapRect {
     snap_rect(rect_at(loc, size))
 }
 /// Upstream visual_frame_center.
@@ -376,7 +377,7 @@ fn loc_for_center(center: Point, size: Px) -> Px {
     ]
 }
 /// Upstream's usable area is whole pixels: its output-local top-left and size.
-fn usable_px(usable: Rect) -> Result<(Px, Px), Error> {
+pub(crate) fn usable_px(usable: Rect) -> Result<(Px, Px), Error> {
     let size = pixel_size(usable.size)?;
     Ok((
         [
@@ -407,6 +408,7 @@ pub(crate) fn delivers_a_size(action: &Action) -> bool {
         action,
         Action::GrowWindow(_)
             | Action::ShrinkWindow(_)
+            | Action::ResizeToSnap(_)
             | Action::FitWindow
             | Action::FitWindowSnapped
             | Action::FillWindow
@@ -447,7 +449,7 @@ impl Controller {
     /// stacking order. A widget and a screen-pinned window have no snap
     /// rectangle (snap_rect_for), so they are no obstacle to a fill and no
     /// member of a cluster.
-    fn snap_rects(&self) -> Vec<(WindowId, SnapRect)> {
+    pub(crate) fn snap_rects(&self) -> Vec<(WindowId, SnapRect)> {
         self.scene
             .windows()
             .iter()
@@ -459,7 +461,7 @@ impl Controller {
     /// that has left fullscreen and is still owed its size back is measured
     /// by that size, upstream's restore authority: its frame still has the
     /// output's (src/tests/fullscreen_handoff.rs).
-    fn px_frame(&self, window: WindowId) -> Result<(Px, Px), Error> {
+    pub(crate) fn px_frame(&self, window: WindowId) -> Result<(Px, Px), Error> {
         let (loc, size) = self.committed_frame(window)?;
         Ok((loc, self.fullscreen.restore_size(window).unwrap_or(size)))
     }
@@ -471,6 +473,16 @@ impl Controller {
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
         frame(rect).map_err(Error::Refused)
+    }
+    /// Upstream placed_element_size while a size is still owed: the size the
+    /// window's live transaction asked for, which the next step walks on from.
+    pub(crate) fn owed_size(&self, window: WindowId) -> Option<Px> {
+        let slot = self.resize_slot().filter(|slot| slot.live)?;
+        self.sizes
+            .pending
+            .as_ref()
+            .filter(|pending| pending.transaction == slot.transaction && pending.window == window)
+            .map(|pending| pending.asked.requested)
     }
     /// A sizing action cannot begin while a size transaction is unresolved.
     pub(crate) fn busy(slot: ResizeSlot) -> String {
@@ -513,7 +525,7 @@ impl Controller {
     /// Upstream's fullscreen exit configures the size from before, so that
     /// is what a window still owed it was last asked for, not the output's
     /// size its enter asked: the record follows the owed restore.
-    fn configured_size(&self, window: WindowId, committed: Px) -> Px {
+    pub(crate) fn configured_size(&self, window: WindowId, committed: Px) -> Px {
         if let Some(owed) = self.fullscreen.restore_size(window) {
             return owed;
         }
@@ -872,13 +884,18 @@ impl Controller {
         if self.gesture.is_some() {
             return Err(Error::Refused(GRABBED.to_owned()));
         }
-        let step = i64::from(self.config().resize_step);
+        // v0.21: `resize_step` is in screen px, like `pan_step`, so a step covers
+        // the same distance on screen at any zoom (upstream canvas_step).
+        let step = i64::from(self.canvas_step(window, output, self.config().resize_step));
         match action {
             Action::GrowWindow(direction) => {
                 self.step_resize(window, output, "grow-window", direction, step, outcome)
             }
             Action::ShrinkWindow(direction) => {
                 self.step_resize(window, output, "shrink-window", direction, -step, outcome)
+            }
+            Action::ResizeToSnap(direction) => {
+                self.resize_to_snap(window, output, direction, outcome)
             }
             Action::FitWindow => self.toggle_fit(window, output, false, outcome),
             Action::FitWindowSnapped => self.toggle_fit(window, output, true, outcome),
@@ -891,7 +908,7 @@ impl Controller {
     /// diagonal moves both of its edges by the rounded share of the step. The
     /// shift that holds the opposite edge still comes from the size the window
     /// is observed to take, so a step it only partly grants still anchors.
-    fn step_resize(
+    pub(crate) fn step_resize(
         &mut self,
         window: WindowId,
         output: Option<OutputId>,
@@ -1099,22 +1116,17 @@ impl Controller {
         }
         let output = output.ok_or(Error::Invalid("no active output"))?;
         let (_, usable) = self.view(output)?;
-        let inset = self.navigation_context(output)?.outer_gap();
         let (at, extent) = usable_px(usable)?;
-        // Upstream compute_fit_geometry, `as i32` truncations included.
-        let target = [
-            (extent[0] - (2.0 * inset) as i64).max(1),
-            (extent[1] - (2.0 * inset) as i64).max(1),
-        ];
+        // Upstream compute_fit_geometry (v0.20): edge to edge regardless of
+        // `snap.outer_gap`, which is fill's margin. A native frame has no
+        // border to hang past the usable area.
+        let target = [extent[0].max(1), extent[1].max(1)];
         let usable_center = center_of(at, extent);
         let camera = Point::new(
             (center.x - usable_center.x).round(),
             (center.y - usable_center.y).round(),
         );
-        let to = [
-            camera.x as i64 + at[0] + inset as i64,
-            camera.y as i64 + at[1] + inset as i64,
-        ];
+        let to = [camera.x as i64 + at[0], camera.y as i64 + at[1]];
         readable(rect_at(to, target)).map_err(Error::Refused)?;
         // Upstream raise_and_focus, set_overview_return(None), then the pan
         // and the zoom to 1 around the usable center.
@@ -1123,6 +1135,8 @@ impl Controller {
             outcome.effects.push(moved.effect);
         }
         outcome.dirty = true;
+        // As in navigate_to_window_on.
+        self.hover_parked();
         self.overview_returns.remove(&output);
         let anchor = Anchor {
             canvas: camera + usable_center,
@@ -1204,20 +1218,7 @@ impl Controller {
             return Ok(());
         };
         let context = self.navigation_context(home)?;
-        let viewport = self
-            .scene
-            .output(home)
-            .ok_or(Error::Invalid("unknown output"))?;
-        let (at, extent) = usable_px(context.usable_rect_local)?;
-        let low = viewport.camera + point_of(at) / viewport.zoom;
-        let high =
-            viewport.camera + point_of([at[0] + extent[0], at[1] + extent[1]]) / viewport.zoom;
-        let bounds = SnapRect {
-            x_low: low.x,
-            x_high: high.x,
-            y_low: low.y,
-            y_high: high.y,
-        };
+        let bounds = self.usable_canvas_bounds(home)?;
         let obstacles: Vec<SnapRect> = self
             .snap_rects()
             .into_iter()

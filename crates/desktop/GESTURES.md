@@ -146,7 +146,7 @@ unbound, never the unmodified binding.
 | `swipe_pan` | `N-finger-swipe` is `pan-viewport`; or `zoom` (a swipe has no scale); or a move or resize with no window under the pointer | each update is the [timed `pan`](MOTION.md#timed-pans-and-momentum) of a finger scroll: the camera moves by `-(dx, dy) · navigation.trackpad_speed / zoom` canvas points, so the canvas follows the fingers, and the output's momentum hears the delta at the event's `time_ms`. The end is that pan's `pan_end`, see [Momentum](#momentum) |
 | `swipe_move` | `N-finger-swipe` or `N-finger-doubletap-swipe` is `move-window` or `move-snapped-windows`, and a window is under the pointer | focuses and raises the window, then installs the drag a bound button press installs, with the cluster for `move-snapped-windows`. Each update moves a virtual pointer by the raw `(dx, dy)`, held inside the gesture's output, and the window follows it with the usual snapping, as under `gesture_to` with that `pointer`: inside `navigation.edge_pan.zone` of an edge the drag's [edge pan](MOTION.md#edge-pan-while-a-window-is-dragged) is armed and the canvas pans under the window frame by frame. On end the drag is released and its edge pan with it. Over a [screen-pinned window](RULES.md#screen-pinned-windows) the drag is its [screen-space drag](RULES.md#dragging-a-pinned-window), as upstream's `GestureTarget::Pinned` arm installs the pinned move grab: the window is raised and focused and follows the virtual pointer point for point whatever the zoom, on the gesture's output, with no snapping, no cluster and no edge pan |
 | `swipe_resize` | the same triggers bound to `resize-window` or `resize-window-snapped`, over a window | upstream's `try_start_gesture_resize`: raises and focuses the window and begins the [resize grab](NATIVE_RESIZE.md#pointer-resize) a bound button press begins, its edges from where in the window the pointer is, with the cluster for `resize-window-snapped`. Each update moves a virtual pointer by the raw `(dx, dy)`, held inside the gesture's output, with no `trackpad_speed` factor, and the grab asks the size that pointer means; the reply carries the size transaction's `transaction` and `effect` when one is to be performed. The end, cancelled or not, is the grab's release. When the grab cannot begin (the window has no source, a size transaction is already live, the shell performs no resize) the gesture is `swipe_pan`, as upstream's `false`, and nothing was focused. Over a [screen-pinned window](RULES.md#screen-pinned-windows), the same native transaction uses screen-space displacement with no snapping or cluster. |
-| `swipe_threshold` | `N-finger-swipe` is a threshold action, or only named directions are bound | accumulates the physical vector; when its length reaches `gestures.swipe_threshold` (12) it fires once. `N-finger-swipe-up/down/left/right` win in the physical direction the fingers moved, the larger axis deciding; otherwise the `N-finger-swipe` action fires. A bare `center-nearest` takes the opposite of the vector, in eight directions: fingers left look right |
+| `swipe_threshold` | `N-finger-swipe` is a threshold action, or only named directions are bound | accumulates the physical vector; when its length reaches `gestures.swipe_threshold` (12) it fires once. `N-finger-swipe-up/down/left/right` win in the physical direction the fingers moved, the larger axis deciding; otherwise the `N-finger-swipe` action fires. A bare `center-nearest` or `focus-nearest` (v0.20.0) takes the opposite of the vector, in eight directions: fingers left look right |
 | `pinch_zoom` | `N-finger-pinch` is bound (it can only be `zoom`) | the [pinch](MOTION.md#pointer-zoom) a `zoom_by` makes, given the scale itself: zoom = start zoom · `(1 + (scale − 1) · zoom.trackpad_speed)`, held between the dynamic minimum of the begin and 1.0, around the pointer. On end, cancelled or not, a zoom within 0.05 of 1.0 snaps to it |
 | `pinch_threshold` | no continuous pinch, and `N-finger-pinch-in` or `-out` is bound | fires the in action once when `scale` drops below `gestures.pinch_in_threshold` (0.85) and the out action once when it rises above `gestures.pinch_out_threshold` (1.15). One gesture can fire both |
 | `hold` | `N-finger-hold` is bound | fires its action when the hold ends, unless it was cancelled |
@@ -183,7 +183,7 @@ The dispatch runs upstream's `execute_action` prelude once, as for every other
 source: an action that is not `cycle-windows` first ends an open cycle,
 committing a confirmed selection, and every action stops the output's
 [scroll momentum](MOTION.md#what-stops-momentum). So a four-finger swipe is
-upstream's `center-nearest` in the eight directions: the nearest window in the
+upstream's `center-nearest` (or, bound bare as `focus-nearest`, v0.20.0, the same octant and the focus-nearest reveal) in the eight directions: the nearest window in the
 90° cone is raised, focused and flown to at the current zoom, a
 `navigation.anchors` point is flown to with focus cleared, and an empty cone
 does nothing ([NAVIGATION.md](NAVIGATION.md#window-navigation-actions)). An
@@ -224,20 +224,19 @@ Control+Option) and `mod_key = "super"`. "Runs" means the action executes in
 this build; the others are dispatched and refused by name until their actions
 exist. The `implemented` flag of each binding in the begin reply is the live
 answer, and `gesture_flow`'s `the_default_table_on_a_mac` reads it for every
-row: upstream binds 22 gestures, of which 16 run here, the 2 resizes among
-them, and 6 are refused by name. Four of the six, the two `fit-window`
-and the two `fit-window-snapped` pinches, run once the shell has sent
-`native_resize_capability`, and so do the two `toggle-fullscreen` pinches
-([FULLSCREEN.md](FULLSCREEN.md)).
+row: upstream v0.21.0 binds 16 gestures on a trackpad, all of which run here
+(v0.19 bound 22; v0.20.0 removed the six `fit-window` and `toggle-fullscreen`
+pinches, see below). The sizing actions need the shell's
+`native_resize_capability`, which every normal run sends.
 
 | Input | Upstream binding | Context | Action | Here |
 | --- | --- | --- | --- | --- |
 | 3-finger swipe | `3-finger-swipe` | anywhere | `pan-viewport` | runs, and coasts |
-| 4-finger swipe | `4-finger-swipe` | anywhere | `center-nearest` | runs: fires `center-nearest <dir>`, fingers left looking right |
-| ⌃⌥ 3-finger swipe | `mod+3-finger-swipe` | anywhere | `center-nearest` | the same |
+| 4-finger swipe | `4-finger-swipe` | anywhere | `focus-nearest` | runs: fires `focus-nearest <dir>`, fingers left looking right (v0.20.0: it was `center-nearest`) |
+| ⌃⌥ 3-finger swipe | `mod+3-finger-swipe` | anywhere | `focus-nearest` | the same |
 | 3-finger tap, then 3-finger swipe | `3-finger-doubletap-swipe` | on-window | `move-window` | runs |
-| ⌥ 3-finger swipe | `alt+3-finger-swipe` | on-window | `resize-window` | runs at the controller: the resize grab. Not run through the shell |
-| ⌥⇧ 3-finger swipe | `alt+shift+3-finger-swipe` | on-window | `resize-window-snapped` | the same, with the snap cluster |
+| ⌥ 3-finger swipe | `alt+3-finger-swipe` | on-window | `resize-window-snapped` | runs at the controller: the resize grab, with the snap cluster (v0.20.0: Shift now gives the single-window form). Not run through the shell |
+| ⌥⇧ 3-finger swipe | `alt+shift+3-finger-swipe` | on-window | `resize-window` | the same, the window alone |
 | 2-finger pinch | `2-finger-pinch` | on-canvas | `zoom` | runs |
 | ⌃⌥ 2-finger pinch | `mod+2-finger-pinch` | anywhere | `zoom` | runs |
 | 3-finger pinch | `3-finger-pinch` | anywhere | `zoom` | runs |
@@ -246,11 +245,9 @@ and the two `fit-window-snapped` pinches, run once the shell has sent
 | ⌃⌥ 3-finger pinch in | `mod+3-finger-pinch-in` | anywhere | `zoom-to-fit` | runs |
 | ⌃⌥ 3-finger pinch out | `mod+3-finger-pinch-out` | anywhere | `home-toggle` | runs |
 | ⌃⌥ 4-finger pinch in | `mod+4-finger-pinch-in` | anywhere | `zoom-to-fit-snapped` | runs |
-| ⌥ 2-finger pinch in or out | `alt+2-finger-pinch-in`, `-out` | on-window | `fit-window` | runs with the capability, which every normal run sends, else refused: [SIZES.md](SIZES.md#the-gate) |
-| ⌥⇧ 2-finger pinch in or out | `alt+shift+2-finger-pinch-in`, `-out` | on-window | `fit-window-snapped` | the same |
-| ⌥ 3-finger pinch in or out | `alt+3-finger-pinch-in`, `-out` | on-window | `toggle-fullscreen` | refused without the capability |
-| 4-finger hold | `4-finger-hold` | anywhere | `center-window` | runs, on release |
-| ⌃⌥ 3-finger hold | `mod+3-finger-hold` | anywhere | `center-window` | the same |
+| ~~⌥ 2-finger pinch in or out~~, ~~⌥⇧ 2-finger pinch~~, ~~⌥ 3-finger pinch~~ | `alt+2-finger-pinch-in`, `-out`, `alt+shift+2-finger-pinch-*`, `alt+3-finger-pinch-*` | on-window | `fit-window`, `fit-window-snapped`, `toggle-fullscreen` | **no longer bound upstream** (v0.20.0: fullscreen is on mod+f only, and the pinches that fitted are gone). A file may still bind them |
+| 4-finger hold | `4-finger-hold` | anywhere | `focus-center` | runs, on release (v0.20.0: it was `center-window`; with nothing under the pointer `focus-center` is `center-window`) |
+| ⌃⌥ 3-finger hold | `mod+3-finger-hold` | anywhere | `focus-center` | the same |
 
 What follows from the table and the lookup order:
 
@@ -726,3 +723,47 @@ No gesture event reached that app: a gesture firing `center-nearest`,
 `center-window` or `cycle-windows`, `held` on its events, hold-to-commit armed
 from a gesture, a move's native focus request and the merged press path exist
 there as compiled code and as the controller scenarios above, nothing more.
+
+## DriftWM v0.20.0 / v0.21.0
+
+Upstream changed the default `[gestures]` table in v0.20.0 and `driftwm-core`
+carries the new table (`crates/core/src/config/defaults.rs`):
+
+- Every default `center-nearest` binding is `focus-nearest` (the 4-finger and
+  `mod+3-finger` swipes). `focus-nearest` can be bound bare to a swipe like
+  `center-nearest`, and the gesture gives the direction in the pan sense
+  (fingers moving left look right); a trigger that carries no direction rejects
+  both with `... requires a swipe trigger (needs direction from input)`
+  (upstream's `reject_bare_directional`). Here a `swipe_threshold` entry whose
+  action is `focus-nearest` fires `focus-nearest <octant>` through the same
+  dispatch as `center-nearest` (`gestures.rs`, the `ThresholdAction::FocusNearest`
+  arm); `Found::describe` reports `"action":"focus-nearest"`.
+- `alt+3-finger-swipe` is `resize-window-snapped` and `alt+shift+3-finger-swipe`
+  `resize-window` (the cluster is the default, Shift the single window); the
+  touchscreen 3-finger doubletap and hold-swipe likewise.
+- The 4-finger and `mod+3-finger` holds are `focus-center`.
+- Removed: the alt+2-finger pinches that fitted and the alt+3-finger pinch that
+  toggled fullscreen.
+
+`tests/gesture_flow.rs` reads the table back through `begin`'s binding list. The
+shell's recogniser and Dock-gesture interception changed separately (next
+section); nothing here was run on a trackpad.
+
+### First trackpad run, 2026-10-29
+
+The owner ran the shell in compositor mode on a MacBook with an M5 Pro (macOS 27.2,
+156 x 96 mm built-in trackpad). The owner reports that three- and four-finger swipes
+and a pinch drove the canvas (no log of them was kept). A thumb and three
+fingers spreading and pinching, which are the bound `4-finger-pinch-out` and
+`4-finger-pinch-in` of the default table, instead performed macOS's own Show Desktop and
+Applications, and a four-finger swipe up opened Mission Control once: the shell's
+Dock-control guard did not hold the system's gestures back. Why is not established; the
+[shell notes](../../native/desktop/README.md#trackpad-gestures) list the paths the code
+allows, what changed (the guard decides a Dock-control stream once and follows it to
+its end, the drop timing is Sunlight's, both taps ask the guard, no Dock-control packet
+is converted to an `NSEvent`) and the `INFINIFY_DEBUG` lines that will say which it was.
+The recogniser's pinch reading gained a rule over every finger's distance from their
+centre, because a thumb and three fingers that spread while the hand drifts were read
+as a four-finger swipe: the controller's `4-finger-swipe` binding (`center-nearest` in that build,
+`focus-nearest` since the v0.21.0 defaults above) then fired where a pinch was meant. That rule has been exercised on synthetic hands
+only. The controller is unchanged, and no controller scenario was run for this.

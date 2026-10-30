@@ -2,7 +2,13 @@
 
 `driftwm_canvas::policy` ports the pure helper policies from
 `malbiruk/driftwm`, commit `352333a8fa1b22171492d4b71a54102045c9a19d`,
-`src/canvas.rs`, under GPL-3.0-or-later. It does not change Scene, controller,
+`src/canvas.rs`, under GPL-3.0-or-later. Its differential oracle
+(`tests/policy_flow.rs`) now compiles v0.21.0's unchanged `src/canvas.rs`
+(commit `df3de27b26c7998e8a460cffd8a4925cbed3a322`,
+`third_party/driftwm/src/canvas.rs`) and passes; v0.21.0 added
+`minimal_reveal_camera` and `leading_edge_camera`, which this module does not
+port, and made `closest_point_on_rect` sum in f64, which it does not (it still
+sums in i32; the traced inputs do not reach the difference). It does not change Scene, controller,
 native-window, persistence, or session behavior. The existing `Momentum` helper
 also remains unchanged. This module is a foundation for separately reviewed
 integration.

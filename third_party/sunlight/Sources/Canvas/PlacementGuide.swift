@@ -1,0 +1,297 @@
+import AppKit
+import SwiftUI
+
+/// Instructions › Placing Windows (`Manual`): the three placement scopes shown rather than described.
+/// Each card is a miniature canvas whose windows act the command out on a loop, with the keys under it
+/// and a Try button that runs the real command on the canvas behind the window. Also reached from the
+/// ? in Settings › Windows.
+enum PlacementGuide {
+    enum Scope: CaseIterable, Identifiable {
+        case window, screen, everything
+
+        var id: Self { self }
+
+        var eyebrow: String {
+            switch self {
+            case .window: return "One window"
+            case .screen: return "One screen"
+            case .everything: return "Everything"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .window: return "Move & Resize"
+            case .screen: return "Arrange"
+            case .everything: return "Tidy"
+            }
+        }
+
+        var line: String {
+            switch self {
+            case .window: return "The window under the pointer takes a slot of its screen: a half, a quarter, a third."
+            case .screen: return "The windows on the screen you're looking at share it in columns."
+            case .everything: return "Every window on the canvas, on one grid, from the screen you're looking at."
+            }
+        }
+
+        @MainActor var keys: String {
+            switch self {
+            case .window: return TileMenu.tileKeysSummary
+            case .screen: return TileMenu.arrangeKeysSummary
+            case .everything: return TileMenu.tidyKeysSummary
+            }
+        }
+    }
+
+    /// The cards shown: Arrange and Tidy only with arranging on (`Settings.arranging`).
+    static func scopes(arranging: Bool) -> [Scope] { arranging ? Scope.allCases : [.window] }
+
+    /// What the hand does, under the cards.
+    struct HandItem: Identifiable {
+        let id: String
+        let symbol: String
+        let title: String
+        let line: String
+    }
+
+    static let byHand: [HandItem] = [
+        HandItem(id: "drag", symbol: "hand.point.up.left", title: "Drag",
+                 line: "Edges and centres stick to the neighbours'; let go and it settles onto the grid."),
+        HandItem(id: "free", symbol: "command", title: "⌘-drag",
+                 line: "Freely: no guides, no grid, over other windows."),
+        HandItem(id: "edge", symbol: "arrow.up.left.and.arrow.down.right", title: "An edge or corner",
+                 line: "Resizes, the real window following as you drag."),
+        HandItem(id: "push", symbol: "arrow.left.and.right", title: "Into a neighbour",
+                 line: "It moves aside, when windows push each other in Settings."),
+    ]
+
+    // MARK: The demos
+
+    /// A miniature canvas: each window's rect before and after the command, in a 222 × 150 box; the
+    /// screen's outline, and how far the view pulls back after (Tidy frames the result).
+    struct Demo {
+        var screen: CGRect
+        var before: [CGRect]
+        var after: [CGRect]
+        /// Which windows the command acts on: drawn in the sun's colour.
+        var acted: Set<Int>
+        var pullBack: CGFloat = 1
+    }
+
+    static let box = CGSize(width: 222, height: 150)
+
+    @MainActor static func demo(for scope: Scope) -> Demo {
+        let screen = CGRect(x: 11, y: 11, width: 200, height: 128)
+        let gap: CGFloat = 6
+        switch scope {
+        case .window:
+            let others = [CGRect(x: 122, y: 32, width: 62, height: 46), CGRect(x: 140, y: 88, width: 52, height: 40)]
+            let hand = CGRect(x: 34, y: 30, width: 72, height: 52)
+            let leftHalf = Tiling.rect(Tiling.Preset.leftHalf.unit!, in: screen, gap: gap)
+            return Demo(screen: screen, before: [hand] + others, after: [leftHalf] + others, acted: [0])
+        case .screen:
+            let before = [CGRect(x: 24, y: 26, width: 78, height: 60), CGRect(x: 74, y: 56, width: 88, height: 56),
+                          CGRect(x: 136, y: 28, width: 58, height: 70)]
+            let after = Tiling.cells(columns: 3, rows: 1).map { Tiling.rect($0, in: screen, gap: gap) }
+            return Demo(screen: screen, before: before, after: after, acted: [0, 1, 2])
+        case .everything:
+            // Zoomed out: the screen is small and the windows are all over the canvas.
+            let small = CGRect(x: 30, y: 34, width: 96, height: 62)
+            let before = [CGRect(x: 6, y: 8, width: 40, height: 28), CGRect(x: 60, y: 14, width: 34, height: 24),
+                          CGRect(x: 118, y: 4, width: 44, height: 30), CGRect(x: 176, y: 20, width: 38, height: 26),
+                          CGRect(x: 12, y: 70, width: 36, height: 26), CGRect(x: 86, y: 54, width: 42, height: 30),
+                          CGRect(x: 150, y: 76, width: 46, height: 32), CGRect(x: 62, y: 108, width: 40, height: 28)]
+            var after: [CGRect] = []
+            let cell = CGSize(width: 42, height: 29), spacing: CGFloat = 5
+            for i in 0..<8 {
+                after.append(CGRect(x: small.minX + spacing + CGFloat(i % 4) * (cell.width + spacing),
+                                    y: small.minY + spacing + CGFloat(i / 4) * (cell.height + spacing),
+                                    width: cell.width, height: cell.height))
+            }
+            return Demo(screen: small, before: before, after: after, acted: Set(0..<8), pullBack: 0.86)
+        }
+    }
+}
+
+// MARK: - Views
+
+struct PlacementGuideView: View {
+    let onTry: (PlacementGuide.Scope) -> Void
+    let onSettings: () -> Void
+    /// A Done button, for the guide in a window of its own; nil inside the instructions.
+    let onDone: (() -> Void)?
+    /// `Settings.arranging`: Arrange and Tidy are shown only with it on.
+    let arranging: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Placing windows")
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(1.4)
+                .textCase(.uppercase)
+                .foregroundStyle(.primary.opacity(0.55))
+                .padding(.bottom, 10)
+            Text(arranging ? "Three ways to place windows." : "Place a window with a key.")
+                .font(.system(size: 30, weight: .semibold))
+                .tracking(-0.6)
+                .accessibilityAddTraits(.isHeader)
+            Text(arranging
+                 ? "Each one works on more than the last: one window, the windows on one screen, everything on the canvas. The keys are all ⌃⌥, and ⌘Z undoes any of them."
+                 : "The keys are all ⌃⌥, and ⌘Z undoes them.")
+                .font(.system(size: 14))
+                .foregroundStyle(.primary.opacity(0.7))
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
+                .padding(.bottom, 24)
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(PlacementGuide.scopes(arranging: arranging)) { scope in
+                    ScopeCard(scope: scope) { onTry(scope) }
+                }
+            }
+            Text("By hand")
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(1.4)
+                .textCase(.uppercase)
+                .foregroundStyle(.primary.opacity(0.55))
+                .padding(.top, 28)
+                .padding(.bottom, 12)
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(PlacementGuide.byHand) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.primary.opacity(0.6))
+                            .frame(width: 18)
+                            .padding(.top, 1)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title).font(.system(size: 13, weight: .semibold))
+                            Text(item.line).font(.system(size: 12)).foregroundStyle(.primary.opacity(0.6))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            HStack(spacing: 14) {
+                Text("⌘Z undoes any placement.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary.opacity(0.5))
+                Spacer()
+                Button("Settings › Windows…", action: onSettings)
+                    .quietButton(size: 14, dim: 0.6)
+                if let onDone {
+                    Button("Done", action: onDone)
+                        .primaryButton(scale: 0.78)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(.top, 28)
+        }
+        .padding(EdgeInsets(top: 34, leading: 36, bottom: 30, trailing: 36))
+        .frame(minWidth: 860, maxWidth: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+struct ScopeCard: View {
+    let scope: PlacementGuide.Scope
+    let onTry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DemoView(demo: PlacementGuide.demo(for: scope))
+                .frame(width: PlacementGuide.box.width, height: PlacementGuide.box.height)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .padding(.bottom, 14)
+            Text(scope.eyebrow)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(1.2)
+                .textCase(.uppercase)
+                .foregroundStyle(.primary.opacity(0.5))
+            Text(scope.title)
+                .font(.system(size: 17, weight: .semibold))
+                .padding(.top, 3)
+            Text(scope.line)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.primary.opacity(0.65))
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 5)
+            HStack(alignment: .firstTextBaseline) {
+                Text(scope.keys)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Try", action: onTry)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            .padding(.top, 12)
+        }
+        .padding(14)
+        .frame(width: PlacementGuide.box.width + 28)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.primary.opacity(0.05))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.primary.opacity(0.08), lineWidth: 1))
+        )
+    }
+}
+
+/// The miniature canvas. On a loop: the windows as they are, a beat, the command (a spring), a long
+/// look at the result, a short fade, and again. With Reduce Motion the result, still.
+struct DemoView: View {
+    let demo: PlacementGuide.Demo
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+    @State private var placed = false
+    @State private var shown = true
+
+    private static let sun = Color(red: 0.98, green: 0.74, blue: 0.12)
+
+    var body: some View {
+        let rects = placed ? demo.after : demo.before
+        ZStack(alignment: .topLeading) {
+            Rectangle().fill(.primary.opacity(scheme == .dark ? 0.06 : 0.04))
+            RoundedRectangle(cornerRadius: 3)
+                .strokeBorder(.primary.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                .frame(width: demo.screen.width, height: demo.screen.height)
+                .offset(x: demo.screen.minX, y: demo.screen.minY)
+            ForEach(rects.indices, id: \.self) { i in
+                let acted = demo.acted.contains(i)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(acted ? Self.sun.opacity(placed ? 0.95 : 0.8) : Color.primary.opacity(0.22))
+                    .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(.black.opacity(0.18), lineWidth: 0.5))
+                    .frame(width: rects[i].width, height: rects[i].height)
+                    .offset(x: rects[i].minX, y: rects[i].minY)
+            }
+        }
+        .frame(width: PlacementGuide.box.width, height: PlacementGuide.box.height, alignment: .topLeading)
+        .scaleEffect(placed ? demo.pullBack : 1, anchor: .center)
+        .opacity(shown ? 1 : 0)
+        .task { await run() }
+        .accessibilityHidden(true)
+    }
+
+    private func run() async {
+        if reduceMotion {
+            placed = true
+            return
+        }
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(1.0))
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.82)) { placed = true }
+            try? await Task.sleep(for: .seconds(2.6))
+            withAnimation(.easeInOut(duration: 0.25)) { shown = false }
+            try? await Task.sleep(for: .seconds(0.3))
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { placed = false }
+            withAnimation(.easeInOut(duration: 0.25)) { shown = true }
+            try? await Task.sleep(for: .seconds(0.3))
+        }
+    }
+}

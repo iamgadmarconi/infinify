@@ -543,10 +543,12 @@ fn hover_moves_no_focus_under_a_gesture_a_native_resize_or_an_open_cycle() {
     assert_eq!(h.history(), json!([2, 1]));
     let step = h.ok(json!({"op":"action","output":1,"action":"cycle-windows forward","held":true}));
     assert_eq!(h.focused(), 1);
-    h.lands(&step["navigation"]);
+    // v0.20: Alt-Tab no longer pans to a window the view already shows whole,
+    // and A is: the step is focus only, and the camera stays where it is.
+    assert_eq!(step["navigation"], Value::Null);
     assert_eq!(h.focus_state()["cycle"], 1);
     let open = h.snapshot();
-    // The step flew the camera to A; O beside it is still on the output.
+    // The camera did not move; O beside A is still on the output.
     let reply = h.hover(450.0, 350.0);
     kept(&reply);
     assert_eq!(reply["hit"]["window"], 5);
@@ -942,6 +944,10 @@ fn a_config_reload_turns_sloppy_focus_and_pick_mode_on_and_off_live() {
     // The threshold is read at every command too: the same pose is pick mode
     // under one file and not under the next.
     h.look(0.0, 0.0, 0.4);
+    // The default threshold is 0.5 since v0.20, so no file is pick mode here
+    // and `interact_min = 0` turns it off.
+    assert_eq!(h.snapshot()["outputs"][0]["pick"], true);
+    h.reload("[zoom]\ninteract_min = 0.0\n");
     assert_eq!(h.snapshot()["outputs"][0]["pick"], false);
     assert_eq!(h.hit(x, y)["pick"], false);
     h.reload("[zoom]\ninteract_min = 0.5\n");
@@ -1123,8 +1129,12 @@ fn at_or_above_interact_min_and_with_it_off_nothing_is_a_pick() {
         assert_eq!(h.snapshot(), before);
     }
 
-    // Off, upstream's default, at any zoom.
-    let mut h = zoomed_out("", 0.01);
+    // The default is 0.5 since v0.20 (0.0 before): with no file, 0.4 is pick
+    // mode and 0.5 is not.
+    assert_eq!(zoomed_out("", 0.4).snapshot()["outputs"][0]["pick"], true);
+    assert_eq!(zoomed_out("", 0.5).snapshot()["outputs"][0]["pick"], false);
+    // Off (`interact_min = 0`, upstream's default until v0.20), at any zoom.
+    let mut h = zoomed_out("[zoom]\ninteract_min = 0.0\n", 0.01);
     assert_eq!(h.snapshot()["outputs"][0]["pick"], false);
     let (x, y) = center(W);
     assert_eq!(h.hit(x, y)["pick"], false);
@@ -1772,7 +1782,12 @@ fn border(h: &mut Host, x: f64, y: f64) -> Value {
     let screen = pointer(h, x, y);
     h.ok(json!({"op":"resize_border","output":1,"screen":screen}))["border"].clone()
 }
+// v0.20: `decoration_resize_snapped` is true by default, so an edge drag
+// carries the cluster; a screen-pinned window never does.
 fn edge(window: u64, edges: &str) -> Value {
+    json!({"window":window,"edges":edges,"snapped":true})
+}
+fn edge_single(window: u64, edges: &str) -> Value {
     json!({"window":window,"edges":edges,"snapped":false})
 }
 #[test]
@@ -1815,6 +1830,8 @@ fn the_resize_border_is_the_band_outside_a_frame_and_names_its_edge() {
         border(&mut h, 96.0, 150.0),
         json!({"window":1,"edges":"left","snapped":true})
     );
+    h.reload("[mouse]\ndecoration_resize_snapped = false\n");
+    assert_eq!(border(&mut h, 96.0, 150.0), edge_single(1, "left"));
     // Off, the band takes no press.
     h.reload("[mouse]\nresize_on_border = false\n");
     assert_eq!(border(&mut h, 96.0, 150.0), Value::Null);
@@ -1822,13 +1839,13 @@ fn the_resize_border_is_the_band_outside_a_frame_and_names_its_edge() {
     h.reload("");
     h.focus(1);
     h.ok(json!({"op":"action","output":1,"action":"toggle-pin-to-screen"}));
-    assert_eq!(border(&mut h, 96.0, 150.0), edge(1, "left"));
+    assert_eq!(border(&mut h, 96.0, 150.0), edge_single(1, "left"));
     h.reload("[zoom]\ninteract_min = 0.5\n[mouse]\ndecoration_resize_snapped = true\n");
     h.look(500., 300., 0.2);
     let screen = point(ORIGIN.0 + 96., ORIGIN.1 + 150.);
     assert_eq!(
         h.ok(json!({"op":"resize_border","output":1,"screen":screen}))["border"],
-        edge(1, "left")
+        edge_single(1, "left")
     );
 }
 // The band is a canvas distance, as upstream's is: 8 units are 4.8 screen
@@ -1846,7 +1863,9 @@ fn the_resize_border_scales_with_the_zoom_and_is_off_in_pick_mode() {
 #[test]
 fn the_inner_resize_border_uses_native_points_and_never_a_viewport_clip() {
     for zoom in [0.2, 0.6, 1.0] {
-        let mut h = layout("");
+        // Pick mode is off: below the default `interact_min` of 0.5 (v0.20) a
+        // press is the pick's, and this is about the band.
+        let mut h = layout("[zoom]\ninteract_min = 0.0\n");
         h.look(0., 0., zoom);
         // These sources are twice their world size: five observed native
         // points project to 2.5*zoom display points. A three-display-point

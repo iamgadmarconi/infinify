@@ -702,7 +702,7 @@ fn subscribe_and_state_event_carry_upstreams_event_line() {
     let text = line.as_str().unwrap();
     assert!(
         text.starts_with(
-            r#"{"State":{"camera":[500.0,-400.0],"zoom":1.0,"layout":"","layout_short":"","windows":[{"id":1,"app_id":"test","title":"fixture","position":[300,-250],"size":[400,300],"is_focused":false,"is_widget":false,"suspended":false,"mode":"Normal"}],"fullscreen":[],"pinned":[],"layers":[],"canvas_layers":[],"outputs":[{"name":"left","camera":[500.0,-400.0],"zoom":1.0,"size":[1000,800],"active":true,"active_bookmark":null},"#
+            r#"{"State":{"camera":[500.0,-400.0],"zoom":1.0,"layout":"","layout_short":"","windows":[{"id":1,"app_id":"test","title":"fixture","position":[300,-250],"size":[400,300],"is_focused":false,"is_widget":false,"suspended":false,"mode":"Normal","pid":123}],"fullscreen":[],"pinned":[],"layers":[],"canvas_layers":[],"outputs":[{"name":"left","camera":[500.0,-400.0],"zoom":1.0,"size":[1000,800],"active":true,"active_bookmark":null},"#
         ),
         "{text}"
     );
@@ -863,7 +863,8 @@ fn host_owned_default_bindings_do_not_depend_on_path() {
     assert_eq!(loaded["warnings"], json!([]));
     let reply = h.bindings();
     let keys = by_combo(&reply["keys"]);
-    assert_eq!(keys.len(), 46);
+    // v0.20: 46 default chords, less mod+e and mod+z, plus mod+shift+q.
+    assert_eq!(keys.len(), 45);
     assert!(!keys.contains_key("mod+l"));
     assert_eq!(keys["mod+Return"]["action"], "exec-terminal");
     assert_eq!(keys["mod+ctrl+Right"]["repeat"], true);

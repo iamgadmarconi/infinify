@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from malbiruk/driftwm src/config/parse.rs at
-// 352333a8fa1b22171492d4b71a54102045c9a19d (GPL-3.0-or-later).
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
 // Changes from upstream: `smithay::` paths read `crate::platform::`.
 // Nothing else.
 use crate::platform::input::keyboard::{keysyms, xkb};
@@ -119,6 +119,10 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             let dir = parse_direction(arg.ok_or("nudge-window requires a direction")?)?;
             Ok(Action::NudgeWindow(dir))
         }
+        "move-to-snap" => {
+            let dir = parse_cardinal(name, arg.ok_or("move-to-snap requires a direction")?)?;
+            Ok(Action::MoveToSnap(dir))
+        }
         // Reached only from a keybinding: the mouse and gesture parsers match
         // these as continuous actions before ever falling through here.
         "resize-window" | "resize-window-snapped" => Err(format!(
@@ -133,6 +137,10 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             let dir = parse_direction(arg.ok_or("shrink-window requires a direction")?)?;
             Ok(Action::ShrinkWindow(dir))
         }
+        "resize-to-snap" => {
+            let dir = parse_cardinal(name, arg.ok_or("resize-to-snap requires a direction")?)?;
+            Ok(Action::ResizeToSnap(dir))
+        }
         "pan-viewport" => {
             let dir = parse_direction(arg.ok_or("pan-viewport requires a direction")?)?;
             Ok(Action::PanViewport(dir))
@@ -142,6 +150,10 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "center-nearest" => {
             let dir = parse_direction(arg.ok_or("center-nearest requires a direction")?)?;
             Ok(Action::CenterNearest(dir))
+        }
+        "focus-nearest" => {
+            let dir = parse_direction(arg.ok_or("focus-nearest requires a direction")?)?;
+            Ok(Action::FocusNearest(dir))
         }
         "cycle-windows" => {
             let dir_str = arg.ok_or("cycle-windows requires forward or backward")?;
@@ -244,14 +256,17 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("fit-window", "fit-window"),
     ("fit-window-snapped", "fit-window-snapped"),
     ("focus-center", "focus-center"),
+    ("focus-nearest", "focus-nearest up"),
     ("go-to-bookmark", "go-to-bookmark 1"),
     ("grow-window", "grow-window up"),
     ("home-toggle", "home-toggle"),
     ("move-to-bookmark", "move-to-bookmark 1"),
+    ("move-to-snap", "move-to-snap up"),
     ("nudge-window", "nudge-window up"),
     ("pan-viewport", "pan-viewport up"),
     ("quit", "quit"),
     ("reload-config", "reload-config"),
+    ("resize-to-snap", "resize-to-snap right"),
     ("send-cursor-to-output", "send-cursor-to-output up"),
     ("send-to-output", "send-to-output up"),
     ("set-bookmark", "set-bookmark 1"),
@@ -288,10 +303,19 @@ pub fn parse_mouse_action(s: &str) -> Result<MouseAction, String> {
         "pan-viewport" => Ok(MouseAction::PanViewport),
         "zoom" => Ok(MouseAction::Zoom),
         "center-nearest" => Ok(MouseAction::CenterNearest),
+        "focus-nearest" => Ok(MouseAction::FocusNearest),
         other => {
             let action = parse_action(other)?;
             Ok(MouseAction::Action(action))
         }
+    }
+}
+
+/// `parse_direction` for the actions with no diagonal reading.
+fn parse_cardinal(action: &str, s: &str) -> Result<Direction, String> {
+    match parse_direction(s)? {
+        dir @ (Direction::Up | Direction::Down | Direction::Left | Direction::Right) => Ok(dir),
+        _ => Err(format!("{action} takes up, down, left or right")),
     }
 }
 
@@ -391,13 +415,15 @@ fn parse_continuous_action(s: &str) -> Option<ContinuousAction> {
 }
 
 /// Classify `s` as a threshold action. Every keyboard action qualifies, plus
-/// bare `center-nearest` (its direction comes from the swipe); continuous-only
-/// actions don't. A known action name with a bad argument keeps its specific
-/// parse error; an unknown name yields `None` so the caller's generic "unknown
-/// action" message applies.
+/// bare `center-nearest` and `focus-nearest` (their direction comes from the
+/// swipe); continuous-only actions don't. A known action name with a bad
+/// argument keeps its specific parse error; an unknown name yields `None` so
+/// the caller's generic "unknown action" message applies.
 fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
-    if s == "center-nearest" {
-        return Ok(Some(ThresholdAction::CenterNearest));
+    match s {
+        "center-nearest" => return Ok(Some(ThresholdAction::CenterNearest)),
+        "focus-nearest" => return Ok(Some(ThresholdAction::FocusNearest)),
+        _ => {}
     }
     if parse_continuous_action(s).is_some() {
         return Ok(None);
@@ -415,6 +441,19 @@ fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
             }
         }
     }
+}
+
+/// The bare directional actions take their direction from a swipe, so a
+/// trigger that carries none rejects them.
+fn reject_bare_directional(action: Option<&ThresholdAction>) -> Result<(), String> {
+    let name = match action {
+        Some(ThresholdAction::CenterNearest) => "center-nearest",
+        Some(ThresholdAction::FocusNearest) => "focus-nearest",
+        _ => return Ok(()),
+    };
+    Err(format!(
+        "{name} requires a swipe trigger (needs direction from input)"
+    ))
 }
 
 /// Validate trigger + action combination per the validation table.
@@ -495,12 +534,7 @@ pub fn parse_gesture_config_entry(
                      not '{action_str}'"
                 ));
             }
-            if matches!(is_threshold, Some(ThresholdAction::CenterNearest)) {
-                return Err(
-                    "center-nearest requires a swipe trigger (needs direction from input)"
-                        .to_string(),
-                );
-            }
+            reject_bare_directional(is_threshold.as_ref())?;
             if let Some(ta) = is_threshold {
                 Ok(GestureConfigEntry::Threshold(ta))
             } else {
@@ -513,12 +547,7 @@ pub fn parse_gesture_config_entry(
                     "hold trigger only accepts threshold actions, not '{action_str}'"
                 ));
             }
-            if matches!(is_threshold, Some(ThresholdAction::CenterNearest)) {
-                return Err(
-                    "center-nearest requires a swipe trigger (needs direction from input)"
-                        .to_string(),
-                );
-            }
+            reject_bare_directional(is_threshold.as_ref())?;
             if let Some(ta) = is_threshold {
                 Ok(GestureConfigEntry::Threshold(ta))
             } else {
@@ -585,11 +614,10 @@ pub fn parse_touch_config_entry(
                 ));
             }
             match parse_threshold_action(action_str)? {
-                Some(ThresholdAction::CenterNearest) => Err(
-                    "center-nearest requires a swipe trigger (needs direction from input)"
-                        .to_string(),
-                ),
-                Some(ta) => Ok(GestureConfigEntry::Threshold(ta)),
+                Some(ta) => {
+                    reject_bare_directional(Some(&ta))?;
+                    Ok(GestureConfigEntry::Threshold(ta))
+                }
                 None => Err(format!("unknown touch action: '{action_str}'")),
             }
         }
@@ -612,11 +640,14 @@ mod tests {
             Action::CloseWindow => "close-window",
             Action::SuspendWindow => "suspend-window",
             Action::NudgeWindow(_) => "nudge-window",
+            Action::MoveToSnap(_) => "move-to-snap",
             Action::GrowWindow(_) => "grow-window",
             Action::ShrinkWindow(_) => "shrink-window",
+            Action::ResizeToSnap(_) => "resize-to-snap",
             Action::PanViewport(_) => "pan-viewport",
             Action::CenterWindow => "center-window",
             Action::CenterNearest(_) => "center-nearest",
+            Action::FocusNearest(_) => "focus-nearest",
             Action::CycleWindows { .. } => "cycle-windows",
             Action::HomeToggle => "home-toggle",
             Action::GoToBookmark(_) => "go-to-bookmark",
@@ -657,6 +688,32 @@ mod tests {
         assert_eq!(
             parse_action("move-to-bookmark my desk"),
             Ok(Action::MoveToBookmark("my desk".into()))
+        );
+    }
+
+    #[test]
+    fn snap_actions_take_cardinal_directions_only() {
+        assert_eq!(
+            parse_action("move-to-snap up"),
+            Ok(Action::MoveToSnap(Direction::Up))
+        );
+        assert_eq!(
+            parse_action("resize-to-snap Right"),
+            Ok(Action::ResizeToSnap(Direction::Right))
+        );
+        assert_eq!(
+            parse_action("move-to-snap up-left"),
+            Err("move-to-snap takes up, down, left or right".into())
+        );
+        assert_eq!(
+            parse_action("resize-to-snap down-right"),
+            Err("resize-to-snap takes up, down, left or right".into())
+        );
+        assert!(parse_action("move-to-snap").is_err());
+        // Nudging stays bindable beside them, diagonals included.
+        assert_eq!(
+            parse_action("nudge-window up-left"),
+            Ok(Action::NudgeWindow(Direction::UpLeft))
         );
     }
 

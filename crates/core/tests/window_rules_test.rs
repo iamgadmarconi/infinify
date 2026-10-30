@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from malbiruk/driftwm tests/window_rules_test.rs at
-// 352333a8fa1b22171492d4b71a54102045c9a19d (GPL-3.0-or-later).
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
 // Changes from upstream: crate paths only — `driftwm::config` reads
 // `driftwm_core::config` and `smithay::` reads `driftwm_core::platform::`.
 // rustfmt re-wrapped the four `let combo = …Keysym::from(…KEY_q);` statements

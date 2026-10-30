@@ -2,9 +2,9 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/grabs/touch_recognizer/tests.rs
-//   sha-256:    38a762330cefb7b08d77c436e83c4fce712e16cb984d92b088182feffa5fd2c6 (upstream file)
+//   sha-256:    e8e319d0de7c102b774b9529b52cdf61db0d9030ade6dfcec090584b904ecb13 (upstream file)
 // Changes from upstream: this header, and path prefixes only: `smithay::`
 // reads `crate::platform::` (2 imports) and `driftwm::` reads `crate::`
 // (1 import); and `use proptest::prelude::*;` carries `#[rustfmt::skip]`
@@ -208,9 +208,9 @@ fn two_finger_spread_on_canvas_zooms() {
 
 #[test]
 fn four_finger_swipe_fires_exactly_one_threshold() {
-    // Default `swipe = 4` fingers is the one-shot navigate (`center-nearest`); the
+    // Default `swipe = 4` fingers is the one-shot navigate (`focus-nearest`); the
     // 3-finger tier pans continuously. Fingers move left → inverted nav vector
-    // points right → `CenterNearest(Right)`.
+    // points right → `FocusNearest(Right)`.
     let cfg = cfg_default();
     let mut seq = vec![
         down(0, 400.0, 500.0, false, 0),
@@ -235,9 +235,31 @@ fn four_finger_swipe_fires_exactly_one_threshold() {
     assert!(
         decs.iter().any(|d| matches!(
             d,
-            Decision::FireThreshold(Action::CenterNearest(Direction::Right))
+            Decision::FireThreshold(Action::FocusNearest(Direction::Right))
         )),
-        "expected CenterNearest(Right), got {decs:?}"
+        "expected FocusNearest(Right), got {decs:?}"
+    );
+}
+
+#[test]
+fn bare_focus_nearest_takes_the_swipe_direction_like_center_nearest() {
+    let cfg =
+        Config::from_toml("[touch.anywhere]\n\"4-finger-swipe\" = \"focus-nearest\"\n").unwrap();
+    let seq = four_finger_nav(
+        [400.0, 500.0, 600.0, 700.0],
+        &[
+            [360.0, 460.0, 560.0, 660.0],
+            [320.0, 420.0, 520.0, 620.0],
+            [280.0, 380.0, 480.0, 580.0],
+        ],
+    );
+    let decs = run_all(&cfg, &seq);
+    assert!(
+        decs.iter().any(|d| matches!(
+            d,
+            Decision::FireThreshold(Action::FocusNearest(Direction::Right))
+        )),
+        "fingers left must fire FocusNearest(Right), got {decs:?}"
     );
 }
 
@@ -868,7 +890,7 @@ fn configured_swipe_threshold_makes_a_firing_swipe_inert() {
     assert!(
         decs.iter().any(|d| matches!(
             d,
-            Decision::FireThreshold(Action::CenterNearest(Direction::Right))
+            Decision::FireThreshold(Action::FocusNearest(Direction::Right))
         )),
         "the default threshold must fire the swipe, got {decs:?}"
     );

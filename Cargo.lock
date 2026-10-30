@@ -54,6 +54,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "driftwm-canvas"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "serde",
  "serde_json",
  "thiserror",
@@ -61,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "driftwm-core"
-version = "0.19.0"
+version = "0.21.0"
 dependencies = [
  "proptest",
  "regex",

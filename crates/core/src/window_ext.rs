@@ -2,14 +2,15 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/window_ext.rs
-//   sha-256:    efe14bca0888978d52e21b5bc4def7fa8970e44a7bdb49d30efb5138c99d464f (upstream file)
+//   sha-256:    2e8009ba4dd6fed15eebc66f51429c1dd6ebbe94f22b0747b60aaf1325851821 (upstream file)
 // Changes from upstream: this header; only the `WindowExt` trait is kept
-// (upstream lines 45-68, unmodified). Left out, because each needs the
-// Wayland stack: `set_tiled_states`, `unset_tiled_states` and
-// `decoration_mode_to_wire` (lines 6-43), `impl WindowExt for Window`
-// (lines 70-189), and the imports only they used
+// (upstream lines 67-90, unmodified). Left out, because each needs the
+// Wayland stack: `set_tiled_states`, `unset_tiled_states`,
+// `decoration_mode_to_wire`, `decoration_mode_to_kde_manager` and
+// `decoration_mode_to_kde` (lines 6-65), `impl WindowExt for Window`
+// (lines 92-211), and the imports only they used
 // (`smithay::desktop::Window`, `smithay::wayland::shell::xdg::ToplevelSurface`).
 // The two remaining imports read `crate::platform::`.
 // See PORT.md in the crate root for the full change log.

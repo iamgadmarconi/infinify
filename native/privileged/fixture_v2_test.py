@@ -70,6 +70,38 @@ def screen(wid):
     assert status == 0, (wid, status)
     return [rect.origin.x, rect.origin.y, rect.size.width, rect.size.height]
 
+ax = C.CDLL('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
+ax.AXUIElementCreateApplication.argtypes = [C.c_int]; ax.AXUIElementCreateApplication.restype = C.c_void_p
+ax.AXUIElementCopyAttributeValue.argtypes = [C.c_void_p, C.c_void_p, C.POINTER(C.c_void_p)]; ax.AXUIElementCopyAttributeValue.restype = C.c_int
+ax.AXUIElementSetAttributeValue.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p]; ax.AXUIElementSetAttributeValue.restype = C.c_int
+ax.AXValueCreate.argtypes = [C.c_int, C.c_void_p]; ax.AXValueCreate.restype = C.c_void_p
+ax._AXUIElementGetWindow.argtypes = [C.c_void_p, C.POINTER(C.c_uint32)]; ax._AXUIElementGetWindow.restype = C.c_int
+
+def move_native(pid, wid, x, y):
+    """Move the host's own window natively, as its application would (Accessibility position), and return AXError.
+    Only ever called with a window of the cooperative host this test started."""
+    app = ax.AXUIElementCreateApplication(pid)
+    windows = C.c_void_p()
+    name = cf.CFStringCreateWithCString(None, b'AXWindows', 0x08000100)
+    assert ax.AXUIElementCopyAttributeValue(app, name, C.byref(windows)) == 0 and windows.value, 'no Accessibility access to the host windows'
+    position = cf.CFStringCreateWithCString(None, b'AXPosition', 0x08000100)
+    point = Point(x, y); value = ax.AXValueCreate(1, C.byref(point))  # kAXValueCGPointType
+    status = -1
+    for i in range(cf.CFArrayGetCount(windows)):
+        window = cf.CFArrayGetValueAtIndex(windows, i); number = C.c_uint32(0)
+        if ax._AXUIElementGetWindow(window, C.byref(number)) == 0 and number.value == wid:
+            status = ax.AXUIElementSetAttributeValue(window, position, value)
+    for ref in (value, position, name, windows, app): cf.CFRelease(ref)
+    return status
+
+sky.SLSGetWindowBounds.argtypes = [C.c_int, C.c_uint32, C.POINTER(Rect)]; sky.SLSGetWindowBounds.restype = C.c_int
+
+def native(wid):
+    """The native frame (SLSGetWindowBounds), which a transform does not move."""
+    rect = Rect()
+    assert sky.SLSGetWindowBounds(sky.SLSMainConnectionID(), wid, C.byref(rect)) == 0, wid
+    return [rect.origin.x, rect.origin.y, rect.size.width, rect.size.height]
+
 def alpha(wid):
     """kCGWindowAlpha from CGWindowListCopyWindowInfo, asked from this process."""
     rows = cg.CGWindowListCopyWindowInfo(1 << 3, wid)  # kCGWindowListOptionIncludingWindow
@@ -776,6 +808,49 @@ def release_window_group():
     finally:
         c.close(); host.stop()
 
+def native_move_group():
+    """A fixture window whose native frame moves while the helper holds it is restored to the origin it has by then; select with --native-move.
+    The window server transform carries the window's position ([1,0,0,1,-x,-y] untransformed): the original captured at first touch, written
+    back as it was, would draw the window at its old place with its frame elsewhere (measured on Ghostty after a takeover drag)."""
+    host = Host('--windows', '8')
+    c, _, who, wids, original = setup(host)
+    try:
+        matrices0, alpha0 = [transform(w) for w in wids], [alpha(w) for w in wids]
+        target = [half(o, 45 + i * 3, 12) for i, o in enumerate(original)]
+        assert c.frame([record(who[i], target[i], original[i], .5 if c.caps & 1 else None) for i in range(8)]) == [APPLIED] * 8
+        wait_rects(wids, target, 1)
+        # Two windows move natively, by different amounts; the other six stay where they were.
+        moved = {0: (original[0][0] + 37, original[0][1] + 23), 3: (original[3][0] - 29, original[3][1] + 41)}
+        for i, (x, y) in moved.items():
+            assert move_native(who[i][0], wids[i], x, y) == 0
+        deadline = time.monotonic() + 3
+        while any(native(wids[i])[:2] != list(moved[i]) for i in moved):
+            assert time.monotonic() < deadline, ('the native move did not take', {i: native(wids[i]) for i in moved}, moved)
+            time.sleep(.01)
+        # What the window server did with the placed transform when the frame moved is recorded, not asserted: in the guest it moved the drawn
+        # rectangle by the same amount (the transform follows the window's position), and left the other six windows where the frame put them.
+        drawn_after_move = {i: screen(wids[i]) for i in moved}
+        assert all(near(screen(wids[i]), target[i]) and near(native(wids[i]), original[i]) for i in range(8) if i not in moved), \
+            dict(drawn=[screen(w) for w in wids], wanted=target, native=[native(w) for w in wids], original=original)
+        restored = c.restore_all()
+        assert restored['count'] == 8 and restored['pending'] == 0 and restored['journal_persisted'], restored
+        # Moved windows: transform [1,0,0,1,-x,-y] at the origin each has now, drawn there; the others: exactly the original.
+        report = []
+        for i, w in enumerate(wids):
+            seen, m = screen(w), transform(w)
+            if i in moved:
+                x, y = moved[i]
+                assert m == [1.0, 0.0, 0.0, 1.0, -seen[0], -seen[1]] and near(seen, [x, y, original[i][2], original[i][3]]), (i, m, seen, moved[i])
+                assert m != matrices0[i]
+                report.append(dict(window=w, moved_to=[x, y], transform=m, original_transform=matrices0[i], screen=seen, drawn_after_the_move_before_restoration=drawn_after_move[i], placed_rectangle=target[i]))
+            else:
+                assert m == matrices0[i] and seen == original[i], (i, m, matrices0[i], seen, original[i])
+        assert [alpha(w) for w in wids] == alpha0
+        assert not host.journal()['windows']
+        results.append(dict(test='native frame moved during the hold: restoration re-bases the original on the origin it has then', moved=report, unmoved_exact=6, original_alpha=alpha0[0]))
+    finally:
+        c.close(); host.stop()
+
 def enrollment_group():
     """Read-only binary scope audit through the actual C client; no frame sent."""
     host = Host('--windows', '8')
@@ -799,6 +874,7 @@ def main():
     try:
         choices = {
             '--release-window': (release_window_group,),
+            '--native-move': (native_move_group,),
             '--enrollment': (enrollment_group,),
             '--inspect': (inspect_group,),
             '--startup': (startup_refusal_group,),
@@ -808,7 +884,7 @@ def main():
         }
         args = sys.argv[1:]
         if args and (len(args) != 1 or args[0] not in choices):
-            raise SystemExit('usage: fixture_v2_test.py [--release-window | --enrollment | --inspect | --startup | --client-restore | --recovery | --client-and-recovery]')
+            raise SystemExit('usage: fixture_v2_test.py [--release-window | --native-move | --enrollment | --inspect | --startup | --client-restore | --recovery | --client-and-recovery]')
         groups = choices[args[0]] if args else (frames_group, lease_group, bench_group, client_restore_group, crash_group, startup_refusal_group, inspect_group, main_queue_group, allowlist_group, release_window_group, enrollment_group)
         for group in groups:
             group()

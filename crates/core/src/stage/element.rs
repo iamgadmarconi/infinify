@@ -2,7 +2,7 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/stage/element.rs
 //   sha-256:    6fdfabbfc7189cc14a80014314e318203eb3e9129ef953b8fe5357a0c7f1f8aa (upstream file)
 // Changes from upstream: this header; `impl StageElement for Window` (the

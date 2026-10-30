@@ -11,31 +11,12 @@
 - (CGEventRef)handleEarly:(CGEventType)type event:(CGEventRef)event;
 @end
 
-// DockSwipe field/type/phase decoding adapted from joshuarli/iss, commit
-// 493b008f2ea8e9215877c39700e8ea3add800e97, iss.c (cb, lines 436-515):
-// https://github.com/joshuarli/iss/blob/493b008f2ea8e9215877c39700e8ea3add800e97/iss.c
-// Copyright (c) 2026 joshuarli
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted.
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-// PERFORMANCE OF THIS SOFTWARE.
+// DockSwipe field/type/phase decoding (adapted from joshuarli/iss, ISC) lives in dock-control.h, with its notice in full.
 // Vertical/pinch axis values are documented in the original Mac Mouse Fix
 // TouchSimulator.m at 3c10736888c51926d70392ac1eb5c7cb98f6e231 (no code copied):
 // https://github.com/noah-nuebling/mac-mouse-fix/blob/3c10736888c51926d70392ac1eb5c7cb98f6e231/Helper/Core/Touch/TouchSimulator.m
 // These are event fields, not linked private functions. Neither a successful tap
 // nor these source references establishes runtime suppression on a future ABI.
-static const CGEventField DWGestureRealType=55,DWGestureHIDType=110,DWGestureAxis=123,DWGesturePhase=132;
-static BOOL DWDockSwipe(CGEventRef event,NSInteger *phase) {
-    if(CGEventGetIntegerValueField(event,DWGestureRealType)!=30||CGEventGetIntegerValueField(event,DWGestureHIDType)!=23)return NO;
-    NSInteger axis=(NSInteger)CGEventGetIntegerValueField(event,DWGestureAxis),p=(NSInteger)CGEventGetIntegerValueField(event,DWGesturePhase);
-    if(axis<1||axis>3||!(p==kCGGesturePhaseBegan||p==kCGGesturePhaseChanged||p==kCGGesturePhaseEnded||p==kCGGesturePhaseCancelled||p==kCGGesturePhaseMayBegin))return NO;
-    *phase=p;return YES;
-}
 
 @interface DWGlobalTrackpadInput ()
 - (CGEventRef)handleGlobal:(CGEventType)type event:(CGEventRef)event;
@@ -53,6 +34,7 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
     BOOL _scrollOwned,_handling,_notifyingCancel;
     NSMutableIndexSet *_buttons,*_nativeButtons;
     NSUInteger _epoch;
+    NSTimeInterval _dockTail; // Dock control is still this tap's until then: the end of an admitted touch
 }
 - (instancetype)initWithEnabled:(BOOL (^)(void))enabled admitTouches:(BOOL (^)(DWTrackpadTouchFrame *))admitTouches touches:(void (^)(DWTrackpadTouchFrame *))touches magnify:(BOOL (^)(NSEvent *))magnify ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent cancelled:(void (^)(void))cancelled {
     if((self=[super init])){_enabled=[enabled copy];_admitTouches=[admitTouches copy];_touches=[touches copy];_magnify=[magnify copy];_ignoreEvent=[ignoreEvent copy];_cancelled=[cancelled copy];_buttons=[NSMutableIndexSet indexSet];_nativeButtons=[NSMutableIndexSet indexSet];}return self;
@@ -95,18 +77,9 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
     _handling=YES;CGEventRef result=event;
     @try {
         BOOL enabled=_enabled&&_enabled();if(!enabled)[self cancel];
-        NSInteger dockPhase=0;
-        if(DWDockSwipe(event,&dockPhase)){
-            BOOL (^elsewhere)(void)=_dockElsewhere;if(elsewhere&&elsewhere()){_dockOwned=NO;return event;}
-            if(dockPhase==kCGGesturePhaseBegan||dockPhase==kCGGesturePhaseMayBegin)_dockOwned=enabled&&!self.hasNativeMousePress&&(!NSEvent.pressedMouseButtons||_ownsTouches);
-            BOOL owned=_dockOwned;
-            if(dockPhase==kCGGesturePhaseEnded||dockPhase==kCGGesturePhaseCancelled)_dockOwned=NO;
-            // An observed midstream packet cannot authorize stealing a gesture
-            // whose beginning already reached Dock. Raw touch evidence supplies
-            // actions; the Dock packet supplies cancellation authority only.
-            if(owned)result=NULL;
-            return result;
-        }
+        // Dock control is never handed to AppKit: +[NSEvent eventWithCGEvent:] has no type 30 (AppKit logs "unrecognized type is 30" for each
+        // packet), and CGEventType 30 is also the number of NSEventTypeMagnify, which is how the conversion below was once reached.
+        if(type==DWDockControlType)return [self dockControl:event enabled:enabled];
         if(DWNativeTabletEvent(event))return event;
         BOOL down=type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown;
         BOOL up=type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp;
@@ -161,7 +134,7 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
                 }
                 BOOL owned=_ownsTouches;NSUInteger epoch=_epoch;
                 void (^touches)(DWTrackpadTouchFrame *)=_touches;if(owned&&!_touchCancelled&&touches)touches(frame);
-                if(!frame.fingers&&epoch==_epoch){_device=nil;_ownsTouches=NO;_touchCancelled=NO;}
+                if(!frame.fingers&&epoch==_epoch){if(_ownsTouches)_dockTail=CACurrentMediaTime()+DWDockControlTail;_device=nil;_ownsTouches=NO;_touchCancelled=NO;}
                 if(owned)result=NULL;
             }
             if(_dockOwned||_ownsTouches)result=NULL;
@@ -188,13 +161,34 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
         return (_ownsTouches||_dockOwned)&&(appkit.type==NSEventTypeSwipe||appkit.type==NSEventTypeRotate||appkit.type==NSEventTypeSmartMagnify)?NULL:event;
     } @finally { _handling=NO; }
 }
+// A Dock-control packet. When a touch source holds the system's gestures back (the multitouch source's guard), its verdict is the whole answer, for
+// every finger count and for packets of a format this file cannot decode as well as DockSwipes. With none delivering this tap's own rule applies: a
+// DockSwipe whose beginning it saw while it owned the touch is dropped to its end, and, since nothing here can tell what another packet is, so is any
+// other Dock-control packet while it owns an admitted touch of three or more fingers and for a moment after. Nothing is converted to an NSEvent.
+- (CGEventRef)dockControl:(CGEventRef)event enabled:(BOOL)enabled {
+    NSInteger axis=0,dockPhase=0;DWDockControlKind kind=DWDockControlClassify(event,&axis,&dockPhase);
+    DWDockControlVerdict (^decision)(CGEventRef)=_dockDecision;
+    DWDockControlVerdict verdict=decision?decision(event):DWDockControlUndecided;
+    if(verdict!=DWDockControlUndecided){_dockOwned=NO;return verdict==DWDockControlDrop?NULL:event;}
+    NSTimeInterval now=CACurrentMediaTime();BOOL owned;const char *reason;
+    if(kind!=DWDockControlOther){
+        if(dockPhase==kCGGesturePhaseBegan||dockPhase==kCGGesturePhaseMayBegin)_dockOwned=enabled&&!self.hasNativeMousePress&&(!NSEvent.pressedMouseButtons||_ownsTouches);
+        owned=_dockOwned;reason=owned?"dock swipe began while this tap owned the touch":"dock swipe did not begin while this tap owned the touch";
+        if(dockPhase==kCGGesturePhaseEnded||dockPhase==kCGGesturePhaseCancelled)_dockOwned=NO;
+    }else{
+        // An observed midstream packet cannot authorize stealing a gesture whose beginning already reached Dock.
+        owned=enabled&&!self.hasNativeMousePress&&(_dockOwned||_ownsTouches||now<_dockTail);reason=owned?"packet of another format while this tap owns a touch":"packet of another format, no touch owned";
+    }
+    if(DWGestureTrace()){char detail[128];snprintf(detail,sizeof detail,"owns_touches=%d dock_owned=%d native_press=%d",(int)_ownsTouches,(int)_dockOwned,(int)self.hasNativeMousePress);DWDockControlTrace("global-tap",event,kind,owned?DWDockControlDrop:DWDockControlPass,reason,detail);}
+    return owned?NULL:event;
+}
 - (void)stop {
     [self cancel];_epoch++;
     if(_tap){CGEventTapEnable(_tap,false);CFMachPortInvalidate(_tap);}
     if(_source){CFRunLoopRemoveSource(CFRunLoopGetMain(),_source,kCFRunLoopCommonModes);CFRelease(_source);_source=NULL;}
     if(_tap){CFRelease(_tap);_tap=NULL;}
     _device=nil;_ownsTouches=_touchCancelled=NO;
-    _magnifyOwned=_magnifyDecided=_magnifyCancelled=_dockOwned=_scrollOwned=NO;[_buttons removeAllIndexes];[_nativeButtons removeAllIndexes];
+    _magnifyOwned=_magnifyDecided=_magnifyCancelled=_dockOwned=_scrollOwned=NO;_dockTail=0;[_buttons removeAllIndexes];[_nativeButtons removeAllIndexes];
 }
 - (void)dealloc { _cancelled=nil;[self stop]; }
 @end
@@ -218,6 +212,24 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     if(window>0&&window<=INT32_MAX)return [NSApp windowWithWindowNumber:(NSInteger)window]==nil;
     int64_t pid=CGEventGetIntegerValueField(event,kCGEventTargetUnixProcessID);
     return pid>0&&pid!=getpid();
+}
+// What the annotated tap asks for is exactly what -handle:event: acts on: the pointer buttons and motion, scroll, tablet
+// packets and the gesture envelope that carries a magnify (the global trackpad tap's types). Nothing else, because an ACTIVE
+// tap at the annotated location disturbs the volume, mute, brightness and media keys, however fast it returns and even when
+// it returns every event untouched. Those keys are no key events on a Mac: they arrive system-defined (NX_SYSDEFINED, type
+// 14, subtype 8, an aux control button). Measured on the guest (macOS 27.0.1, keys posted at the HID tap, bare pass-through
+// taps in a throwaway probe, volume read back from 50):
+//   - type 14 alone: volume up x3, down x2 and mute did nothing at all, every time; the same tap at the plain session or
+//     the HID location did not do that, nor did an annotated one on the key types;
+//   - every type but 14 and the keys: one burst of three presses in three or four lost a step. Bisected to type 13,
+//     NSEventTypeAppKitDefined, which macOS itself posts as the volume moves: type 13 alone lost a step in 4 of 16 bursts, the
+//     types 15, 16 and 17 and the three other groups of the remaining types lost none, and this mask lost none in 12.
+CGEventMask DWNativeInputAnnotatedMask(void) {
+    return CGEventMaskBit(kCGEventLeftMouseDown)|CGEventMaskBit(kCGEventLeftMouseUp)|CGEventMaskBit(kCGEventLeftMouseDragged)
+        |CGEventMaskBit(kCGEventRightMouseDown)|CGEventMaskBit(kCGEventRightMouseUp)|CGEventMaskBit(kCGEventRightMouseDragged)
+        |CGEventMaskBit(kCGEventOtherMouseDown)|CGEventMaskBit(kCGEventOtherMouseUp)|CGEventMaskBit(kCGEventOtherMouseDragged)
+        |CGEventMaskBit(kCGEventMouseMoved)|CGEventMaskBit(kCGEventScrollWheel)
+        |CGEventMaskBit(kCGEventTabletPointer)|CGEventMaskBit(kCGEventTabletProximity)|NSEventMaskGesture|NSEventMaskMagnify;
 }
 @implementation DWNativeInput {
     CFMachPortRef _tap,_earlyTap;
@@ -267,6 +279,13 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     }
     return NO;
 }
+// Moves a held native button's ownership to the canvas, only from within nativeMouseOwnershipChanged. The application already has
+// the press (and, if it began a window drag, the packets before this one); the consumer ends that with its own tagged release.
+- (BOOL)takeNativeButton:(NSUInteger)button {
+    if(_stopped||![_nativeButtons containsIndex:button])return NO;
+    [_nativeButtons removeIndex:button];[_capturedButtons addIndex:button];return YES;
+}
+- (BOOL)holdsCapturedButton:(NSUInteger)button { return !_stopped&&[_capturedButtons containsIndex:button]; }
 - (void)notifyNativeMouse:(CGEventRef)event {
     void (^changed)(CGEventRef,NSIndexSet *)=self.nativeMouseOwnershipChanged;
     if(changed)changed(event,_nativeButtons.copy);
@@ -280,10 +299,11 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
 - (BOOL)start {
     if(_tap)return YES;
     if(!AXIsProcessTrusted())return NO;
-    // AppKit magnify events have no public CGEventType constant. Ask for the
-    // public all-events mask and classify through NSEvent, without inventing a
-    // private event number. Keys and unrelated events are returned untouched.
-    CGEventMask mask=kCGEventMaskForAllEvents;
+    // AppKit magnify events have no public CGEventType constant: they come in the
+    // gesture envelope types (NSEventMaskGesture, NSEventMaskMagnify) and are
+    // classified through NSEvent, as in the global tap. No other type is asked
+    // for (DWNativeInputAnnotatedMask says why).
+    CGEventMask mask=DWNativeInputAnnotatedMask();
     // The annotated location supplies the actual destination window. A canvas hit
     // alone could belong to a managed tile covered by an unrelated app or a menu.
     _tap=CGEventTapCreate(kCGAnnotatedSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionDefault,mask,nativeInput,(__bridge void *)self);
@@ -373,6 +393,11 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
         if(_tap&&AXIsProcessTrusted())CGEventTapEnable(_tap,true);
         return event;
     }
+    // Not subscribed to (DWNativeInputAnnotatedMask), and never looked at if one arrives: they are macOS's own.
+    if(type==(CGEventType)NSEventTypeSystemDefined)return event;
+    // A Dock-control packet that reaches this tap has passed both session taps. It is not converted to an NSEvent (there is no type 30 to convert to,
+    // and AppKit logs a line per packet) and is not touched; the shell may only note that it arrived.
+    if(type==DWDockControlType){void (^seen)(CGEventRef)=_dockControl;if(seen&&event)seen(event);return event;}
     BOOL (^ignoreEvent)(CGEventRef)=_ignoreEvent;if(ignoreEvent&&ignoreEvent(event))return event;
     if([self consumeEarlyCompanion:type event:event])return NULL;
     BOOL (^consume)(CGEventType,CGEventRef)=_consume;
@@ -424,6 +449,9 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
         if(down&&validButton)[_nativeButtons addIndex:(NSUInteger)button];
         if(up&&validButton)[_nativeButtons removeIndex:(NSUInteger)button];
         if(down||up||drag)[self notifyNativeMouse:event];
+        // The consumer may take a held native drag over from inside that callback (-takeNativeButton:). This packet and the rest
+        // of the physical pair are then the canvas's: swallowed here, delivered through consume like any owned tail.
+        if(drag&&validButton&&[_capturedButtons containsIndex:(NSUInteger)button]&&![_nativeButtons containsIndex:(NSUInteger)button])return NULL;
         return event;
     }
     BOOL taken=consume&&consume(type,event);

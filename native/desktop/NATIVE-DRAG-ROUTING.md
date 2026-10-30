@@ -116,6 +116,23 @@ Finder repeatedly, including after zooming out, and reported stable dragging.
 That confirms those real-app gestures; it does not establish every native
 fallback drag or cross-display transfer.
 
+One exception ends a native pair early. When an unclaimed press on a transformed root becomes the application's own window
+drag (the native origin moves, the extent does not, and the pointer has travelled more than 4 points), WindowServer drags the
+frame from where the window is drawn and the drawn window leaves the pointer. The consumer then calls
+`-[DWNativeInput takeNativeButton:]` from the ownership callback: that packet and the rest of the physical pair are swallowed and
+offered to the consumer, and the consumer ends WindowServer's drag with one left-up posted at the HID tap from a private event
+source, carrying the source's lifetime tag (which both taps let through, as for every posted copy); the canvas's hold on the
+physical pair (`-holdsCapturedButton:`) keeps the shell's lost-release watchdog from ending the gesture because the system's button
+state now reads up. Other native pairs, including content drags, resizes and
+drag-and-drop sessions, are untouched: only a press whose own application starts moving the native window is taken. The adapter
+test `sh tests/e2e/native-input-policy.sh` covers the packet policy only (the packet that is taken is swallowed, the tails
+are offered to the consumer, the next press is native again); that the application and WindowServer accept the tagged release is
+a guest observation recorded in [README.md](README.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper).
+The takeover does not put the application's native frame back: WindowServer has already moved it (to where the window was drawn), and the
+helper's restore re-bases the window's original transform on the native origin it reads at the write, so a taken-over window is restored consistent
+with its frame (README section "Restore after a native-origin move"). A press on the empty strip of a toolbar group (Safari's address-field group,
+for example) is the window's, not the application's, so it is claimed as a title press and never becomes a takeover.
+
 Managed root chrome now has a separate session-stage ownership decision.
 An independently recognized titlebar or green button, or a controller-qualified
 resize border at the exact native recipient, reserves the entire mouse pair

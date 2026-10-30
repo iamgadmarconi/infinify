@@ -2,6 +2,7 @@
 #import "native-decorations.h"
 #import "native-presenter.h"
 #import "native-placement-validation.h"
+#import "native-toolbar-extent.h"
 #import "../focus/focus.h"
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -116,9 +117,26 @@ static NSDictionary *decorationFinderSearchHeader(AXUIElementRef window,CGRect o
 // Retain the first rejection for the next debug press, without another AX read
 // or a log line on every background refresh. No title or document text is kept.
 static NSDictionary *decorationRejected(NSString **reason,NSString *value){if(reason)*reason=value;return nil;}
+// A group item's own rectangle is the toolbar's height; what is native in it is what its children cover (DWToolbarGroupExtent says
+// why). Best effort inside the title lookup's budget: no time left, an unreadable child, or a child outside the group keeps the
+// whole group native, exactly as before.
+static CGRect decorationGroupExtent(AXUIElementRef item,CGRect frame,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline){
+    if(CACurrentMediaTime()+.03>=deadline||![decorationAttribute(item,kAXRoleAttribute,NULL)isEqual:(__bridge NSString *)kAXGroupRole])return frame;
+    id children=decorationAttribute(item,kAXChildrenAttribute,NULL);
+    if(![children isKindOfClass:NSArray.class]||![children count]||[children count]>64)return frame;
+    CGRect frames[64];size_t count=0;
+    for(id value in children){
+        if(CACurrentMediaTime()>=deadline||CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return frame;
+        AXUIElementRef child=(__bridge AXUIElementRef)value;uint32_t childWindow=0;
+        if(AXUIElementSetMessagingTimeout(child,.02)||getWindow(child,&childWindow)||childWindow!=wid||!decorationFrame(child,&frames[count]))return frame;
+        count++;
+    }
+    CGRect extent;return DWToolbarGroupExtent(frame,frames,count,&extent)?extent:frame;
+}
 // A modern AppKit unified toolbar can contain or omit AXTitleUIElement. Its measured
-// toolbar rectangle supplies the chrome boundary; whole child rectangles,
-// including groups, remain native. Never infer empty space inside a group.
+// toolbar rectangle supplies the chrome boundary; whole child rectangles
+// remain native. A group item is native where its children are (its full width,
+// and the vertical extent of its children), never by a guess about its content.
 static NSDictionary *decorationToolbar(AXUIElementRef window,CGRect own,CGRect lights,CGRect title,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline,NSArray *chrome,NSMutableArray *excluded,NSString **reason){
     id children=decorationAttribute(window,kAXChildrenAttribute,NULL);
     if(![children isKindOfClass:NSArray.class]||![children count]||[children count]>64)return decorationRejected(reason,@"toolbar_children_unavailable_or_unbounded");
@@ -155,7 +173,7 @@ static NSDictionary *decorationToolbar(AXUIElementRef window,CGRect own,CGRect l
         AXUIElementRef item=(__bridge AXUIElementRef)value;CGRect frame;uint32_t itemWindow=0;
         if(AXUIElementSetMessagingTimeout(item,.02)||getWindow(item,&itemWindow)||itemWindow!=wid||!decorationFrame(item,&frame)
             ||!CGRectContainsRect(CGRectInset(toolbarFrame,-1,-1),frame))return decorationRejected(reason,@"toolbar_item_geometry_or_owner");
-        [excluded addObject:decorationRect(decorationLocal(CGRectInset(frame,-1,-1),own))];
+        [excluded addObject:decorationRect(decorationLocal(CGRectInset(decorationGroupExtent(item,frame,wid,getWindow,deadline),-1,-1),own))];
     }
     if(reason)*reason=@"accepted_unified_toolbar";
     return @{@"region":decorationRect(decorationLocal(toolbarFrame,own)),@"excluded":excluded};

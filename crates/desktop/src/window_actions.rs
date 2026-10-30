@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/input/actions.rs (CenterWindow, FocusCenter, CenterNearest, CycleWindows),
-// src/state/navigation.rs (navigate_to_window_on, resolve_click_navigate,
+// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
+// read at third_party/driftwm: src/input/actions.rs (CenterWindow, FocusCenter,
+// CenterNearest, FocusNearest, nearest_in_direction, center_on_anchor,
+// CycleWindows), src/state/navigation.rs (navigate_to_window_on, reveal_element,
+// RevealPan, MinimalPan, minimal_pan_camera, pan_minimally_to_element,
+// reveal_frame, related_to_focus, spatial_relatives, window_fully_in_view_at,
+// window_shown_as_fully_at, resolve_click_navigate,
 // fire_click_navigate, activate_window_output_local, window_already_active,
 // nav_center, element_closest_point), src/state/viewport.rs (viewport_center_canvas,
 // window_visible_at_least_on), src/state/output.rs (output_for_window,
@@ -13,7 +17,8 @@
 // and src/handlers/mod.rs (focus_changed's cycle rule
 // and the activation request's already-active rule). The directional search and the
 // visibility measures are driftwm-core's `canvas::{find_nearest,
-// visible_fraction, visible_canvas_rect}`, upstream's own code. A detached
+// visible_fraction, visible_canvas_rect, minimal_reveal_camera,
+// leading_edge_camera}`, upstream's own code. A detached
 // placeholder is upstream's stand-in. The candidates of every search here are
 // upstream's canvas windows (`is_canvas_window`, `Controller::on_canvas`): no
 // widget and no screen-pinned window, which are raised and focused where they
@@ -23,15 +28,30 @@
 // is sizes.rs's `navigate_restoring_fill`.
 // Only world rectangles, output poses and the navigation context are read,
 // never native geometry.
+use super::ipc::frame;
+use super::navigation::Anchor;
+use super::sizes::{snap_rect, snap_rect_at, usable_px};
 use super::view_actions::{pixel, pixel_size};
 use super::*;
-use driftwm_core::canvas::{find_nearest, visible_canvas_rect, visible_fraction};
+use driftwm_core::canvas::{
+    find_nearest, leading_edge_camera, minimal_reveal_camera, visible_canvas_rect, visible_fraction,
+};
 use driftwm_core::config::Direction;
-use driftwm_core::platform::utils::{Logical, Point as CorePoint};
+use driftwm_core::layout::cluster::cluster_of;
+use driftwm_core::layout::snap::SnapRect;
+use driftwm_core::platform::utils::{
+    Logical, Point as CorePoint, Rectangle as CoreRectangle, Size as CoreSize,
+};
 
-/// Upstream CENTER_NEAREST_ANCHOR_THRESHOLD: the focused window is the origin
-/// of a directional search only while all of it is on the output.
-const CENTER_NEAREST_ANCHOR_THRESHOLD: f64 = 1.0;
+/// Upstream NEAREST_ANCHOR_THRESHOLD: the focused window is the origin of a
+/// directional search only while all of it is on the output (or, too big for
+/// that, shown as fully as it fits).
+const NEAREST_ANCHOR_THRESHOLD: f64 = 1.0;
+/// Upstream IN_VIEW_NOISE: how far (screen px) a frame may sit past the usable
+/// edge, or the line a minimal pan holds it on, and still count as inside it.
+/// A pan that lands a frame flush on an edge carries float rounding through the
+/// camera anchor, and a hair's overhang must not read as clipped.
+pub(crate) const IN_VIEW_NOISE: f64 = 1e-6;
 /// Upstream ACTIVATION_VISIBLE_THRESHOLD: an activated window that is clipped
 /// at all is brought fully into view.
 const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
@@ -75,9 +95,30 @@ impl Moved {
 }
 /// A candidate of the directional search: upstream's NavTarget.
 #[derive(Clone, Copy, PartialEq)]
-enum NavTarget {
+pub(crate) enum NavTarget {
     Window(WindowId),
     Anchor(Point),
+}
+/// Upstream RevealPan: how a reveal pans to a target that is not fully on
+/// screen.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RevealPan {
+    /// Park it on the `focus_placement` point, as a jump does.
+    Park(ZoomPolicy),
+    /// The least pan that shows it whole, at the landing zoom: a directional
+    /// walk, where parking each step would throw the view around.
+    Minimal,
+}
+/// Upstream MinimalPan: what a minimal pan keeps in view, `outer_gap` in from
+/// the usable edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MinimalPan {
+    /// The whole frame, centered on an axis it is too big for.
+    Whole,
+    /// The edge leading a move, along x if `horizontal` and toward higher
+    /// coordinates if `forward`, held on the line; the camera's course on the
+    /// other axis is left as it was.
+    LeadingEdge { horizontal: bool, forward: bool },
 }
 fn core_point(point: Point) -> CorePoint<f64, Logical> {
     CorePoint::from((point.x, point.y))
@@ -101,6 +142,21 @@ impl Controller {
     /// largest whole-pixel rectangle inside it: a frame that navigation has
     /// just parked flush against an edge still counts as entirely visible.
     fn visible_share(&self, window: WindowId, output: OutputId) -> Result<f64, Error> {
+        let viewport = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        self.visible_share_at(window, output, viewport.camera, viewport.zoom)
+    }
+    /// As `visible_share`, at `camera` and `zoom` instead of the live view
+    /// (upstream window_visible_at_least_at).
+    fn visible_share_at(
+        &self,
+        window: WindowId,
+        output: OutputId,
+        camera: Point,
+        zoom: f64,
+    ) -> Result<f64, Error> {
         let rect = self.window_rect(window)?;
         let viewport = self
             .scene
@@ -119,9 +175,9 @@ impl Controller {
         Ok(visible_fraction(
             (x, y).into(),
             (width, height).into(),
-            core_point(viewport.camera),
+            core_point(camera),
             (size.w, size.h).into(),
-            viewport.zoom,
+            zoom,
         ))
     }
     /// Upstream output_for_window: the first output, in registration order,
@@ -231,7 +287,16 @@ impl Controller {
         let Some(window) = self.cycle_past_fullscreen(backward)? else {
             return Ok(None);
         };
-        let navigation = self.arm_navigation(window, output, ZoomPolicy::Keep)?;
+        // Upstream step_cycle is reveal_element(Park(Keep)): a window the view
+        // lands on already shows whole is only focused, and a clipped one is
+        // parked at the `focus_placement` point.
+        let (camera, zoom) = self.landing_view(output)?;
+        let navigation = if self.window_fully_in_view_at(window, output, camera, zoom)? {
+            self.hover_parked();
+            Value::Null
+        } else {
+            self.arm_navigation(window, output, ZoomPolicy::Keep)?
+        };
         let effect = self.request_focus(window)?["effect"].take();
         if !held {
             self.release_cycle();
@@ -270,46 +335,69 @@ impl Controller {
     }
     /// Upstream FocusCenter: the topmost canvas window under the pointer, at
     /// zoom 1, with the same fill exception as CenterWindow. A screen-pinned
-    /// window there is passed over, as upstream's walk skips it, and a widget
-    /// is no candidate. `pointer` is a global screen point; with none, or with
-    /// no canvas window of `output` under it, nothing happens.
+    /// window under the pointer is focused and the view stays where it is
+    /// (upstream's `pinned_owner_under` arm), and with nothing under it, or no
+    /// pointer, the action is `center-window`: the focused window is centered,
+    /// else the nearest. `pointer` is a global screen point. A widget is no
+    /// candidate and the canvas walk passes through a pin to the window it
+    /// covers.
     pub(crate) fn focus_center(
         &mut self,
         output: OutputId,
         pointer: Option<Point>,
     ) -> Result<Moved, Error> {
         self.view(output)?;
+        if let Some(pin) = pointer
+            .and_then(|pointer| self.hit_window(output, pointer))
+            .map(|(window, _)| window)
+            .filter(|window| self.is_pinned(*window) && !self.is_widget(*window))
+        {
+            // Hover skips a pin's resize band for the window behind it, so a
+            // flight under way would take this focus back.
+            self.hover_parked();
+            return self.raise_and_focus(pin);
+        }
         match pointer.and_then(|pointer| self.canvas_window_under(output, pointer)) {
             Some(window) => self.navigate_restoring_fill(window, output),
-            None => Ok(Moved::default()),
+            None => self.center_window(output),
         }
     }
-    /// Upstream CenterNearest: the nearest canvas window or
-    /// `navigation.anchors` point in a 90° cone. The search starts at the
-    /// focused window while all of it is on the output and it is not
-    /// screen-pinned, and at the viewport center otherwise. A window is
-    /// flown to at the current zoom; an anchor clears focus, so that the next
-    /// search starts from the viewport center, which is then that anchor.
-    pub(crate) fn center_nearest(
-        &mut self,
+    /// Upstream nearest_in_direction, the cone search `center-nearest` and
+    /// `focus-nearest` share: the nearest canvas window or `navigation.anchors`
+    /// point in a 90° cone. The search starts at the focused window while all
+    /// of it is on the output (or, too big for that, shown as fully as it
+    /// fits) and it is not screen-pinned, and at the viewport center
+    /// otherwise, both judged where the view lands, so a step taken while the
+    /// last one's pan is under way searches from where that pan ends. A window
+    /// the action just took out of fullscreen anchors the search wherever the
+    /// restored view placed it.
+    fn nearest_in_direction(
+        &self,
         output: OutputId,
         direction: &Direction,
-    ) -> Result<Moved, Error> {
-        let (viewport, usable) = self.view(output)?;
-        let anchor = match self.scene.focused().filter(|id| !self.is_pinned(*id)) {
-            Some(window)
-                if self.visible_share(window, output)? >= CENTER_NEAREST_ANCHOR_THRESHOLD =>
-            {
-                Some(window)
-            }
-            _ => None,
-        };
+        was_fullscreen: Option<WindowId>,
+    ) -> Result<Option<NavTarget>, Error> {
+        let (_, usable) = self.view(output)?;
+        let (camera, zoom) = self.landing_view(output)?;
+        let anchor = was_fullscreen.or_else(|| {
+            // A window too big for the view never reads as fully visible;
+            // searched for from the viewport center it would be the nearest
+            // hit again and again.
+            self.scene
+                .focused()
+                .filter(|id| !self.is_pinned(*id))
+                .filter(|window| {
+                    self.visible_share_at(*window, output, camera, zoom)
+                        .is_ok_and(|share| share >= NEAREST_ANCHOR_THRESHOLD)
+                        || self.window_shown_as_fully_at(*window, output, camera, zoom)
+                })
+        });
         let (origin, skip) = match anchor {
             Some(window) => (
                 self.window_rect(window)?.center(),
                 Some(NavTarget::Window(window)),
             ),
-            None => (Self::viewport_center_canvas(&viewport, usable), None),
+            None => (camera + usable.center() / zoom, None),
         };
         let canvas = |window: &&Window| self.on_canvas(window.id);
         let windows = self.scene.windows().iter().filter(canvas).map(|window| {
@@ -335,28 +423,325 @@ impl Controller {
             .map(|point| Point::new(point.x, point.y))
             .filter(|point| point_valid(*point))
             .map(|point| (NavTarget::Anchor(point), core_point(point)));
-        let nearest = find_nearest(
+        Ok(find_nearest(
             core_point(origin),
             direction,
             windows.chain(anchors),
             skip.as_ref(),
-        );
-        match nearest {
+        ))
+    }
+    /// Upstream center_on_anchor: land the camera on a bare anchor point,
+    /// through the anchor so that a flight under way cannot steer it back.
+    /// Unfocuses, so that the next directional step searches from the viewport
+    /// center, which is now the anchor.
+    fn center_on_anchor(&mut self, output: OutputId, point: Point) -> Result<Moved, Error> {
+        let (_, usable) = self.view(output)?;
+        let refocused = self.clear_focus();
+        // As the window arms do: otherwise the pull hands focus to whatever
+        // the pan leaves under the resting cursor, undoing the unfocus.
+        self.hover_parked();
+        let zoom = self.landing_view(output)?.1;
+        let anchor = Anchor {
+            canvas: point,
+            screen: usable.center(),
+        };
+        Ok(Moved {
+            effect: Value::Null,
+            navigation: self.arm_anchor(output, anchor, zoom)?,
+            refocused,
+        })
+    }
+    /// Upstream CenterNearest: the nearest window in `direction`, always
+    /// centered (parked at the `focus_placement` point) at the zoom the view
+    /// is heading to. An anchor clears focus.
+    pub(crate) fn center_nearest(
+        &mut self,
+        output: OutputId,
+        direction: &Direction,
+        was_fullscreen: Option<WindowId>,
+    ) -> Result<Moved, Error> {
+        match self.nearest_in_direction(output, direction, was_fullscreen)? {
             Some(NavTarget::Window(window)) => {
                 self.navigate_to_window(window, output, ZoomPolicy::Keep)
             }
             Some(NavTarget::Anchor(point)) => {
-                let refocused = self.clear_focus();
                 self.overview_returns.remove(&output);
-                let target = point - usable.center() / viewport.zoom;
-                Ok(Moved {
-                    effect: Value::Null,
-                    navigation: self.set_camera_target(output, target)?["navigation"].take(),
-                    refocused,
-                })
+                self.center_on_anchor(output, point)
             }
             None => Ok(Moved::default()),
         }
+    }
+    /// Upstream FocusNearest: the nearest window in `direction`, focused with
+    /// the view left alone when it is fully on screen. Clipped, it scrolls just
+    /// far enough to show it when it belongs to the focused window's snap
+    /// cluster or overlaps it, and parks at `focus_placement` otherwise, as a
+    /// jump does.
+    pub(crate) fn focus_nearest(
+        &mut self,
+        output: OutputId,
+        direction: &Direction,
+        was_fullscreen: Option<WindowId>,
+    ) -> Result<Moved, Error> {
+        match self.nearest_in_direction(output, direction, was_fullscreen)? {
+            Some(NavTarget::Window(window)) => {
+                // A step to an unrelated window is a jump, and jumps park.
+                let pan = if self.related_to_focus(window, was_fullscreen) {
+                    RevealPan::Minimal
+                } else {
+                    RevealPan::Park(ZoomPolicy::Keep)
+                };
+                self.reveal_window(window, output, pan)
+            }
+            Some(NavTarget::Anchor(point)) => self.center_on_anchor(output, point),
+            None => Ok(Moved::default()),
+        }
+    }
+    /// Upstream reveal_element: focus and raise `window`, panning the camera to
+    /// it only when it is not fully on screen where the view lands, unlike the
+    /// centering navigations, which always park. Judged there, not at the
+    /// frame of a flight still under way: a step onto a window the flight is
+    /// about to leave behind re-targets it, and one onto a window it will show
+    /// lets it land, zoom included.
+    pub(crate) fn reveal_window(
+        &mut self,
+        window: WindowId,
+        output: OutputId,
+        pan: RevealPan,
+    ) -> Result<Moved, Error> {
+        self.navigation_context(output)?;
+        let (camera, zoom) = self.landing_view(output)?;
+        if self.window_fully_in_view_at(window, output, camera, zoom)? {
+            // As in navigate_to_window_on.
+            self.hover_parked();
+            return self.raise_and_focus(window);
+        }
+        match pan {
+            RevealPan::Park(policy) => self.navigate_to_window(window, output, policy),
+            RevealPan::Minimal => {
+                let Some(frame) = self.reveal_frame(window) else {
+                    return self.raise_and_focus(window);
+                };
+                let navigation =
+                    self.pan_minimally(output, &frame, camera, zoom, MinimalPan::Whole)?;
+                self.hover_parked();
+                Ok(Moved {
+                    navigation,
+                    ..self.raise_and_focus(window)?
+                })
+            }
+        }
+    }
+    /// Upstream reveal_frame: the frame a minimal reveal brings into view,
+    /// sized as configured, not as committed, the way the park measures it, so
+    /// a window riding an unacked size lands where it is about to be. Native
+    /// frames include their title bar; there is no border to add.
+    pub(crate) fn reveal_frame(&self, window: WindowId) -> Option<SnapRect> {
+        let (loc, committed) = frame(self.scene.window(window)?.world_rect).ok()?;
+        let size = self.configured_size(window, committed);
+        Some(snap_rect_at(loc, size))
+    }
+    /// Upstream frame_fully_in_view_at: is the canvas rect inside `output`'s
+    /// usable area at `camera` and `zoom`?
+    pub(crate) fn frame_fully_in_view_at(
+        &self,
+        rect: &SnapRect,
+        output: OutputId,
+        camera: Point,
+        zoom: f64,
+    ) -> Result<bool, Error> {
+        let usable = self.navigation_context(output)?.usable_rect_local;
+        let low = (
+            (rect.x_low - camera.x) * zoom,
+            (rect.y_low - camera.y) * zoom,
+        );
+        let high = (
+            (rect.x_high - camera.x) * zoom,
+            (rect.y_high - camera.y) * zoom,
+        );
+        Ok(low.0 >= usable.origin.x - IN_VIEW_NOISE
+            && low.1 >= usable.origin.y - IN_VIEW_NOISE
+            && high.0 <= usable.right() + IN_VIEW_NOISE
+            && high.1 <= usable.bottom() + IN_VIEW_NOISE)
+    }
+    /// Upstream window_fully_in_view_at. A window that is no canvas window has
+    /// no meaningful relation to the view, and reads as not in it.
+    pub(crate) fn window_fully_in_view_at(
+        &self,
+        window: WindowId,
+        output: OutputId,
+        camera: Point,
+        zoom: f64,
+    ) -> Result<bool, Error> {
+        if !self.on_canvas(window) {
+            return Ok(false);
+        }
+        let rect = snap_rect(self.window_rect(window)?);
+        self.frame_fully_in_view_at(&rect, output, camera, zoom)
+    }
+    /// Upstream window_shown_as_fully_at: does the view at `camera` and `zoom`
+    /// show `window` as fully as any pan could, its frame inside the usable
+    /// area or centered on an axis it is too big for, as a `focus-nearest`
+    /// reveal leaves it?
+    fn window_shown_as_fully_at(
+        &self,
+        window: WindowId,
+        output: OutputId,
+        camera: Point,
+        zoom: f64,
+    ) -> bool {
+        let Some(frame) = self.reveal_frame(window) else {
+            return false;
+        };
+        let Ok(reveal) =
+            self.minimal_pan_camera(output, &frame, camera, zoom, MinimalPan::Whole, 0.0)
+        else {
+            return false;
+        };
+        (reveal.x - camera.x).abs() * zoom <= IN_VIEW_NOISE
+            && (reveal.y - camera.y).abs() * zoom <= IN_VIEW_NOISE
+    }
+    /// Where `output`'s camera goes from `camera` at `zoom` when it pans the
+    /// least that keeps `frame` in view as `pan` says, `inset` canvas px clear
+    /// of the usable edge (upstream minimal_pan_camera; its inset is
+    /// `outer_frame_inset(border)`, and a native frame has no border).
+    fn minimal_pan_camera(
+        &self,
+        output: OutputId,
+        frame: &SnapRect,
+        camera: Point,
+        zoom: f64,
+        pan: MinimalPan,
+        inset: f64,
+    ) -> Result<Point, Error> {
+        let usable = self.navigation_context(output)?.usable_rect_local;
+        let (at, extent) = usable_px(usable)?;
+        let usable = CoreRectangle::new(
+            CorePoint::from((pixel(at[0] as f64)?, pixel(at[1] as f64)?)),
+            CoreSize::from((pixel(extent[0] as f64)?, pixel(extent[1] as f64)?)),
+        );
+        let camera = core_point(camera);
+        let reveal = match pan {
+            MinimalPan::Whole => minimal_reveal_camera(frame, camera, zoom, usable, inset),
+            MinimalPan::LeadingEdge {
+                horizontal,
+                forward,
+            } => leading_edge_camera(frame, camera, zoom, usable, inset, horizontal, forward),
+        };
+        Ok(Point::new(reveal.x, reveal.y))
+    }
+    /// Whether the view at `camera` and `zoom` has to move for `pan` to keep
+    /// `frame` in view (upstream minimal_pan_moves).
+    pub(crate) fn minimal_pan_moves(
+        &self,
+        output: OutputId,
+        frame: &SnapRect,
+        camera: Point,
+        zoom: f64,
+        pan: MinimalPan,
+    ) -> Result<bool, Error> {
+        let inset = self.navigation_context(output)?.outer_gap().max(0.0);
+        let target = self.minimal_pan_camera(output, frame, camera, zoom, pan, inset)?;
+        Ok((target.x - camera.x).abs().max((target.y - camera.y).abs()) * zoom > IN_VIEW_NOISE)
+    }
+    /// Upstream pan_minimally_to_element, less the focus it also sets: pan
+    /// `output`'s view from `camera` at `zoom`, where any flight under way
+    /// lands, by the least amount that keeps `frame` in view as `pan` says,
+    /// through the anchor so that a flight under way cannot steer it back.
+    pub(crate) fn pan_minimally(
+        &mut self,
+        output: OutputId,
+        frame: &SnapRect,
+        camera: Point,
+        zoom: f64,
+        pan: MinimalPan,
+    ) -> Result<Value, Error> {
+        let inset = self.navigation_context(output)?.outer_gap().max(0.0);
+        let target = self.minimal_pan_camera(output, frame, camera, zoom, pan, inset)?;
+        let anchor = match pan {
+            MinimalPan::Whole => {
+                let center = Point::new(
+                    (frame.x_low + frame.x_high) / 2.0,
+                    (frame.y_low + frame.y_high) / 2.0,
+                );
+                Anchor {
+                    canvas: center,
+                    screen: (center - target) * zoom,
+                }
+            }
+            // Steering by a point far off screen would swing the camera there
+            // with whatever zoom is left to fly, so the move steers by its
+            // leading edge, which lands on screen however big the frame, and
+            // the held axis keeps the anchor of any flight under way, and so
+            // its course. Every zoom flight arms an anchor, so with none the
+            // zoom holds and the camera's own origin serves.
+            MinimalPan::LeadingEdge {
+                horizontal,
+                forward,
+            } => {
+                let held = self
+                    .flights
+                    .get(&output)
+                    .and_then(|flight| flight.zoom_animation_anchor)
+                    .unwrap_or(Anchor {
+                        canvas: camera,
+                        screen: Point::new(0.0, 0.0),
+                    });
+                if horizontal {
+                    let edge = if forward { frame.x_high } else { frame.x_low };
+                    Anchor {
+                        canvas: Point::new(edge, held.canvas.y),
+                        screen: Point::new((edge - target.x) * zoom, held.screen.y),
+                    }
+                } else {
+                    let edge = if forward { frame.y_high } else { frame.y_low };
+                    Anchor {
+                        canvas: Point::new(held.canvas.x, edge),
+                        screen: Point::new(held.screen.x, (edge - target.y) * zoom),
+                    }
+                }
+            }
+        };
+        self.arm_anchor(output, anchor, zoom)
+    }
+    /// Upstream related_to_focus: is `target` spatially related to the focused
+    /// window, in its snap cluster or overlapping its frame, at their live
+    /// frames? Nothing focused, or a focused window with no canvas frame
+    /// (pinned), relates to nothing. `left_fullscreen` is a window this action
+    /// took out of fullscreen: until its size comes back it is measured at the
+    /// size the exit asked for.
+    fn related_to_focus(&self, target: WindowId, left_fullscreen: Option<WindowId>) -> bool {
+        let Some(focused) = self.scene.focused().filter(|id| self.on_canvas(*id)) else {
+            return false;
+        };
+        let rects = self.snap_rects();
+        let Some(live) = rects
+            .iter()
+            .find(|(window, _)| *window == focused)
+            .map(|(_, rect)| *rect)
+        else {
+            return false;
+        };
+        let exit_unanswered =
+            left_fullscreen == Some(focused) && self.fullscreen.restore_size(focused).is_some();
+        let frame = if exit_unanswered {
+            self.reveal_frame(focused).unwrap_or(live)
+        } else {
+            live
+        };
+        // Upstream spatial_relatives: the members of its snap cluster and every
+        // element overlapping `frame`, `focused` itself included.
+        let rects: Vec<(WindowId, SnapRect)> = rects
+            .into_iter()
+            .map(|(window, rect)| (window, if window == focused { frame } else { rect }))
+            .collect();
+        let mut related = cluster_of(&focused, &rects, self.config().snap_gap);
+        related.extend(
+            rects
+                .iter()
+                .filter(|(_, rect)| frame.overlaps(rect))
+                .map(|(window, _)| *window),
+        );
+        related.contains(&target)
     }
     /// Upstream clear_focus_to_empty_canvas and set_window_focus(None): no
     /// window holds logical focus. A cycle in progress ends first and a pending
@@ -418,6 +803,11 @@ impl Controller {
                 let navigation = match output {
                     // Upstream arms no click navigation for a widget, and a
                     // pinned window has no canvas position to bring into view.
+                    // v0.20: judged at the live view the click was made on,
+                    // not the landing view, so a window shown whole leaves a
+                    // flight under way alone, and the click scrolls the
+                    // window just far enough to show it whole instead of
+                    // centering it, so that it stays near the pointer.
                     Some(output)
                         if self.config().auto_navigate_on_click
                             && self.on_canvas(window)
@@ -426,7 +816,14 @@ impl Controller {
                                 .fully_in_viewport(window, output)
                                 .map_err(Error::Refused)? =>
                     {
-                        self.arm_navigation(window, output, ZoomPolicy::Keep)?
+                        let (camera, zoom) = self.landing_view(output)?;
+                        match self.reveal_frame(window) {
+                            Some(frame) => {
+                                self.hover_parked();
+                                self.pan_minimally(output, &frame, camera, zoom, MinimalPan::Whole)?
+                            }
+                            None => Value::Null,
+                        }
                     }
                     _ => Value::Null,
                 };

@@ -13,6 +13,15 @@
 // is the tap on its own thread, which asks it per event. Nothing here drops anything
 // unless a touch source says it is delivering (`live`), and a count with no binding is
 // never held back.
+//
+// A Dock-control stream is one gesture of the system's (a Show Desktop spread, a Mission
+// Control swipe): the Dock must see all of it or none. The finger count is read for the
+// first packet of a stream, or for a packet that follows a pause, and the rest of the
+// stream follows that verdict however the count changes meanwhile: fingers lift one by
+// one, and a hand that began as a bound four-finger pinch must not hand the Dock the
+// middle and the end of a gesture whose beginning was dropped (or take the end of one
+// the Dock was given the beginning of).
+#import "dock-control.h"
 typedef struct {
     uint32_t bound;    // bit n is set when a [gestures] binding takes n fingers
     uint32_t fingers;  // fingers on the pad now, as the touch source counts them
@@ -20,15 +29,36 @@ typedef struct {
     uint32_t contact;  // which touch the fingers belong to: counts up each time the pad goes from empty to touched
     BOOL live;         // a touch source is delivering frames
     BOOL refused;      // the shell declined this contact (a button was down, no canvas under the pointer): the system keeps it
-    NSTimeInterval until; // Dock control is dropped until then: the tail after the fingers lift
+    NSTimeInterval until; // Sunlight's dropDockControlUntil: Dock control is dropped until then; it moves on with every report of a bound touch, and the tail starts at the lift
+    BOOL boundTouch;   // Sunlight's fourFingerTouch: from a bound count landing until the last finger lifts, however the count moves meanwhile (not once it has grown past every bound count)
+    BOOL runOpen,runDrop; // a Dock-control stream is in progress, and its beginning was dropped (runDrop) or given to the system
+    NSTimeInterval runAt; // when the stream's last packet came
 } DWDockGuardState;
 // How long after the fingers lift, or the gesture ends, Dock control is still dropped:
 // the system's swipe ends a beat later.
 extern const NSTimeInterval DWDockTail;
+// Why a decision came out as it did: logged under INFINIFY_DEBUG and asserted by the regression.
+typedef NS_ENUM(NSInteger,DWDockReason){
+    DWDockReasonNotLive,    // no touch source delivers: nothing is held back
+    DWDockReasonUnbound,    // the fingers on the pad (none, or a count no [gestures] binding takes) are the system's
+    DWDockReasonRefused,    // the shell declined this touch: the system keeps it
+    DWDockReasonFingers,    // the fingers on the pad are a bound count
+    DWDockReasonGesture,    // the recogniser's gesture in progress is a bound count
+    DWDockReasonTail,       // the fingers lifted, or the gesture ended, a beat ago
+    DWDockReasonRunDropped, // the stream this packet belongs to began dropped
+    DWDockReasonRunPassed,  // the stream this packet belongs to began with the system
+};
+const char *DWDockReasonName(DWDockReason reason);
 // Whether fingers or a gesture of a bound count are there, ignoring the tail.
 BOOL DWDockGuardHolds(const DWDockGuardState *state);
-// The decision for a Dock-control event at `now`: held, or inside the tail, and live.
+// The decision for a Dock-control event at `now`, taken on its own and ignoring streams: held, or inside the tail, and live.
 BOOL DWDockGuardDrops(const DWDockGuardState *state,NSTimeInterval now);
+// The same with its reason.
+DWDockReason DWDockGuardReason(const DWDockGuardState *state,NSTimeInterval now,BOOL *drop);
+// The decision for one packet of `kind` and what the state must remember of it: a beginning, and a packet after a pause (a
+// second, or the tail for a packet that is not a DockSwipe and so has no beginning), takes the count's decision; the rest of the
+// stream takes the beginning's. The end of a stream closes it.
+BOOL DWDockGuardDecide(DWDockGuardState *state,DWDockControlKind kind,NSTimeInterval now,DWDockReason *reason);
 // The pad now has `fingers` fingers on it. The tail starts when the last one lifts after
 // bound ones; a change to a count with no binding starts none, and holds nothing back.
 void DWDockGuardFingers(DWDockGuardState *state,NSUInteger fingers,NSTimeInterval now);
@@ -43,6 +73,11 @@ void DWDockGuardLive(DWDockGuardState *state,BOOL live);
 // The state behind a lock. Any thread; every call is a few instructions.
 @interface DWDockGuard : NSObject
 - (void)setBound:(uint32_t)mask;
+// The decision for a Dock-control packet seen by tap `via` ("dock-tap", "global-tap"), with its trace line. Undecided when no
+// touch source delivers, which leaves the tap to its own rules. A packet the other tap decided a moment ago is not decided twice.
+- (DWDockControlVerdict)decide:(CGEventRef)event via:(const char *)via at:(NSTimeInterval)now;
+// Reports from the touch source so far: how many frames told the guard a finger count, for the log.
+@property (readonly) NSUInteger reports;
 - (void)setLive:(BOOL)live;
 // Returns the number of the touch the fingers belong to.
 - (uint32_t)fingers:(NSUInteger)fingers at:(NSTimeInterval)now;

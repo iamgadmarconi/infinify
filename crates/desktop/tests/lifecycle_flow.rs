@@ -283,11 +283,21 @@ fn center_placement_reads_the_current_pose_and_the_landing_zoom() {
     let scratch = Scratch::new();
     // Zoomed out, the usable center shows the world point (2000, 650). The
     // navigation that follows resets the zoom around the window's center.
-    let mut h = running(&scratch, "window_placement = \"center\"\n");
+    // `reset_on_new_window` is false by default since v0.20, so this scenario
+    // turns it on.
+    let mut h = running(
+        &scratch,
+        "window_placement = \"center\"\n[zoom]\nreset_on_new_window = true\n",
+    );
     zoom_out(&mut h);
     let reply = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
     assert_eq!(h.world(1), rect(1800.0, 500.0, 400.0, 300.0));
     assert_eq!(armed(&reply), flight((1500.0, 225.0), 1.0));
+    // And the default leaves the zoom where it is.
+    let mut h = running(&scratch, "window_placement = \"center\"\n");
+    zoom_out(&mut h);
+    let reply = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
+    assert_eq!(armed(&reply), flight((1000.0, -200.0), 0.5));
     // With zoom.reset_on_new_window off the camera only has to stay.
     let mut h = running(
         &scratch,
@@ -300,8 +310,7 @@ fn center_placement_reads_the_current_pose_and_the_landing_zoom() {
 
     // focus_placement moves the spawn point with it: the top-left corner of
     // the usable area, 20 points in, is the world point (20, 70).
-    let corner =
-        "window_placement = \"center\"\nfocus_placement = \"top-left\"\n[snap]\nouter_gap = 20\n";
+    let corner = "window_placement = \"center\"\nfocus_placement = \"top-left\"\n[snap]\nouter_gap = 20\n[zoom]\nreset_on_new_window = true\n";
     let mut h = running(&scratch, corner);
     let reply = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
     assert_eq!(h.world(1), rect(20.0, 70.0, 400.0, 300.0));
@@ -355,8 +364,12 @@ fn cursor_placement_centers_on_the_pointer_inside_the_usable_area() {
     assert_eq!(armed(&reply), flight((0.0, 0.0), 1.0));
 
     // Zoomed out, the pointer is the world point (2000, 600) and the reset
-    // rescues the overview: the camera does fly, to the window at zoom 1.
-    let mut h = running(&scratch, "window_placement = \"cursor\"\n");
+    // (off by default since v0.20, so turned on here) rescues the overview:
+    // the camera does fly, to the window at zoom 1.
+    let mut h = running(
+        &scratch,
+        "window_placement = \"cursor\"\n[zoom]\nreset_on_new_window = true\n",
+    );
     zoom_out(&mut h);
     let reply = appear(&mut h, 1, "app.a", "A", (400.0, 300.0));
     assert_eq!(h.world(1), rect(1800.0, 450.0, 400.0, 300.0));
@@ -595,8 +608,14 @@ const ADOPTED: fn(u64) -> Value = |id| json!({"window":id,"adopted":true,"backgr
 fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     let scratch = Scratch::new();
     let scene = saved_session(&scratch);
-    // The unmatched window's fixed center is incidental to slot matching.
-    let mut h = relaunched(&scratch, &scene, "window_placement = \"center\"\n");
+    // The unmatched window's fixed center is incidental to slot matching, and
+    // restore_windows is off (it is on by default since v0.20): this is the
+    // drop.
+    let mut h = relaunched(
+        &scratch,
+        &scene,
+        "window_placement = \"center\"\n[session]\nrestore_windows = false\n",
+    );
     // Two slots of one app: the title picks, not the lower id. The slot keeps
     // its logical id, its world frame whatever the native size is now, and its
     // place in the stack; the window brings its identity.
@@ -654,7 +673,7 @@ fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     // Nothing was still open: every slot goes, and with the focused one the
     // focus. An adopting window's output and pointer are checked like a
     // placed one's.
-    let mut h = relaunched(&scratch, &scene, "");
+    let mut h = relaunched(&scratch, &scene, "[session]\nrestore_windows = false\n");
     assert_eq!(
         h.error(json!({"op":"attach","identity":identity(21),"bundle_id":"app.term","title":"beta","buffer":{"width":200,"height":100},"source_rect":rect(NATIVE.0,NATIVE.1,640.0,480.0),"output":9})),
         "unknown output"
@@ -667,7 +686,8 @@ fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     assert_eq!(snapshot["windows"], json!([]));
     assert_eq!(snapshot["focus"]["intent"], Value::Null);
     // A window rule turns restore_windows on for one app, as upstream's does.
-    let rule = "[[window_rules]]\napp_id = \"app.notes\"\nrestore_windows = true\n";
+    // (restore_windows is off in the file: it is on by default since v0.20.)
+    let rule = "[session]\nrestore_windows = false\n[[window_rules]]\napp_id = \"app.notes\"\nrestore_windows = true\n";
     let mut h = relaunched(&scratch, &scene, rule);
     assert_eq!(
         h.ok(json!({"op":"adoption_complete"})),
@@ -676,7 +696,7 @@ fn still_open_windows_take_their_saved_slots_back_and_the_rest_are_dropped() {
     assert_eq!((h.stack(), h.focused()), (vec![4], Value::Null));
     // Upstream reads the rule by app alone on the way back, so one keyed on a
     // title restores nothing.
-    let rule = "[[window_rules]]\ntitle = \"todo\"\nrestore_windows = true\n";
+    let rule = "[session]\nrestore_windows = false\n[[window_rules]]\ntitle = \"todo\"\nrestore_windows = true\n";
     let mut h = relaunched(&scratch, &scene, rule);
     assert_eq!(
         h.ok(json!({"op":"adoption_complete"})),
@@ -893,7 +913,9 @@ fn stand_ins_survive_a_restart_whatever_restore_windows_says() {
     let mut h = Host::new();
     h.ok(json!({"op":"load","path":path}));
     open(&mut h);
-    load_config(&mut h, &scratch, "");
+    // restore_windows is on by default since v0.20; this scenario is the off
+    // side of it.
+    load_config(&mut h, &scratch, "[session]\nrestore_windows = false\n");
     assert_eq!(h.lifecycle()["standins"], json!([1]));
     // A stand-in is not waiting for a window: one of its app, with its title,
     // is placed. The slot of a window that was open is.
@@ -1502,7 +1524,7 @@ fn the_state_event_follows_windows_that_appear_and_close() {
     assert_eq!(event(&mut h), Value::Null);
     // Mapped: placed under the focus placement point, and focused.
     appear(&mut h, 1, "app.term", "alpha", (400.0, 300.0));
-    let mapped = json!({"id":1,"app_id":"app.term","title":"alpha","position":[500,-425],"size":[400,300],"is_focused":true,"is_widget":false,"suspended":false,"mode":"Normal"});
+    let mapped = json!({"id":1,"app_id":"app.term","title":"alpha","position":[500,-425],"size":[400,300],"is_focused":true,"is_widget":false,"suspended":false,"mode":"Normal","pid":4242});
     assert_eq!(windows(&event(&mut h)), json!([mapped]));
     assert_eq!(event(&mut h), Value::Null);
     h.ok(json!({"op":"retitle","window":1,"identity":identity(1),"title":"beta"}));
@@ -1655,7 +1677,7 @@ fn a_reopened_canvas_ends_its_own_pass() {
     // for the fixed new-window coordinates below, with both restore policies.
     for (toml, ended) in [
         (
-            "window_placement = \"center\"\n",
+            "window_placement = \"center\"\n[session]\nrestore_windows = false\n",
             json!({"dropped":[1],"standins":[],"dirty":true}),
         ),
         (
@@ -1736,7 +1758,7 @@ fn slots_of_windows_that_exist_off_screen_keep_waiting_for_them() {
     // pin center so these assertions continue to isolate saved-slot matching.
     for (toml, ended, later) in [
         (
-            "window_placement = \"center\"\n",
+            "window_placement = \"center\"\n[session]\nrestore_windows = false\n",
             json!({"dropped":[1,3],"standins":[],"dirty":true}),
             json!({"dropped":[4],"standins":[],"dirty":true}),
         ),
@@ -1846,7 +1868,8 @@ fn a_refused_config_file_decides_nothing_about_the_saved_slots() {
         h.ok(json!({"op":"adoption_complete"})),
         json!({"dropped":[],"standins":[1,2,3,4,5],"dirty":true})
     );
-    // No file at all is the built-in defaults by choice: the slots go.
+    // No file at all is the built-in defaults by choice: since v0.20
+    // `restore_windows` is on in them, so every slot is kept as a stand-in.
     std::fs::remove_file(&config).unwrap();
     let mut h = Host::new();
     let reply = h.ok(json!({"op":"load_config","path":config}));
@@ -1858,7 +1881,7 @@ fn a_refused_config_file_decides_nothing_about_the_saved_slots() {
     open(&mut h);
     assert_eq!(
         h.ok(json!({"op":"adoption_complete"})),
-        json!({"dropped":[1,2,3,4,5],"standins":[],"dirty":true})
+        json!({"dropped":[],"standins":[1,2,3,4,5],"dirty":true})
     );
 }
 
@@ -2539,7 +2562,7 @@ fn a_pass_that_ends_before_a_window_arrives_decides_only_what_it_did_not_name() 
     let scene = saved_session(&scratch);
     // Pass ordering is under test; the later new window's fixed flight uses
     // Center explicitly instead of docking beside a surviving saved slot.
-    let center = "window_placement = \"center\"\n";
+    let center = "window_placement = \"center\"\n[session]\nrestore_windows = false\n";
     let beta = |h: &mut Host| appear(h, 21, "app.term", "beta", (640.0, 480.0));
     let docs = |h: &mut Host| appear(h, 22, "app.web", "docs", (640.0, 480.0));
     let ended = json!({"dropped":[1,4],"standins":[],"dirty":true});

@@ -18,6 +18,14 @@ struct ZoomAnimationAnchor {
 mod state {
     pub(super) use super::{ZoomAnimationAnchor, output_state};
 }
+// v0.21: `landing_view_on` calls `driftwm::canvas::zoom_anchor_camera`; the
+// original function is extracted into this path, not reimplemented.
+mod driftwm {
+    pub mod canvas {
+        use super::super::{Logical, Point};
+        /*ZOOM_ANCHOR_CAMERA*/
+    }
+}
 struct Momentum;
 impl Momentum {
     fn stop(&mut self) {}

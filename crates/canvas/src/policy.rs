@@ -310,10 +310,14 @@ pub fn snap_zoom(z: f64) -> f64 {
 
 /// Closest point on an axis-aligned rect to `origin`.
 /// If origin is inside the rect, returns origin itself (distance 0).
+///
+/// v0.21.0 (third_party/driftwm/src/canvas.rs closest_point_on_rect): the far
+/// edge is summed in f64. An i32 sum can wrap below `loc`, and `f64::clamp`
+/// panics on min > max.
 pub fn closest_point_on_rect(origin: Point, loc: PixelPoint, size: PixelSize) -> Point {
     point((
-        origin.x.clamp(loc.x as f64, (loc.x + size.w) as f64),
-        origin.y.clamp(loc.y as f64, (loc.y + size.h) as f64),
+        origin.x.clamp(loc.x as f64, loc.x as f64 + size.w as f64),
+        origin.y.clamp(loc.y as f64, loc.y as f64 + size.h as f64),
     ))
 }
 

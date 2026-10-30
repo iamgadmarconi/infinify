@@ -7,6 +7,19 @@
 // as a pending middle click and src/input/gestures/swipe.rs turns into a
 // doubletap-swipe. macOS has no tap-to-click middle button, so the tap is found here.
 //
+// One rule is not libinput's and is not this file's own: the reading of a thumb and three fingers that spread or close (Show Desktop and Launchpad
+// on a Mac) from every finger's distance from their common centre, translated from spacefarm-digital/sunlight afeea74b18e70ca49bf462d6fe462cf65deb2b32
+// (MIT, Copyright (c) 2026 spacefarm), third_party/sunlight/Sources/Canvas/TrackpadPan.swift (the same file at that commit):
+//   TrackpadPan.frame, 183-189 ..................... `shape:travel:` computes the mean distance of the fingers from their centroid (`spread`, there in trackpad
+//                                                    widths, here in millimetres) and how far the centroid has moved
+//   TrackpadRecognizer.anchorSpread, 266-267, 315 .. the fingers' own ix, iy, taken when recognition starts (`pair:`)
+//   TrackpadRecognizer.update, 322-333 ............. `grown = spread - anchorSpread`; a spread is not a pan; "while the spread keeps up with the shift, the touch
+//                                                    is still undecided" (`abs(grown) <= hypot(travel) / 2`)
+//   TrackpadPan.spreadDistance, 54-57 .............. radiusMove: 0.07 of the pad's width is 10.9 mm on the built-in 156 mm pad; 4 mm here, since a pinch is
+//                                                    only begun by this rule and then followed by the two-touch scale, and Sunlight's ends in a one-shot Show Desktop
+// Deviations: Sunlight fires one `.spread` for growth only and does nothing for fingers closing (its comment calls that Launchpad's pinch); here growth
+// and shrinkage are both a pinch, the recogniser's, with the scale of its own far and near touches; Sunlight needs exactly four fingers, this needs the
+// recogniser's three or more; and the rule runs beside the two-touch rules, which still decide a swipe.
 // The rules follow libinput's documented gesture semantics (its user guide's
 // gestures page) as far as raw touches allow; each says which. How a swipe is told
 // from a pinch, and every number, are this file's choices, made from memory of how
@@ -45,6 +58,14 @@
 //   - both under undecided = 1 mm: nothing yet.
 //   - the two within rowWidth = 40 mm and rowHeight = 7 mm of each other, so side by
 //     side with no thumb below, and rowTime = 150 ms since recognition started: swipe.
+//   - the fingers' mean distance from their own centre grew or shrank by radiusMove = 4 mm or more, and by more than
+//     half of what the centre itself travelled: pinch. This reads every finger and not only the two, so a thumb and
+//     three fingers that spread or close while the whole hand drifts the same way are still a pinch; the two-touch
+//     rules below read that drift as a swipe (the hand of the owner's first run: Show Desktop and Launchpad shapes).
+//     While the spread outruns the centre's travel but has not reached radiusMove, the two touches' agreement is not
+//     taken for a swipe: nothing is decided yet.
+//     Not tuned on a trackpad: Sunlight's Show Desktop spread reads the same quantity (TrackpadPan.swift, `spread`)
+//     with its own numbers, and was tuned on one.
 //   - the near one moved 4 mm + 2 mm per finger beyond two while the far one moved
 //     under 1.5 mm + 0.5 mm per finger beyond two: pinch (a thumb closing on resting fingers).
 //   - either under 1.5 mm + 0.5 mm per finger beyond two: nothing yet.
@@ -112,7 +133,7 @@
 }
 @end
 
-static const double unitsPerMM=10.5,undecided=1,rowWidth=40,rowHeight=7,holdMove=1,tapMove=1.3;
+static const double unitsPerMM=10.5,undecided=1,rowWidth=40,rowHeight=7,holdMove=1,tapMove=1.3,radiusMove=4;
 static const NSTimeInterval settleTime=.05,switchTime=.1,holdTime=.18,rowTime=.15,tapTime=.18,doubletapTime=.3;
 
 NSNumber *DWGestureTime(NSTimeInterval seconds) { return @(floor(MAX(0,seconds)*1000)); }
@@ -155,6 +176,15 @@ typedef NS_ENUM(NSInteger,DWGesturePhase){DWGestureNone,DWGestureUnknown,DWGestu
 - (void)rest:(NSTimeInterval)time { _hold=time+holdTime;for(DWTouchPoint *touch in _touches.objectEnumerator){touch->hx=touch->x;touch->hy=touch->y;} }
 - (BOOL)resting { for(DWTouchPoint *touch in _touches.objectEnumerator)if(hypot(touch->x-touch->hx,touch->y-touch->hy)>holdMove)return NO;return YES; }
 - (BOOL)paired { NSArray *down=_touches.allValues;return _far&&_near&&[down indexOfObjectIdenticalTo:_far]!=NSNotFound&&[down indexOfObjectIdenticalTo:_near]!=NSNotFound; }
+// How much the fingers' mean distance from their own centre has changed since recognition started, and how far that centre has moved, in mm.
+- (void)shape:(double *)grown travel:(double *)travel {
+    double x0=0,y0=0,x1=0,y1=0,r0=0,r1=0,n=(double)_touches.count;
+    if(!n){*grown=*travel=0;return;}
+    for(DWTouchPoint *touch in _touches.objectEnumerator){x0+=touch->ix;y0+=touch->iy;x1+=touch->x;y1+=touch->y;}
+    x0/=n;y0/=n;x1/=n;y1/=n;
+    for(DWTouchPoint *touch in _touches.objectEnumerator){r0+=hypot(touch->ix-x0,touch->iy-y0);r1+=hypot(touch->x-x1,touch->y-y1);}
+    *grown=(r1-r0)/n;*travel=hypot(x1-x0,y1-y0);
+}
 // Whether the two touches have moved together or against each other, once that can be told.
 - (DWGesturePhase)motion:(NSTimeInterval)time {
     if(time<_since+settleTime||!_far||!_near)return DWGestureNone;
@@ -162,9 +192,13 @@ typedef NS_ENUM(NSInteger,DWGesturePhase){DWGestureNone,DWGestureUnknown,DWGestu
     double least=1.5+.5*(_fingers-2),most=4+2.0*(_fingers-2);
     if(far<undecided&&near<undecided)return DWGestureNone;
     if(fabs(_far->x-_near->x)<rowWidth&&fabs(_far->y-_near->y)<rowHeight&&time>_since+rowTime)return DWGestureSwipe;
+    double grown,travel;[self shape:&grown travel:&travel];
+    if(fabs(grown)>=radiusMove&&fabs(grown)>travel/2)return DWGesturePinch;
     if(near>=most&&far<least)return DWGesturePinch;
     if(far<least||near<least)return DWGestureNone;
-    return fx*nx+fy*ny>0?DWGestureSwipe:DWGesturePinch;
+    if(fx*nx+fy*ny<=0)return DWGesturePinch;
+    // The two move the same way, which is a swipe unless the hand is also spreading faster than it travels: then the rest of the fingers decide, once they have moved radiusMove.
+    return fabs(grown)>travel/2?DWGestureNone:DWGestureSwipe;
 }
 // One step for the fingers now down: start recognition, read their motion, report the gesture it settled on.
 - (void)recognise:(NSTimeInterval)time {

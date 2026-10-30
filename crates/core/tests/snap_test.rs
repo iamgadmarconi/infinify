@@ -2,7 +2,7 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       tests/snap_test.rs
 //   sha-256:    0a0b2fa41a84c022a1fbf39f22863ff24977a22fd56795d9807e5c738db3d7f0 (upstream file)
 // Changes from upstream: this header, and line 1 of the original

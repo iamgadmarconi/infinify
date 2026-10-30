@@ -63,7 +63,7 @@ Additions only; `ABI_VERSION` is unchanged and no command was added.
 | `activate`, `pick`, `clear_focus` replies | may gain `transaction` and an `effects` list: see [A size that is owed](#a-size-that-is-owed). A `hover` reply never does |
 | `attach` reply | a rule's `fullscreen` carries its transaction as a rule's `size` does: `transaction`, and its effect as the one entry of `effects`. `navigation` is `null` |
 | `home_toggle` reply | the direct command's return into fullscreen carries its size transaction under `transaction` and `effect`, as the action's reply does, and its focus request in an `effects` list. Every other `home_toggle` reply is unchanged |
-| IPC `State` | `fullscreen` lists one `{id, output, app_id, title}` per fullscreen output, sorted by output name and app id, and such a window is left out of `windows` |
+| IPC `State` | `fullscreen` lists one `{id, output, app_id, title, pid}` per fullscreen output (`pid`, v0.21.0, left out for a window with no bound source), sorted by output name and app id, and such a window is left out of `windows` |
 | `rule.not_applied` | no longer names `fullscreen` for a window whose rule's `fullscreen` was applied as it mapped |
 | `begin_drag`, `begin_resize`, `begin_native_resize` replies | unchanged in shape: the focus request of the window the grab takes, asked after the fullscreen has ended ([the order of a grab](#the-order-of-a-grab)) |
 | `mouse_binding` | a fullscreen window named as `window` claims by its `pass_mouse` whatever `pick` says ([RULES.md](RULES.md#pass_mouse)) |

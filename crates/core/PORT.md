@@ -6,11 +6,16 @@ One platform-neutral crate holding the pure, compositor-independent parts of
 DriftWM: canvas math, configuration, layout, the session store, the window
 stage, and the touch gesture recogniser.
 
-- Upstream: [malbiruk/driftwm](https://github.com/malbiruk/driftwm), crate `driftwm` 0.19.0
-- Commit: `352333a8fa1b22171492d4b71a54102045c9a19d`
+- Upstream: [malbiruk/driftwm](https://github.com/malbiruk/driftwm), crate `driftwm` 0.21.0 (tag `v0.21.0`)
+- Commit: `df3de27b26c7998e8a460cffd8a4925cbed3a322` ("Bump version to v0.21.0", 2026-10-27). The
+  first version of this crate was ported from `352333a8fa1b22171492d4b71a54102045c9a19d`
+  (v0.19.0 plus three commits); see [Update to v0.21.0](#update-to-v0210).
+- Verbatim snapshot in this repository: [`third_party/driftwm`](../../third_party/driftwm/VENDORED.md)
+  at the same commit. `tools/diff-upstream.sh` compares against it by default.
 - Licence: GPL-3.0-or-later, as upstream. `LICENSE` is upstream's file, unchanged.
 - Assembled on 2026-10-09 with Rust 1.96.0 (`aarch64-apple-darwin`, macOS 27.2;
-  clippy 0.1.96, rustfmt 1.9.0).
+  clippy 0.1.96, rustfmt 1.9.0). Updated to v0.21.0 on 2026-10-29 with the same
+  toolchain.
 
 It merges two earlier ports and adds four modules:
 
@@ -30,16 +35,62 @@ One behaviour is a reimplementation instead of upstream's code: turning a key
 name such as `Return` into a keysym (upstream calls libxkbcommon, a C library).
 That comes from the config port and has [its own section](#keysym-name-lookup).
 
+## Update to v0.21.0
+
+On 2026-10-29 the owner asked for DriftWM v0.21.0 (commit
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`; 243 commits after the first pin,
+v0.19.0 plus three). The procedure was the one the crate was made with, applied
+to the changed files only: for each ported file the upstream change between the
+two commits was merged into the ported text (`git merge-file`, ported text as
+"ours", the old upstream file as base, the new one as "theirs", headers set
+aside), conflicts were resolved by hand, the header's commit and SHA-256 were
+set to the new ones, and `tools/diff-upstream.sh` confirmed that the remaining
+differences are the ones in [Deviations](#deviations). Nothing was rewritten.
+
+What upstream changed in the ported files:
+
+| Area | Files | Change in v0.20.0 / v0.21.0 |
+|---|---|---|
+| defaults | `config/{mod,types,parse_helpers,defaults}.rs` | `window_placement` `auto`; `[session] restore_*` on; `[zoom] reset_on_new_window` off, `interact_min` 0.5; `[snap] corners` on, `outer_gap` 12; `decoration_resize_snapped` / `decoration_fit_snapped` on; decoration colours; blur 5 / 1.5; new default bindings (focus-nearest, move-to-snap, snapped resize and fit, `fill-window` on mod+middle, holds `focus-center`, mod+shift+q `suspend-window`, mod+e / mod+z / alt+2-finger pinch / alt+3-finger pinch removed) |
+| actions | `config/{types,parse}.rs` | `Action::{FocusNearest, MoveToSnap, ResizeToSnap}`, `MouseAction::FocusNearest`, `ThresholdAction::FocusNearest`; `parse_cardinal` (the snap actions take four directions); `reject_bare_directional` |
+| config file | `config/toml.rs`, `config/mod.rs` | `set_config_path` (upstream's `--config`) |
+| snapping | `layout/snap.rs` | `SnapRect::inset`; the stop model (`Line`, `Family`, `Stop`, `StopQuery`, `stops`), `next_origin`, `next_grow_line`, `next_shrink_line`; `find_snap_candidate` and `find_edge_snap` rewritten over `stops` (behaviour kept); 31 tests |
+| fill | `layout/fill.rs` | `fill_rect` insets its bounds with `SnapRect::inset` |
+| canvas | `canvas.rs` | `minimal_reveal_camera`, `leading_edge_camera`; `closest_point_on_rect` sums in f64 |
+| stage | `stage/{mod,tests}.rs` | `FitPush` and the fit-push record that a closing snapped fit uses |
+| session | `session.rs` | owner-only files, position limits |
+| recogniser | `grabs/touch_recognizer{,/tests}.rs` | bare 4-finger and mod+3-finger swipes name focus-nearest in the threshold tables; two tests |
+| tests | `tests/config_{bindings,parse,reference,toml}_test.rs` | the new defaults and actions |
+| docs, seeds | `config.reference.toml`, `docs/config.md`, `docs/window-rules.md`, `proptest-regressions/layout/snap.txt` | upstream copies; the reference config was rewritten to one line per option |
+
+Deviations added by the update, all in the lists above: `src/window_ext.rs`
+leaves out two more functions (`decoration_mode_to_kde_manager`,
+`decoration_mode_to_kde`, the KDE server-decoration protocol); the line numbers
+of the kept trait moved; `config::set_config_path` is ported unchanged and is
+unused by Infinify. No other textual deviation was added: no new `smithay::`
+path appeared in a ported file, and no `#[rustfmt::skip]` was needed.
+
+Changed upstream but not ported, because they need the Wayland stack (the
+files are outside this crate's module map): `src/region.rs` (opaque and blur
+region caps), `src/desktop_entry.rs`, `src/protocols/*` (gamma and virtual
+keyboard memfd checks, screencopy, image-copy-capture), `src/render/*`
+(screenshot temp file, blur, TIFF), `src/state/*` and `src/input/*` (the
+compositor's side of focus-nearest, move-to-snap, the hardening items). The
+controller adapts the ones that have a macOS meaning; `crates/desktop/README.md`
+lists what it took and what it left out. Upstream's `src/tests/*` is a
+headless-compositor harness and is not part of this port, as before.
+
 ## Layout
 
 ```
 Cargo.toml  Cargo.lock        self-contained package, empty [workspace] table
 LICENSE                       upstream's GPL-3 text, byte-identical
-SHA256SUMS                    hashes of the seven byte-identical copies
+SHA256SUMS                    hashes of the eight byte-identical copies
 config.reference.toml         upstream copy (config tests read it)
 docs/config.md                upstream copy (a test reads it)
 docs/window-rules.md          upstream copy (a test reads it)
 proptest-regressions/layout/fill.txt   upstream copy (saved proptest seeds)
+proptest-regressions/layout/snap.txt   upstream copy (saved proptest seeds; new in v0.21.0)
 proptest-regressions/stage/tests.txt   upstream copy (saved proptest seeds)
 src/lib.rs                    crate root (new)
 src/canvas.rs                 ported
@@ -92,8 +143,8 @@ Public paths keep upstream's shape: `driftwm::config::Config` is
 ## Files and upstream hashes
 
 SHA-256 of the upstream original at the pinned commit. The same list is in
-`tools/upstream.sha256`, which `tools/diff-upstream.sh` checks against a
-checkout.
+`tools/upstream.sha256`, which `tools/diff-upstream.sh` checks against a tree
+(`third_party/driftwm` by default).
 
 Ported Rust files. Each has a leading SPDX line and provenance comment; "Body"
 says what `tools/diff-upstream.sh` prints for it (lines removed / added against
@@ -101,51 +152,57 @@ upstream, below the header).
 
 | File (same path upstream) | SHA-256 of upstream original | Body |
 |---|---|---|
-| `src/canvas.rs` | `d4506bcfacbb50ec104e7c53bed7dbc9bb1d04a08615b3d14665d2ffebe53f8c` | -1 +1 |
-| `src/config/mod.rs` | `b521038bb0817984d5ae7335021723e2e7df1bc18bc17dd11f9aac31439be1c6` | -6 +6 |
-| `src/config/types.rs` | `d709bb9c4adc8212ff38e21b60676ceddbbed24b0ab184acb7745255d78fb1b2` | -19 +7 |
-| `src/config/parse.rs` | `734fcb9ed0d13491c14a0b489c11495eb615cb4f66a6e04621b0a5071ce2f367` | -1 +1 |
-| `src/config/parse_helpers.rs` | `5ffc60e1438375a74f0bb005ce2628746a2411603bf27997f6203b2c56abf6e7` | -1 +1 |
-| `src/config/toml.rs` | `2bb8db5897799101811bbccd5dcd5aee21e070e97183ccc78121d896f11d483f` | -1 +4 |
-| `src/config/defaults.rs` | `e4918a77eec33c57b4ccd8ac2612817ea551c5d40116499c9eb7003aa0495fb6` | -1 +1 |
+| `src/canvas.rs` | `becd67eaef83d761141822652f8f60519051f68455608b43b8d806c0d9d23aa4` | -1 +1 |
+| `src/config/mod.rs` | `ac10ef20e1d65098edbc730372124e8c15aa06ecc3c824c6ee6cb9b4be82177f` | -6 +6 |
+| `src/config/types.rs` | `3a7a6be2a912c13a2a626527bd6a740e920a90de822abdc92132b7f883a15f8e` | -19 +7 |
+| `src/config/parse.rs` | `4c123070660e17df07af21be03755cc000bd5b935dd716328f89b5c659ebf2cc` | -1 +1 |
+| `src/config/parse_helpers.rs` | `57e32e373dae1d62e597f8903376b24dd08ace81c51198e0e886bd85778d3247` | -1 +1 |
+| `src/config/toml.rs` | `6e67a2e41ba1c39a7a71fea7b340b32bfafc0ca1994af248ebdaaf39df2d024b` | -1 +4 |
+| `src/config/defaults.rs` | `c2569a8d2db92dc3326238698c18b3c461dfc39835c4ae98d6b512856002dcd4` | -1 +1 |
 | `src/layout/mod.rs` | `30e14c74317edb70c7d93e8a0c5e873f2a31ef518bef29eef5deb931d3d99030` | identical |
-| `src/layout/snap.rs` | `e3fe3639056ebddf3870d85f6d0e40665e0846a18ea367d514780f418a160424` | identical |
+| `src/layout/snap.rs` | `66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae` | identical |
 | `src/layout/cluster.rs` | `4190c07d8f09cc70fdee19e1745297713f1ff8e06ab2db4337c0e316ea351a1a` | identical |
 | `src/layout/auto_placement.rs` | `d99fa9d5ca4a5e9d84e6ef6d6672e6ea531186f40187d88082b63285e8999806` | identical |
-| `src/layout/fill.rs` | `2aae4c9f33279b95b82b915f51d9aa842527d77178b753d801d8a758ab2843f7` | identical |
-| `src/session.rs` | `048a81dbcf14b4fde39d2d493ab452fc49196ac9d0bd5e323e9c48b19ca1bbd0` | identical |
-| `src/stage/mod.rs` | `386de30ff289448853abf0061a8917961a183847aa786921b5a6903ee63d5455` | -1 +1 |
+| `src/layout/fill.rs` | `5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3` | identical |
+| `src/session.rs` | `53b1022983bcc75ccbbf628c459342e7039eec47e868a2acbbf1df58821c74df` | identical |
+| `src/stage/mod.rs` | `5182313dd65f17c4ea3917ac70b01c253160273199e8b177719f60a0d95e97ad` | -1 +1 |
 | `src/stage/element.rs` | `6fdfabbfc7189cc14a80014314e318203eb3e9129ef953b8fe5357a0c7f1f8aa` | -16 +1 |
 | `src/stage/mock.rs` | `4b7117c342a887c3d06c94870c6032dd42d037c4bb47dc1249018d89b20ad91a` | -2 +2 |
-| `src/stage/tests.rs` | `a760231c8e481f6f5132e332f739cbf4bf4486903a5bfb4992e00da09df2515e` | -2 +5 |
-| `src/window_ext.rs` | `efe14bca0888978d52e21b5bc4def7fa8970e44a7bdb49d30efb5138c99d464f` | -150 +2 |
-| `src/grabs/touch_recognizer.rs` | `cd4b7f595b633caf0cbd8a046ede6d176d04a97f408a9fcec2ec9458cbb49d2e` | -5 +5 |
-| `src/grabs/touch_recognizer/tests.rs` | `38a762330cefb7b08d77c436e83c4fce712e16cb984d92b088182feffa5fd2c6` | -3 +6 |
+| `src/stage/tests.rs` | `d93728e879894075547a0dff6738edcdb7fca431db3b0f1008ee28499bc52757` | -2 +5 |
+| `src/window_ext.rs` | `2e8009ba4dd6fed15eebc66f51429c1dd6ebbe94f22b0747b60aaf1325851821` | -170 +2 |
+| `src/grabs/touch_recognizer.rs` | `0b0bdf9229b6b581ab28c9a5425c220bf19e1d5837dab8b1763a14696c846e55` | -5 +5 |
+| `src/grabs/touch_recognizer/tests.rs` | `e8e319d0de7c102b774b9529b52cdf61db0d9030ade6dfcec090584b904ecb13` | -3 +6 |
 | `src/input/gestures.rs` | `6a07e9e9a620b45bd5a52aa59136887775d609d00ad94b9c53d93c89ac3323d3` | -76 +3 |
 | `tests/canvas_navigation_test.rs` | `231937c6c83cb17c24ac419f575cdd4de3474c60d87d27c1cf405a1198c0becf` | -3 +3 |
 | `tests/canvas_transforms_test.rs` | `6c8ec536dda510c849e8472bf4f5bdc88f371b402a810ebe3a142c58d2c6bb0f` | -6 +12 |
 | `tests/canvas_zoom_test.rs` | `655b9efc5d056c2c626eea24377f5c81c38197bbf5d90c00f912b602dd8b5812` | -2 +2 |
-| `tests/config_bindings_test.rs` | `b7c87ff4a50c962f7ef06b5e14f99d9bfb5be400504654cea86000a205e1eff9` | -2 +2 |
+| `tests/config_bindings_test.rs` | `181f59507b1e6aa7f095d3ba390decdcba7d22bffa8d8a3d162e6d2f1475abac` | -2 +2 |
 | `tests/config_docs_test.rs` | `183fc6ff97b345a0bc2fd8cb6a5d8bf207ae8d61a44fecdac49e75eb590a00ad` | identical |
-| `tests/config_parse_test.rs` | `7e153a413a21940db4faa276e7babd43683acbc0e03ead52d0bbfb3120484445` | -29 +29 |
-| `tests/config_reference_test.rs` | `6965fa3fb97b265a10772559aa4da14324d7b0b64316b6c981cafd2afef8dccd` | -1 +1 |
+| `tests/config_parse_test.rs` | `303fbb0df3922f9039d59d05f6c576fd7f0e7282b2a1d4f257fabe1c0b2e0107` | -30 +30 |
+| `tests/config_reference_test.rs` | `7aca0f3766a832a9c1ab4490aca00999d9abf8a7cc2cf621decf06234376cb86` | -1 +1 |
 | `tests/config_robustness_test.rs` | `a6b4d9d2014260240f8a743e704a53e72d8d31e235ae9ba469b0bf397c52fb65` | -1 +1 |
-| `tests/config_toml_test.rs` | `80271b57a6a0497667f7da16e8419908ae49a4bbfdc4656f9f1dcabe62cffd9b` | -3 +3 |
+| `tests/config_toml_test.rs` | `e489f62bb90048885ca552f4670c925c7540357c65998dd596ed458bc8121740` | -3 +3 |
 | `tests/window_rules_test.rs` | `20219f894820fab07bc07a3e40f9fce6e367c1112f659d3e4042c5d06a38f684` | -17 +25 |
 | `tests/snap_test.rs` | `0a0b2fa41a84c022a1fbf39f22863ff24977a22fd56795d9807e5c738db3d7f0` | -1 +1 |
 
-32 files: 7 identical below the header, 25 with changes.
+32 files: 7 identical below the header, 25 with changes. Of the 32, 12 are
+byte-identical between the two upstream commits (`src/layout/{mod,cluster,auto_placement}.rs`,
+`src/stage/{element,mock}.rs`, `src/input/gestures.rs`, `tests/canvas_{navigation,transforms,zoom}_test.rs`,
+`tests/config_{docs,robustness}_test.rs`, `tests/window_rules_test.rs`, `tests/snap_test.rs`;
+their upstream hash is the same as before and only the commit in the header
+changed).
 
 Byte-identical copies, no header (`shasum -a 256 -c SHA256SUMS` verifies them):
 
 | File (same path upstream) | SHA-256 |
 |---|---|
-| `config.reference.toml` | `a490101c6fc11f83e5c032e990d1f7578f0ca80ee67ea357cd6f357f3a12b5de` |
-| `docs/config.md` | `ad65e061a65140eab782c34dd28239c990e36118dfb3517fbd909bf816010b49` |
-| `docs/window-rules.md` | `c7d14329c88369690dce523f94208e08efaca7416fd3400cc954b85d18e78136` |
+| `config.reference.toml` | `a0e1e00eb1ce16bc797e97a1ad918af7fddef1d710fe8246e1fae55f867e4e84` |
+| `docs/config.md` | `30a532929d9b06b673b234628b7d392fbe93f98093705e02de1405834e3210a4` |
+| `docs/window-rules.md` | `2f69aa604ba0b060f560d656ab464323b3bf52f9e4a55a601aec277b852a7502` |
 | `src/shaders/dot_grid.glsl` | `a2dde8d16cc974ab3d0192020b30c2f60da8620216952eb36fac0f72a83d5683` |
 | `LICENSE` | `ff3dae1cabc80d5a2b57bc9dfb6f2ee332beaa6dce9fac53168e412de09ca70f` |
 | `proptest-regressions/layout/fill.txt` | `3a48dbe099971bfcf69ecb6f5ca09d98fd93150cb00584f262dca36dae0bece1` |
+| `proptest-regressions/layout/snap.txt` | `052ed99ab594e71bdadef03b8b3c33d861870db653871873889724fdd72358d6` |
 | `proptest-regressions/stage/tests.txt` | `ccacd3861b6673ff007b4ccf2cdc653cc8decdb5dbb3d182b9636ae503a4bc2c` |
 
 They carry no SPDX header on purpose: `LICENSE` is the licence text; the two
@@ -164,12 +221,12 @@ Read but not copied:
 | Upstream path | SHA-256 | Used for |
 |---|---|---|
 | `src/lib.rs` | `d8af65b7c94f6215075520d6c6f7e190c7e83369dce821de533942f5c0e031be` | module names and visibility |
-| `src/main.rs` | `13ad5fe1504640a36987650470a9cc02cc5c9f75273eadc0352c2bf314e290a7` | how the binary declares `grabs` and `input` |
+| `src/main.rs` | `19718c9cb6ace32e42ad80e541c8a7f79b30d741231821e90fb9e47e0aaf2bdc` | how the binary declares `grabs` and `input` |
 | `src/grabs/mod.rs` | `9689afdadbfab33986b89ebe5440730a7e42d32a780918e160fa9d8ef0063e41` | how it declares `touch_recognizer` |
-| `src/input/mod.rs` | `d6be87e63b2d85a5719aa15b5f1d2b760af496eb6588995aebff161a62a8afd4` | how it declares `gestures` |
-| `Cargo.toml` | `be075f36102c16be9f2101469e6073f736a986c0e49a4b473005677758daa7d2` | dependency requirements, `[lints.clippy]`, version, authors |
-| `Cargo.lock` | `675d8d384ed43278501662101b27d4fe648c0c7e6b2b90d22c04e318eb1c557d` | locked dependency versions |
-| `clippy.toml` | `279abecace52e683fe2fdee815ef71f5e48b186cdf3d7dfa9be0ba86da4376dd` | read; not carried (see Dropped) |
+| `src/input/mod.rs` | `641698c9333168bff6e98e29e44c7baf2f927504d43fe138ac94c635dd78bcd3` | how it declares `gestures` |
+| `Cargo.toml` | `4d775f9ea7203092cead48f53b7b431881abd9377dae05012a259a03444fab28` | dependency requirements, `[lints.clippy]`, version, authors |
+| `Cargo.lock` | `c52ea2dfd3b6b6075b1e2660d15b4a573a4eccc9cb89f88c0229e14a4503dfbb` | locked dependency versions |
+| `clippy.toml` | `279abecace52e683fe2fdee815ef71f5e48b186cdf3d7dfa9be0ba86da4376dd` | read; not carried (see Dropped). Unchanged since the first port; the vendored snapshot leaves it out (its copy rules) |
 
 New files with no upstream original (each says so in its own header):
 `src/lib.rs`, `src/grabs/mod.rs`, `src/input/mod.rs`, `src/platform.rs`,
@@ -196,7 +253,7 @@ that, this is the complete list; `tools/diff-upstream.sh` prints the same.
 | `src/stage/element.rs` | `impl StageElement for Window` removed (upstream lines 20-34) with the three imports only it used; the remaining import reads `crate::platform::utils::{Logical, Size}`. The trait is unmodified |
 | `src/stage/mock.rs` | 2 `smithay::` imports read `crate::platform::` |
 | `src/stage/tests.rs` | 2 `smithay::utils` imports read `crate::platform::utils`; one `#[rustfmt::skip]` with a two-line comment on `use proptest::prelude::*;` in `mod harness` |
-| `src/window_ext.rs` | only the `WindowExt` trait is kept (upstream lines 45-68, unmodified); 2 imports read `crate::platform::`; the rest is removed (see Removed) |
+| `src/window_ext.rs` | only the `WindowExt` trait is kept (upstream lines 67-90, unmodified); 2 imports read `crate::platform::`; the rest is removed (see Removed) |
 | `src/grabs/touch_recognizer.rs` | 2 imports `smithay::` read `crate::platform::`; `driftwm::config` reads `crate::config` in 1 import and 2 inline paths in `swipe_threshold_for` |
 | `src/grabs/touch_recognizer/tests.rs` | 2 imports `smithay::` read `crate::platform::`; 1 import `driftwm::config` reads `crate::config`; one `#[rustfmt::skip]` with a two-line comment on `use proptest::prelude::*;` |
 | `src/input/gestures.rs` | an extract: `direction_from_vector` only (upstream lines 86-113, body unmodified), `pub(crate)` widened to `pub`; imports reduced to `crate::platform::utils::{Logical, Point}` and `crate::config::Direction`; lines 1-85 removed (see Removed) |
@@ -216,7 +273,8 @@ Items of ported files that are not here, and why.
 |---|---|---|
 | `config::applied_rule` | `src/config/types.rs` | reads an `AppliedWindowRule` out of a `wl_surface`'s Smithay data map. Nothing in the ported modules or tests calls it. `AppliedWindowRule` and everything that builds one are kept |
 | `impl StageElement for Window` | `src/stage/element.rs` 20-34 | implements the trait for Smithay's Wayland window. The native window type implements `StageElement` in the backend crate instead |
-| `impl WindowExt for Window` | `src/window_ext.rs` 70-189 | reads and writes xdg-toplevel state of a Smithay window |
+| `impl WindowExt for Window` | `src/window_ext.rs` 92-211 | reads and writes xdg-toplevel state of a Smithay window |
+| `decoration_mode_to_kde_manager`, `decoration_mode_to_kde` (new in v0.21.0) | `src/window_ext.rs` 45-65 | map `config::DecorationMode` to the `org_kde_kwin_server_decoration` Wayland enums (`Client` → `Client`, anything else → `Server`) for the KDE server-decoration protocol, which only a Wayland client speaks. There is no macOS counterpart (see the controller docs) |
 | `set_tiled_states`, `unset_tiled_states` | `src/window_ext.rs` 6-32 | take a Smithay `ToplevelSurface` and set xdg-toplevel `Tiled*` states |
 | `decoration_mode_to_wire` | `src/window_ext.rs` 34-43 | maps `config::DecorationMode` to the xdg-decoration wire enum (`Client` → `ClientSide`, anything else → `ServerSide`). The mapping is pure but its return type is a Wayland protocol type |
 | submodules `device_config`, `hold`, `pinch`, `swipe` | `src/input/gestures.rs` 1-4 | libinput pointer-gesture handling on compositor state |
@@ -234,13 +292,16 @@ Nothing else in the public or private API of a ported file was removed.
 Inherited from the config port, unchanged here. `config_path()` keeps
 upstream's precedence:
 
+0. (v0.21.0) the path `config::set_config_path` was given, held in-process so
+   children do not inherit it (upstream's `--config`). Ported verbatim; the
+   Infinify shell reads its own `--config` and does not call it.
 1. `$DRIFTWM_CONFIG`, if set, with a leading `~/` expanded.
 2. `$XDG_CONFIG_HOME/infinify/config.toml`.
 3. `$HOME/.config/infinify/config.toml`.
 4. `./.config/infinify/config.toml` when `HOME` is unset.
 
 Only the directory name differs from upstream, and it is the single constant
-`config::CONFIG_DIR_NAME`. The override variable is still named
+`config::CONFIG_DIR_NAME` (`toml.rs` now carries it above `CONFIG_PATH_OVERRIDE`). The override variable is still named
 `DRIFTWM_CONFIG`; whether it should become `INFINIFY_CONFIG` is an open
 decision.
 
@@ -613,37 +674,39 @@ path prefixes and the four `#[rustfmt::skip]` attributes above.
 
 | File | Upstream `#[test]` | Here | Passed |
 |---|---|---|---|
-| `src/canvas.rs` | 44 | 44 | 44 |
+| `src/canvas.rs` | 51 | 51 | 51 |
 | `src/config/mod.rs` | 87 | 87 | 87 |
 | `src/config/types.rs` | 7 | 7 | 7 |
-| `src/config/parse.rs` | 8 | 8 | 8 |
+| `src/config/parse.rs` | 9 | 9 | 9 |
 | `src/config/parse_helpers.rs` | 20 | 20 | 20 |
 | `src/layout/auto_placement.rs` | 18 | 18 | 18 |
 | `src/layout/cluster.rs` | 35 | 35 | 35 |
 | `src/layout/fill.rs` | 28 (3 proptest) | 28 | 28 |
-| `src/session.rs` | 10 | 10 | 10 |
-| `src/stage/tests.rs` | 37 (2 proptest) | 37 | 37 |
-| `src/grabs/touch_recognizer/tests.rs` | 31 (6 proptest) | 31 | 31 |
+| `src/layout/snap.rs` | 31 (1 `proptest!` block) | 31 | 31 |
+| `src/session.rs` | 13 | 13 | 13 |
+| `src/stage/tests.rs` | 38 (2 proptest) | 38 | 38 |
+| `src/grabs/touch_recognizer/tests.rs` | 32 (6 proptest) | 32 | 32 |
 | `tests/canvas_navigation_test.rs` | 25 | 25 | 25 |
 | `tests/canvas_transforms_test.rs` | 30 | 30 | 30 |
 | `tests/canvas_zoom_test.rs` | 25 | 25 | 25 |
-| `tests/config_bindings_test.rs` | 24 | 24 | 24 |
+| `tests/config_bindings_test.rs` | 25 | 25 | 25 |
 | `tests/config_docs_test.rs` | 1 | 1 | 1 |
-| `tests/config_parse_test.rs` | 78 | 78 | 78 |
+| `tests/config_parse_test.rs` | 81 | 81 | 81 |
 | `tests/config_reference_test.rs` | 10 | 10 | 10 |
 | `tests/config_robustness_test.rs` | 3 (proptest) | 3 | 3 |
 | `tests/config_toml_test.rs` | 57 | 57 | 57 |
 | `tests/snap_test.rs` | 18 | 18 | 18 |
 | `tests/window_rules_test.rs` | 79 | 79 | 79 |
-| **Total** | **675** | **675** | **675** |
+| **Total** | **723** | **723** | **723** |
 
 Upstream tests dropped: **none**. Ignored: none.
 
 The counts are `#[test]` attributes in the upstream file and in the ported file
 (equal for every file), and the "passed" column is the test harness's count per
 module. `src/stage/mod.rs`, `mock.rs`, `element.rs`, `src/window_ext.rs`,
-`src/grabs/touch_recognizer.rs`, `src/input/gestures.rs` and `src/layout/snap.rs`
-have no embedded tests upstream. Upstream has no test of its own for
+`src/grabs/touch_recognizer.rs` and `src/input/gestures.rs` have no embedded
+tests upstream (`src/layout/snap.rs` has 31 since v0.21.0, with the keyboard
+stops it gained). Upstream has no test of its own for
 `direction_from_vector`; the recogniser's tests reach it through navigate
 swipes.
 
@@ -659,10 +722,11 @@ file's path under `proptest-regressions/`.
 | Seed file | For | Upstream has it | Here |
 |---|---|---|---|
 | `proptest-regressions/layout/fill.txt` | `src/layout/fill.rs` | yes, 1 seed | byte-identical copy |
+| `proptest-regressions/layout/snap.txt` | `src/layout/snap.rs` | yes, new in v0.21.0 | byte-identical copy |
 | `proptest-regressions/stage/tests.txt` | `src/stage/tests.rs` | yes, 8 seeds | byte-identical copy |
 | `proptest-regressions/grabs/touch_recognizer/tests.txt` | `src/grabs/touch_recognizer/tests.rs` | no | none |
 
-That proptest reads exactly these three paths was observed: in a scratch copy
+That proptest reads exactly these three paths (the 0.19 layout; `layout/snap.txt` is the fourth, found by the same rule and not probed separately) was observed: in a scratch copy
 of the crate an unparsable line was appended to each (and written to the third),
 and the test run reported `proptest: …/proptest-regressions/stage/tests.txt:15:
 unparsable line, ignoring`, and likewise `layout/fill.txt:8` and
@@ -691,25 +755,28 @@ device (`-1`).
 
 ## Commands run
 
-From the crate directory, on the final sources, after `rm -rf target`.
+From the crate directory (`crates/core`), on the final sources, 2026-10-29,
+rustc 1.96.0 / clippy 0.1.96 / rustfmt 1.9.0 on `aarch64-apple-darwin`. The
+workspace's `target/` was reused (not removed), and the root `Cargo.lock` is the
+workspace's; this crate's own `Cargo.lock` was not consulted.
 
 ```
 $ cargo fmt -- --check
 (no output, exit 0)
 
 $ cargo clippy --all-targets -- -D warnings
-    Checking driftwm-core v0.19.0
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.27s
+    Checking driftwm-core v0.21.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
 (no warnings, exit 0)
 
 $ cargo test
-unittests src/lib.rs               327 passed; 0 failed; 0 ignored
+unittests src/lib.rs               371 passed; 0 failed; 0 ignored
 tests/canvas_navigation_test.rs     25 passed; 0 failed; 0 ignored
 tests/canvas_transforms_test.rs     30 passed; 0 failed; 0 ignored
 tests/canvas_zoom_test.rs           25 passed; 0 failed; 0 ignored
-tests/config_bindings_test.rs       24 passed; 0 failed; 0 ignored
+tests/config_bindings_test.rs       25 passed; 0 failed; 0 ignored
 tests/config_docs_test.rs            1 passed; 0 failed; 0 ignored
-tests/config_parse_test.rs          78 passed; 0 failed; 0 ignored
+tests/config_parse_test.rs          81 passed; 0 failed; 0 ignored
 tests/config_path_test.rs            1 passed; 0 failed; 0 ignored
 tests/config_reference_test.rs      10 passed; 0 failed; 0 ignored
 tests/config_robustness_test.rs      3 passed; 0 failed; 0 ignored
@@ -718,25 +785,28 @@ tests/platform_keysym_test.rs        8 passed; 0 failed; 0 ignored
 tests/snap_test.rs                  18 passed; 0 failed; 0 ignored
 tests/window_rules_test.rs          79 passed; 0 failed; 0 ignored
 Doc-tests driftwm_core               0 passed; 0 failed; 0 ignored
-(exit 0; 686 passed, 0 failed, 0 ignored: 675 upstream + 11 of the config port)
+(exit 0; 734 passed, 0 failed, 0 ignored: 723 upstream + 11 of the config port)
 ```
 
-Unit tests by module: `canvas` 44, `config` 122, `grabs` 31, `layout` 81,
-`platform` 2, `session` 10, `stage` 37 (327).
-
-`Cargo.lock` had the same SHA-256 before and after these three commands: the
-committed lock builds without being rewritten.
+Unit tests by module: `canvas` 51, `config` 123, `grabs` 32, `layout` 112,
+`platform` 2, `session` 13, `stage` 38 (371).
 
 Also run:
 
 ```
-$ tools/diff-upstream.sh <driftwm checkout at 352333a8>
-(39 upstream originals: OK; 32 ported files: 7 identical below the header, 25
-with the changes tabled under Deviations; 7 byte-identical copies: OK; exit 0)
+$ tools/diff-upstream.sh <tree of df3de27b, a git archive of the tag>
+(40 upstream originals: OK; 32 ported files: 7 identical below the header, 25
+with the changes tabled under Deviations; 8 byte-identical copies: OK; exit 0.
+The tree was `git archive v0.21.0` output. `third_party/driftwm` is the same
+files: the 13 files of the three test oracles were compared with `cmp`, and
+the vendor lane's `SHA256SUMS` is the check of the rest.)
 
-$ tools/port-new-files.py <driftwm checkout at 352333a8>
+$ tools/port-new-files.py <same tree>
 (check mode: the 12 files ported here are byte-identical to what the script
-produces from upstream; exit 0)
+produces from upstream; exit 0. It reported `src/window_ext.rs` as different
+until its two line ranges and header text were updated for the three new
+lines of v0.21.0 that sit in front of the trait; the script, not the file, was
+edited, then run with --write to regenerate it.)
 
 $ tools/check-standins.py ~/.cargo/registry/src/index.crates.io-*/smithay-0.7.0
 36 items: 31 SAME, 5 DIFF
@@ -812,8 +882,9 @@ these runs.
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-tools/diff-upstream.sh /path/to/driftwm      # checkout at the pinned commit
-tools/port-new-files.py /path/to/driftwm     # check mode, writes nothing
+tools/diff-upstream.sh                       # against ../../third_party/driftwm
+tools/diff-upstream.sh /path/to/driftwm-tree # or any tree of the pinned commit
+tools/port-new-files.py /path/to/driftwm-tree # check mode, writes nothing
 cargo fmt -- --check && cargo clippy --all-targets -- -D warnings && cargo test
 tools/check-standins.py /path/to/smithay-0.7.0             # optional
 cargo run --manifest-path tools/keysym-oracle/Cargo.toml   # optional, needs xkbcommon-rs

@@ -104,6 +104,8 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureSpaceFrames { _desktopWide=YES;_info.caps|=DW2_CAP_SPACE; }
 - (void)fixturePinned { _info.caps|=DW2_CAP_PINNED|DW2_CAP_ALPHA; }
 - (void)fixtureVeiling { _veiling=YES; }
+// The root's family was last audited longer ago than the grace a failed read is given.
+- (void)fixtureAgeFamily:(NSNumber *)root { _windows[root]->familyAt=0; }
 - (NSUInteger)fixtureReleases { return _releases.count; }
 - (DWNativeSpaceReflow *)fixtureSpaceReflow:(NSNumber *)wid { return _spaceReflows[wid]; }
 - (void)fixtureBound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family {
@@ -233,7 +235,8 @@ int main(void) {@autoreleasepool {
 
     moved.origin.y+=10;describe(presenter,root,2,1,moved);[presenter submit];[presenter fixtureCorruptFrame];ack(presenter);
     check(!receipt(presenter,root,2,1),@"exact record identity and matrix correspondence is required");
-    [presenter bound:root bounds:native family:nil];describe(presenter,root,2,1,moved);[presenter submit];
+    // Unreadable for longer than the grace a failed read is given (below): the audited family is let go.
+    [presenter fixtureAgeFamily:@42];[presenter bound:root bounds:native family:nil];describe(presenter,root,2,1,moved);[presenter submit];
     [presenter fixtureAck:@[@0] sequence:presenter.fixtureSequence];check(!receipt(presenter,root,2,1),@"unavailable family is never an acknowledged complete family");
     [presenter bound:root bounds:native family:family(root,native,@[@43])];describe(presenter,root,2,1,moved);[presenter submit];ack(presenter);current=receipt(presenter,root,2,1);
     check(current!=nil,@"fresh complete family requires and accepts its new ACK");
@@ -315,6 +318,7 @@ int main(void) {@autoreleasepool {
     readinessSpace=10;describe(migrating,root,1,1,screen);[migrating submit];
     const struct dw2_space_record *spaceFrame=lastSpaceFrame.bytes;
     check(lastSpaceFrame.length==2*sizeof(*spaceFrame)&&spaceFrame[0].target_space==10&&spaceFrame[1].target_space==10,@"root and audited child share the exact output Space request");
+    const double placedMatrix[6]={spaceFrame[0].record.m[0],spaceFrame[0].record.m[1],spaceFrame[0].record.m[2],spaceFrame[0].record.m[3],spaceFrame[0].record.m[4],spaceFrame[0].record.m[5]};
     ack(migrating);DWNativeAppliedPlacement *oldSpace=receipt(migrating,root,1,1);uint64_t oldSpaceSeq=migrating.fixtureSequence;
     NSData *legacySpaceBytes=migrating.fixtureRecords;
     check(oldSpace&&[oldSpace.members[0][@"requested_space"]isEqual:@10],@"acknowledged membership is frozen alongside the transform correspondence");
@@ -335,9 +339,41 @@ int main(void) {@autoreleasepool {
     readinessSpace=20;[migrating forgetChildrenOf:@42 reason:@"family audit lost before display handoff"];
     describe(migrating,root,1,1,screen);[migrating submit];spaceFrame=lastSpaceFrame.bytes;
     check(lastSpaceFrame.length==2*sizeof(*spaceFrame)&&spaceFrame[0].target_space==0&&spaceFrame[1].target_space==0
-        &&spaceFrame[1].record.flags==DW2_RECORD_RESTORE,@"unknown family parks its root without changing Space while the prior child restores");
+        &&spaceFrame[1].record.flags==DW2_RECORD_RESTORE,@"unknown family requests no Space for its root while the prior child restores");
+    check(memcmp(spaceFrame[0].record.m,placedMatrix,sizeof placedMatrix)==0,@"unknown family still draws its root where the canvas puts it, not parked");
+    // The root is not parked: parked it vanished for as long as a read of a Chromium window's family failed on a transient child (4 to 100 ms,
+    // the browser's main window "flashing" in the guest; also a frame read mid-resize or a refused popup). Placed at 2x with the placement's origin, as before the report was lost.
+    check(spaceFrame[0].record.m[0]==2&&spaceFrame[0].record.m[3]==2&&spaceFrame[0].record.m[4]==-500&&spaceFrame[0].record.m[5]==-400,
+        @"unknown family leaves its placed root placed, not parked off every display");
     ack(migrating);check(!receipt(migrating,root,1,1),@"unknown family cannot acquire a Space placement receipt");
     [migrating finish];
+
+    // A family report that cannot be read is not a report of a changed family. The root's last audited family is kept, with its children placed
+    // and its receipt current, for a bounded time; past it the family is let go as it always was, the child restored and the root still placed.
+    DWNativePresenter *lossy=[DWNativePresenter fixturePID:@123];
+    [lossy bound:root bounds:native family:family(root,native,@[@43])];describe(lossy,root,1,1,screen);[lossy submit];ack(lossy);
+    DWNativeAppliedPlacement *audited=receipt(lossy,root,1,1);uint64_t auditedSeq=lossy.fixtureSequence;NSData *auditedBytes=lossy.fixtureRecords;
+    const struct dw2_record *auditedRecords=auditedBytes.bytes;
+    check(audited&&auditedBytes.length==2*sizeof(*auditedRecords)&&auditedRecords[0].m[0]==2&&auditedRecords[1].flags!=DW2_RECORD_RESTORE,@"an audited root and its child are placed and acknowledged");
+    [lossy bound:root bounds:native family:@{}];describe(lossy,root,1,1,screen);[lossy submit];
+    check([lossy isAcknowledgedPlacementCurrent:audited]&&lossy.fixtureSequence==auditedSeq&&[lossy.fixtureRecords isEqual:auditedBytes],
+        @"a requested family audit that failed once keeps the audited family, its receipt and its frame");
+    [lossy bound:root bounds:native family:@{}];[lossy bound:root bounds:native family:@{}];
+    check([lossy isAcknowledgedPlacementCurrent:audited],@"repeated failed reads inside the grace change nothing");
+    [lossy bound:root bounds:native family:family(root,native,@[@43])];describe(lossy,root,1,1,screen);[lossy submit];
+    check([lossy isAcknowledgedPlacementCurrent:audited]&&lossy.fixtureSequence==auditedSeq,@"a successful read renews the family without a new frame when nothing changed");
+    [lossy fixtureAgeFamily:@42];
+    [lossy bound:root bounds:native family:@{}];describe(lossy,root,1,1,screen);[lossy submit];
+    const struct dw2_record *lostRecords=lossy.fixtureRecords.bytes;
+    check(![lossy isAcknowledgedPlacementCurrent:audited]&&lossy.fixtureRecords.length==2*sizeof(*lostRecords)&&lostRecords[0].m[0]==2&&lostRecords[1].flags==DW2_RECORD_RESTORE,
+        @"a family that stays unreadable past the grace is let go: the child restored, the receipt revoked, the root still placed");
+    // A report that is readable but names another window, or is unsound, is not a failed read: it is let go at once.
+    DWNativePresenter *changed=[DWNativePresenter fixturePID:@123];
+    [changed bound:root bounds:native family:family(root,native,@[@43])];describe(changed,root,1,1,screen);[changed submit];ack(changed);
+    [changed bound:root bounds:native family:family(identity(123,99),native,@[@43])];describe(changed,root,1,1,screen);[changed submit];
+    const struct dw2_record *changedRecords=changed.fixtureRecords.bytes;
+    check(changed.fixtureRecords.length==2*sizeof(*changedRecords)&&changedRecords[1].flags==DW2_RECORD_RESTORE,@"a report for another window is a changed family, not a failed read");
+    [lossy finish];[changed finish];
 
     // Pin-only changes use the existing exact record/whole-family ACK path.
     // This checks policy and transport correspondence, not WindowServer stacking.
@@ -592,7 +628,7 @@ int main(void) {@autoreleasepool {
     check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt],@"new complete session ACKs settle the grouped supersession");
     [presenter unbound:root];check(![group isAcknowledgedPlacementCurrent:current],@"unbinding revokes a grouped receipt");
     [other fixtureExpire];check(!receipt(other,otherRoot,2,1)&&![group isAcknowledgedPlacementCurrent:otherReceipt],@"disconnect revokes receipt before main callback delivery");
-    [group finish];check(closed==10,@"all in-memory sessions drain and close");
+    [group finish];check(closed==12,@"all in-memory sessions drain and close");
     // What an answer to the veil request says about the helper: acceptance, and no or unreadable answer (the helper may have applied it),
     // leave it possibly veiling, so an unmanaged window is released explicitly; a refusal, a lost helper and a bad request do not.
     check(DWNativeVeilMayBeOn(DW_CLIENT_OK)&&DWNativeVeilMayBeOn(DW_CLIENT_TIMEOUT)&&DWNativeVeilMayBeOn(DW_CLIENT_INVALID)

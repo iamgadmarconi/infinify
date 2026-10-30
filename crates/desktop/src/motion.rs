@@ -388,6 +388,7 @@ impl Controller {
         if !point_valid(screen_delta) {
             return Err(Error::Invalid("invalid pan delta"));
         }
+        self.user_moved_camera();
         let mut viewport = self
             .scene
             .output(output)
@@ -643,6 +644,7 @@ impl Controller {
                 return Ok(());
             }
         }
+        self.user_moved_camera();
         self.scene.update_output(viewport)?;
         self.sync_output(output)?;
         match self.motion.edge_pans.get(&output) {
@@ -718,7 +720,19 @@ impl Controller {
             };
             self.refresh_cursor_edge_pan();
         }
-        Ok(json!({"needs_pointer":self.motion.cursor_pan,"needs_frames":self.needs_frames()}))
+        // Upstream's pull for sloppy focus: the view moved under a pointer at
+        // rest (POINTER.md).
+        let pulled = match output {
+            Some(output) => self.pull_hover(output, screen)?,
+            None => Value::Null,
+        };
+        let mut reply =
+            json!({"needs_pointer":self.motion.cursor_pan,"needs_frames":self.needs_frames()});
+        if pulled["dirty"] == true {
+            reply["dirty"] = json!(true);
+            reply["effect"] = pulled["effect"].clone();
+        }
+        Ok(reply)
     }
     /// Upstream ToggleCursorPan: flip the runtime flag, and stop every edge
     /// pan in progress when it goes off. The pointer is asked for afresh.
@@ -741,6 +755,7 @@ impl Controller {
         if !point_valid(anchor) || !delta.is_finite() {
             return Err(Error::Invalid("invalid zoom anchor or delta"));
         }
+        self.user_moved_camera();
         let navigation = match source {
             ZoomSource::Wheel => self.wheel_zoom(output, anchor, delta)?,
             ZoomSource::Pinch => {

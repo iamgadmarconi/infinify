@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/input/actions.rs (execute_action's prelude, which ends an Alt-Tab cycle
-// and stops scroll momentum, and its dispatch, exec_command, NudgeWindow,
-// detect_terminal, detect_launcher). The grammar itself is not adapted: it is
+// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
+// read at third_party/driftwm: src/input/actions.rs (execute_action's prelude,
+// which ends an Alt-Tab cycle and stops scroll momentum, and its dispatch,
+// exec_command, NudgeWindow, MoveToSnap, FocusNearest, detect_terminal,
+// detect_launcher). The grammar itself is not adapted: it is
 // driftwm-core's `config::{Action, parse_action}`, upstream's own code. The
 // camera, bookmark, window navigation, nudge, exec, reload, quit, close,
 // suspend, output transfer, layout, toggle-cursor-pan and set-trackpad actions
-// execute here, move-to-bookmark and toggle-pin-to-screen in rules.rs and
-// zoom-to-fit-snapped in sizes.rs; grow-window, shrink-window, fit-window,
-// fit-window-snapped and fill-window execute when the shell can deliver a size
-// (sizes.rs), and so does toggle-fullscreen (fullscreen.rs, which also holds
+// execute here, move-to-snap in keyboard_snap.rs, move-to-bookmark and
+// toggle-pin-to-screen in rules.rs and zoom-to-fit-snapped in sizes.rs;
+// grow-window, shrink-window, resize-to-snap, fit-window, fit-window-snapped
+// and fill-window execute when the shell can deliver a size (sizes.rs), and so does toggle-fullscreen (fullscreen.rs, which also holds
 // the guard that ends a fullscreen before most actions); every other action
 // parses and is then refused by name.
 use super::keyboard_layout::switch_effect;
@@ -60,11 +61,14 @@ fn action_name(action: &Action) -> &'static str {
         Action::CloseWindow => "close-window",
         Action::SuspendWindow => "suspend-window",
         Action::NudgeWindow(_) => "nudge-window",
+        Action::MoveToSnap(_) => "move-to-snap",
         Action::GrowWindow(_) => "grow-window",
         Action::ShrinkWindow(_) => "shrink-window",
+        Action::ResizeToSnap(_) => "resize-to-snap",
         Action::PanViewport(_) => "pan-viewport",
         Action::CenterWindow => "center-window",
         Action::CenterNearest(_) => "center-nearest",
+        Action::FocusNearest(_) => "focus-nearest",
         Action::CycleWindows { .. } => "cycle-windows",
         Action::HomeToggle => "home-toggle",
         Action::GoToBookmark(_) => "go-to-bookmark",
@@ -113,10 +117,13 @@ pub(crate) fn action_string(action: &Action) -> String {
         | Action::SetBookmark(text)
         | Action::MoveToBookmark(text) => text.clone(),
         Action::NudgeWindow(direction)
+        | Action::MoveToSnap(direction)
         | Action::GrowWindow(direction)
         | Action::ShrinkWindow(direction)
+        | Action::ResizeToSnap(direction)
         | Action::PanViewport(direction)
         | Action::CenterNearest(direction)
+        | Action::FocusNearest(direction)
         | Action::SendToOutput(direction)
         | Action::SendCursorToOutput(direction) => direction_name(direction).to_owned(),
         Action::CycleWindows { backward: false } => "forward".to_owned(),
@@ -145,9 +152,11 @@ fn runs_here(action: &Action) -> bool {
             | Action::CloseWindow
             | Action::SuspendWindow
             | Action::NudgeWindow(_)
+            | Action::MoveToSnap(_)
             | Action::PanViewport(_)
             | Action::CenterWindow
             | Action::CenterNearest(_)
+            | Action::FocusNearest(_)
             | Action::CycleWindows { .. }
             | Action::FocusCenter
             | Action::HomeToggle
@@ -168,10 +177,18 @@ fn runs_here(action: &Action) -> bool {
     )
 }
 /// Upstream detect_terminal / detect_launcher, less their probe of installed
-/// Linux programs: the user's environment variable, else the macOS default.
-fn from_environment(variable: &str, fallback: &str) -> String {
-    std::env::var(variable)
-        .ok()
+/// Linux programs: the variable as children see it (v0.21.0's `child_var`,
+/// third_party/driftwm/src/input/actions.rs: the config-built `child_env`
+/// first, which holds the user's `[env]`, then the process environment), else
+/// the macOS default.
+fn from_environment(
+    env: &std::collections::HashMap<String, String>,
+    variable: &str,
+    fallback: &str,
+) -> String {
+    env.get(variable)
+        .cloned()
+        .or_else(|| std::env::var(variable).ok())
         .filter(|command| !command.is_empty())
         .unwrap_or_else(|| fallback.to_owned())
 }
@@ -237,11 +254,17 @@ impl Controller {
         json!({"op":"exec","command":command,"env":env})
     }
     /// Upstream NudgeWindow: the focused window moves by `navigation.nudge_step`
-    /// world points, each axis rounded. A logical world move, applied at once:
+    /// screen px (v0.21: like `pan_step`, so a step covers the same distance on
+    /// screen at any zoom; `canvas_step` turns it into world points), each axis
+    /// rounded. A logical world move, applied at once:
     /// upstream animates the frame from its old place. Its fill restore point
     /// ends in `place_window`, as upstream clears it. No focused window is no
     /// error upstream.
-    fn nudge_window(&mut self, direction: &Direction) -> Result<bool, Error> {
+    fn nudge_window(
+        &mut self,
+        output: Option<OutputId>,
+        direction: &Direction,
+    ) -> Result<bool, Error> {
         // Upstream nudges a canvas window only: not a widget, not a pinned one.
         let Some(window) = self.scene.focused().filter(|id| self.on_canvas(*id)) else {
             return Ok(false);
@@ -251,7 +274,7 @@ impl Controller {
             .window(window)
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
-        let step = f64::from(self.config().nudge_step);
+        let step = f64::from(self.canvas_step(window, output, self.config().nudge_step));
         let (ux, uy) = direction.to_unit_vec();
         let moved = Rect {
             origin: rect.origin + Point::new((ux * step).round(), (uy * step).round()),
@@ -341,12 +364,14 @@ impl Controller {
                 return Ok(outcome);
             }
             Action::ExecTerminal => {
-                let command = from_environment("TERMINAL", DEFAULT_TERMINAL);
+                let command =
+                    from_environment(&self.config().child_env, "TERMINAL", DEFAULT_TERMINAL);
                 outcome.effects.push(self.exec_effect(&command));
                 return Ok(outcome);
             }
             Action::ExecLauncher => {
-                let command = from_environment("LAUNCHER", DEFAULT_LAUNCHER);
+                let command =
+                    from_environment(&self.config().child_env, "LAUNCHER", DEFAULT_LAUNCHER);
                 outcome.effects.push(self.exec_effect(&command));
                 return Ok(outcome);
             }
@@ -365,7 +390,11 @@ impl Controller {
                 return Ok(outcome);
             }
             Action::NudgeWindow(direction) => {
-                outcome.dirty = self.nudge_window(direction)?;
+                outcome.dirty = self.nudge_window(output, direction)?;
+                return Ok(outcome);
+            }
+            Action::MoveToSnap(direction) => {
+                self.move_to_snap(output, direction, &mut outcome)?;
                 return Ok(outcome);
             }
             Action::MoveToBookmark(name) => {
@@ -381,7 +410,18 @@ impl Controller {
                 return Ok(outcome.moved(self.focus_center(active()?, pointer)?));
             }
             Action::CenterNearest(direction) => {
-                return Ok(outcome.moved(self.center_nearest(active()?, direction)?));
+                return Ok(outcome.moved(self.center_nearest(
+                    active()?,
+                    direction,
+                    was_fullscreen,
+                )?));
+            }
+            Action::FocusNearest(direction) => {
+                return Ok(outcome.moved(self.focus_nearest(
+                    active()?,
+                    direction,
+                    was_fullscreen,
+                )?));
             }
             Action::CycleWindows { backward } => {
                 let moved = self.cycle_navigate(active()?, *backward, held)?;

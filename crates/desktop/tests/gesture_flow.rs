@@ -170,6 +170,9 @@ fn attach(h: &mut Host, wid: u64, world: Value) {
 /// Desktop defaults are in force: no config file is read.
 fn setup() -> Host {
     let mut h = Host::new();
+    // These scenarios press the Command key as `mod`; the default super became
+    // Control-Option, so name the Command super they were written for.
+    h.ok(json!({"op":"set_platform","super":"cmd"}));
     h.ok(json!({"op":"register_output","stable_id":"view","screen_bounds":rect(LEFT,TOP,1000.0,800.0)}));
     attach(&mut h, 1, rect(100.0, 100.0, 400.0, 300.0));
     attach(&mut h, 2, rect(2600.0, 1900.0, 300.0, 200.0));
@@ -193,9 +196,12 @@ const MOVE_GESTURE: &str = r#"
 [gestures.on-window]
 "3-finger-doubletap-swipe" = "move-window"
 "#;
+// The 4-finger swipe is focus-nearest by default since v0.20; this scenario is
+// about center-nearest, which the file binds.
 const DIRECTIONAL_SWIPE: &str = r#"
 [gestures.anywhere]
 "4-finger-swipe-up" = "none"
+"4-finger-swipe" = "center-nearest"
 "#;
 
 /// The bindings a `gesture_begin` reply resolved, as `combo = action` lines.
@@ -752,8 +758,20 @@ fn four_finger_pinch_in_and_out_fire_zoom_to_fit_and_home_toggle_once_each() {
     assert_ran(&reply, "zoom-to-fit-snapped");
     assert_eq!(reply["navigation"], Value::Null);
     h.end(false, 1030);
-    // Option over a window: upstream's fit-window and toggle-fullscreen. The
-    // first delivers a size, which this shell has not said it can do.
+    // Option over a window: v0.20 unbound upstream's alt+2-finger pinch fit
+    // and alt+3-finger pinch fullscreen, so by default there is nothing.
+    for fingers in [2, 3] {
+        let reply = h.begin("pinch", fingers, "⌥", "window", ON_WINDOW);
+        assert_eq!(reply["gesture"]["state"], "unbound", "{reply}");
+        h.end(false, 1030);
+    }
+    // Bound in a file they are upstream's fit-window and toggle-fullscreen.
+    // The first delivers a size, which this shell has not said it can do.
+    let scratch = Scratch::new();
+    let mut h = configured(
+        &scratch,
+        "[gestures.on-window]\n\"alt+2-finger-pinch-in\" = \"fit-window\"\n\"alt+2-finger-pinch-out\" = \"fit-window\"\n\"alt+3-finger-pinch-in\" = \"toggle-fullscreen\"\n\"alt+3-finger-pinch-out\" = \"toggle-fullscreen\"\n",
+    );
     for (fingers, action) in [(2, "fit-window"), (3, "toggle-fullscreen")] {
         let reply = h.begin("pinch", fingers, "⌥", "window", ON_WINDOW);
         assert_eq!(reply["gesture"]["state"], "pinch_threshold", "{reply}");
@@ -770,16 +788,18 @@ fn hold_fires_on_release_and_not_when_cancelled() {
     for (fingers, held, combo) in [(4, "", "4-finger-hold"), (3, "⌘", "mod+3-finger-hold")] {
         let reply = h.begin("hold", fingers, held, "canvas", ON_CANVAS);
         assert_eq!(reply["gesture"]["state"], "hold", "{reply}");
-        assert_eq!(bindings(&reply), [format!("{combo} = center-window")]);
+        assert_eq!(bindings(&reply), [format!("{combo} = focus-center")]);
         assert_eq!(reply["gesture"]["bindings"][0]["implemented"], true);
         assert_eq!(reply["fired"], Value::Null);
         // Nothing happens while the fingers rest.
         assert_eq!(h.swipe(0.0, 0.0, 1500)["fired"], Value::Null);
-        // center-window: the focused window, and with none the window nearest
-        // the middle of the view, which is window 1 both times; its center
-        // comes to the middle of the output at zoom 1, and it is focused.
+        // focus-center (v0.20: both holds) with the pointer over empty canvas
+        // is center-window: the focused window, and with none the window
+        // nearest the middle of the view, which is window 1 both times; its
+        // center comes to the middle of the output at zoom 1, and it is
+        // focused.
         let reply = h.end(false, 2000);
-        assert_ran(&reply, "center-window");
+        assert_ran(&reply, "focus-center");
         assert_eq!(
             reply["navigation"]["target_camera"],
             point([-200.0, -150.0])
@@ -1031,15 +1051,16 @@ fn doubletap_swipe_without_a_window_to_grab_is_a_plain_swipe() {
 #[test]
 fn modifiers_select_the_mod_and_alt_variants() {
     let mut h = setup();
-    // Command selects mod+3-finger-swipe directional navigation.
+    // Command selects mod+3-finger-swipe directional navigation (focus-nearest
+    // since v0.20).
     let reply = h.begin("swipe", 3, "⌘", "window", ON_WINDOW);
     assert_eq!(reply["gesture"]["state"], "swipe_threshold", "{reply}");
-    assert_eq!(bindings(&reply), ["mod+3-finger-swipe = center-nearest"]);
+    assert_eq!(bindings(&reply), ["mod+3-finger-swipe = focus-nearest"]);
     assert_eq!(reply["gesture"]["bindings"][0]["implemented"], true);
     // Nothing lies straight below the middle of the view: the action runs and
     // finds no window.
     let reply = h.swipe(0.0, -20.0, 1010);
-    assert_ran(&reply, "center-nearest down");
+    assert_ran(&reply, "focus-nearest down");
     assert_eq!(reply["navigation"], Value::Null, "{reply}");
     h.end(false, 1020);
     assert_eq!(h.camera(), [0.0, 0.0]);
@@ -1047,8 +1068,8 @@ fn modifiers_select_the_mod_and_alt_variants() {
     // alt+3-finger-swipe over a window is upstream's resize: its own
     // scenarios are at the end of this file. Both bindings resolve and run.
     for (held, combo, action) in [
-        ("⌥", "alt+3-finger-swipe", "resize-window"),
-        ("⌥⇧", "alt+shift+3-finger-swipe", "resize-window-snapped"),
+        ("⌥", "alt+3-finger-swipe", "resize-window-snapped"),
+        ("⌥⇧", "alt+shift+3-finger-swipe", "resize-window"),
     ] {
         let reply = h.begin("swipe", 3, held, "window", ON_WINDOW);
         assert_eq!(bindings(&reply), [format!("{combo} = {action}")]);
@@ -1072,7 +1093,7 @@ fn modifiers_select_the_mod_and_alt_variants() {
     // Another super chord moves `mod` with it.
     h.ok(json!({"op":"set_platform","super":"ctrl+alt"}));
     let reply = h.begin("swipe", 3, "⌃⌥", "canvas", ON_CANVAS);
-    assert_eq!(bindings(&reply), ["mod+3-finger-swipe = center-nearest"]);
+    assert_eq!(bindings(&reply), ["mod+3-finger-swipe = focus-nearest"]);
     h.end(false, 1020);
     let reply = h.begin("swipe", 3, "⌘", "canvas", ON_CANVAS);
     assert_eq!(reply["gesture"]["state"], "unbound", "{reply}");
@@ -1618,18 +1639,36 @@ fn a_gesture_runs_window_navigation_with_its_pointer_and_the_modifiers_it_fires_
 
     // focus-center reads the pointer the gesture began under, exactly as the
     // action command reads its `pointer`: over window 1 that window is flown
-    // to at zoom 1 and focused, over empty canvas nothing is found.
+    // to at zoom 1 and focused. Over empty canvas it is center-window since
+    // v0.20 (release notes, "Navigation"): nothing is focused, so the window
+    // nearest the middle of the view is the one, which is window 1.
     let reply = h.begin("hold", 4, "", "canvas", ON_CANVAS);
     assert_eq!(bindings(&reply), ["4-finger-hold = focus-center"]);
     assert_eq!(reply["gesture"]["bindings"][0]["implemented"], true);
     let reply = h.end(false, 2000);
     assert_ran(&reply, "focus-center");
-    assert_eq!(reply["navigation"], Value::Null, "{reply}");
-    assert_eq!(reply["effects"], json!([]));
-    assert_eq!(h.snapshot()["focus"]["intent"], Value::Null);
+    assert_eq!(
+        reply["navigation"]["target_camera"],
+        point([-200.0, -150.0]),
+        "{reply}"
+    );
+    assert_eq!(reply["navigation"]["target_zoom"], 1.0);
+    focus_effect(&reply, 1);
+    assert_eq!(h.snapshot()["focus"]["intent"], 1);
+    // A second host keeps the rest of the scenario as it was.
+    let mut h = configured(
+        &scratch,
+        r#"
+[gestures.anywhere]
+"4-finger-hold" = "focus-center"
+"4-finger-swipe-left" = "cycle-windows forward"
+"4-finger-swipe-right" = "cycle-windows backward"
+"4-finger-pinch-in" = "zoom-in"
+"#,
+    );
     // The action a gesture fires stops the output's coast before it runs, as
-    // every action does, also when it then finds nothing to do. A hold's
-    // begin stops nothing, so the stop is the action's.
+    // every action does. A hold's begin stops nothing, so the stop is the
+    // action's.
     h.begin("swipe", 3, "", "canvas", ON_CANVAS);
     for step in 1..=6 {
         h.swipe(-20.0, 0.0, 3000 + step * 8);
@@ -1642,8 +1681,6 @@ fn a_gesture_runs_window_navigation_with_its_pointer_and_the_modifiers_it_fires_
     assert_eq!(h.trackpad()["coasting"], json!([1]));
     let reply = h.end(false, 4000);
     assert_ran(&reply, "focus-center");
-    assert_eq!(reply["navigation"], Value::Null, "{reply}");
-    assert_eq!(reply["needs_frames"], false);
     assert_eq!(h.trackpad()["coasting"], json!([]));
     h.ok(json!({"op":"pan","output":1,"screen_delta":point([-180.0, 0.0])}));
     assert_eq!(h.camera(), [0.0, 0.0]);
@@ -1686,7 +1723,9 @@ fn a_gesture_runs_window_navigation_with_its_pointer_and_the_modifiers_it_fires_
     };
     let reply = swipe(&mut h, -20.0, Value::Null);
     assert_ran(&reply, "cycle-windows forward");
-    assert_eq!(reply["navigation"]["animating"], true, "{reply}");
+    // v0.20: Alt-Tab no longer pans to a window the view already shows whole,
+    // and window 1 is whole on this view: the step is focus only.
+    assert_eq!(reply["navigation"], Value::Null, "{reply}");
     let step = focus_effect(&reply, 1);
     assert_eq!(focus(&mut h)["release_pending"], true);
     confirm(&mut h, &step);
@@ -1760,7 +1799,10 @@ fn a_gesture_runs_window_navigation_with_its_pointer_and_the_modifiers_it_fires_
 /// Command as the default super chord. Reports are controller evidence alone.
 #[test]
 fn the_default_table_on_a_mac() {
-    // kind, fingers, physical modifiers, context, after a three-finger tap.
+    // v0.20 defaults: focus-nearest on the 4-finger and mod+3-finger swipes,
+    // the snapped resize on alt+3-finger swipe (Shift is the single window),
+    // focus-center on both holds. kind, fingers, physical modifiers, context,
+    // after a three-finger tap.
     let rows = [
         ("swipe", 3, "", "canvas", false),
         ("swipe", 4, "", "canvas", false),
@@ -1816,12 +1858,12 @@ fn the_default_table_on_a_mac() {
         seen,
         [
             "3-finger-swipe = pan-viewport: runs",
-            "4-finger-swipe = center-nearest: runs",
+            "4-finger-swipe = focus-nearest: runs",
             "4-finger-swipe-up = zoom-to-fit: runs",
-            "mod+3-finger-swipe = center-nearest: runs",
+            "mod+3-finger-swipe = focus-nearest: runs",
             "3-finger-swipe = pan-viewport: runs",
-            "alt+3-finger-swipe = resize-window: runs",
-            "alt+shift+3-finger-swipe = resize-window-snapped: runs",
+            "alt+3-finger-swipe = resize-window-snapped: runs",
+            "alt+shift+3-finger-swipe = resize-window: runs",
             "2-finger-pinch = zoom: runs",
             "2-finger-pinch = zoom: runs",
             "mod+2-finger-pinch = zoom: runs",
@@ -1831,14 +1873,11 @@ fn the_default_table_on_a_mac() {
             "mod+3-finger-pinch-in = zoom-to-fit: runs",
             "mod+3-finger-pinch-out = home-toggle: runs",
             "mod+4-finger-pinch-in = zoom-to-fit-snapped: runs",
-            "alt+2-finger-pinch-in = fit-window: refused",
-            "alt+2-finger-pinch-out = fit-window: refused",
-            "alt+shift+2-finger-pinch-in = fit-window-snapped: refused",
-            "alt+shift+2-finger-pinch-out = fit-window-snapped: refused",
-            "alt+3-finger-pinch-in = toggle-fullscreen: refused",
-            "alt+3-finger-pinch-out = toggle-fullscreen: refused",
-            "4-finger-hold = center-window: runs",
-            "mod+3-finger-hold = center-window: runs",
+            // v0.20 unbound the alt and alt+shift 2-finger pinch fits and the
+            // alt 3-finger pinch fullscreen: the three alt pinch rows above
+            // resolve to nothing.
+            "4-finger-hold = focus-center: runs",
+            "mod+3-finger-hold = focus-center: runs",
         ]
     );
     // The adapter adds bare on-window pinch and four-finger swipe-up.
@@ -2025,14 +2064,15 @@ fn a_cancelled_resize_swipe_still_completes_and_the_pointer_is_held_inside_the_o
     assert_eq!(world(&mut h, 1), rect(-100.0, 100.0, 600.0, 300.0));
 }
 
-// resize-window-snapped: a window a snap gap to the left of window 1 follows
+// resize-window-snapped (v0.20: the alt+3-finger swipe, Shift gives the
+// single-window form): a window a snap gap to the left of window 1 follows
 // its left edge by what the window took, not by what was asked, and its own
 // size is never asked for.
 #[test]
 fn a_snapped_resize_swipe_shifts_the_cluster_by_the_size_the_window_took() {
     let mut h = readback();
     attach(&mut h, 3, rect(-212.0, 100.0, 300.0, 300.0));
-    let reply = h.begin("swipe", 3, "⌥⇧", "window", ON_WINDOW);
+    let reply = h.begin("swipe", 3, "⌥", "window", ON_WINDOW);
     assert_eq!(reply["gesture"]["state"], "swipe_resize", "{reply}");
     assert_eq!(h.snapshot()["native_resize"]["group"], true);
     let read = reply["effect"].clone();
@@ -2048,8 +2088,8 @@ fn a_snapped_resize_swipe_shifts_the_cluster_by_the_size_the_window_took() {
     let last = h.end(false, 1020)["effect"].clone();
     sized(&mut h, &last, "observed", [440.0, 300.0]);
     assert_eq!(world(&mut h, 3), rect(-252.0, 100.0, 300.0, 300.0));
-    // The plain binding leaves the neighbour where it is.
-    let reply = h.begin("swipe", 3, "⌥", "window", [LEFT + 70.0, TOP + 200.0]);
+    // The single-window binding (v0.20: Shift) leaves the neighbour where it is.
+    let reply = h.begin("swipe", 3, "⌥⇧", "window", [LEFT + 70.0, TOP + 200.0]);
     assert_eq!(h.snapshot()["native_resize"]["group"], false, "{reply}");
     let read = reply["effect"].clone();
     sized(&mut h, &read, "observed", [440.0, 300.0]);

@@ -1206,11 +1206,14 @@ fn screenshot_refusals_are_upstreams_and_ask_nothing_of_the_shell() {
         );
     }
     far.ok(json!({"op":"pan","output":1,"screen_delta":point(3.0e9,0.0)}));
-    for target in [viewport.clone(), region(10, 10, true)] {
-        assert_eq!(
-            far.shot_refused(json!(1), target, 1.0, SHOT),
-            "view geometry exceeds integer range"
-        );
+    // A screen region that lands past the canvas range is refused by v0.21's
+    // own check (src/ipc/mod.rs `within_window_range`) before the geometry is
+    // read.
+    for (target, message) in [
+        (viewport.clone(), "view geometry exceeds integer range"),
+        (region(10, 10, true), "region lies past the canvas range"),
+    ] {
+        assert_eq!(far.shot_refused(json!(1), target, 1.0, SHOT), message);
     }
 
     // What is not upstream's request at all is refused as one.

@@ -52,7 +52,7 @@ static CFArrayRef testWindows(CGWindowListOption option,CGWindowID wid){
 }
 static CGError testTransformGet(int cid,uint32_t wid,CGAffineTransform *value){assert(cid==1);transformGets++;*value=transforms[indexOf(wid)];return 0;}
 static CGError testTransformSet(int cid,uint32_t wid,CGAffineTransform value){assert(cid==1);transformSets++;[events addObject:[NSString stringWithFormat:@"T%u",wid]];if(!ignoreTransform)transforms[indexOf(wid)]=value;return 0;}
-static CGError testBounds(int cid,uint32_t wid,CGRect *value){assert(cid==1);indexOf(wid);*value=CGRectMake(0,0,300,200);return 0;}
+static CGError testBounds(int cid,uint32_t wid,CGRect *value){assert(cid==1);indexOf(wid);*value=CGRectMake(25,35,300,200);return 0;}
 static CGError testAlphaGet(int cid,uint32_t wid,float *value){
     assert(cid==1);alphaGets++;*value=alphas[indexOf(wid)];if(replaceOnAlphaRead){replaceOnAlphaRead=NO;owners[indexOf(wid)]++;}return failAlphaRead?1000:0;
 }

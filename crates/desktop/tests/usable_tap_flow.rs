@@ -673,9 +673,10 @@ fn capable(toml: &str) -> Host {
 // area without that gap so the menu/notch exclusion remains visible.
 #[test]
 fn fit_fill_and_fullscreen_respect_the_usable_area() {
-    // Fit: the size is (1120 - 24, 770 - 24). The window keeps its center
-    // (300, 250), the camera goes to that less the usable center, and the
-    // frame's top-left to the camera plus (80 + 12, 30 + 12).
+    // Fit (v0.20: edge to edge, `snap.outer_gap` is fill's margin and fit
+    // ignores it): the size is the usable area, 1120 x 770. The window keeps
+    // its center (300, 250), the camera goes to that less the usable center,
+    // and the frame's top-left to the camera plus (80, 30).
     let mut h = capable(GAP);
     put(&mut h, 1, "app.1", (100.0, 100.0, 400.0, 300.0));
     put(&mut h, 2, "app.2", (100.0, 100.0, 400.0, 300.0));
@@ -686,13 +687,13 @@ fn fit_fill_and_fullscreen_respect_the_usable_area() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (1096.0, 746.0),
+        (1120.0, 770.0),
         "applied",
-        (1096.0, 746.0),
+        (1120.0, 770.0),
     );
-    assert_eq!(h.world(1), rect(-248.0, -123.0, 1096.0, 746.0));
+    assert_eq!(h.world(1), rect(-260.0, -135.0, 1120.0, 770.0));
     assert_eq!(h.window(1)["mode"], "fit");
-    // On output 2 the same window shape fits all 1000 x 700 less the gap.
+    // On output 2 the same window shape fits all 1000 x 700.
     h.ok(json!({"op":"focus","window":2}));
     let reply = h.action(2, "fit-window");
     assert_eq!(armed(&reply, 2), view((-200.0, -100.0), 1.0));
@@ -700,11 +701,11 @@ fn fit_fill_and_fullscreen_respect_the_usable_area() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (976.0, 676.0),
+        (1000.0, 700.0),
         "applied",
-        (976.0, 676.0),
+        (1000.0, 700.0),
     );
-    assert_eq!(h.world(2), rect(-188.0, -88.0, 976.0, 676.0));
+    assert_eq!(h.world(2), rect(-200.0, -100.0, 1000.0, 700.0));
 
     // Fill: alone on output 1 at the origin, the frame grows to the usable
     // area on the canvas, x 80..1200 and y 30..800, less the gap.
@@ -745,9 +746,10 @@ fn fit_fill_and_fullscreen_respect_the_usable_area() {
     assert_eq!(armed(&plain, 1), view((0.0, 35.0), 1.0));
     assert_eq!(h.window(1)["mode"], "fill");
 
-    // Fullscreen asks for the usable1120x770 without the fit/fill gap. A
-    // window refusing that size is centered inside the same exclusion zone:
-    // (80 + 360, 30 + 235) relative to the output origin.
+    // Fullscreen asks for the usable 1120 x 770 without the fill gap. A
+    // window refusing that size sits at the usable top-left, (80, 30)
+    // relative to the output origin (tests/fullscreen_flow.rs,
+    // `a_window_that_takes_another_size_stays_at_the_usable_top_left`).
     let mut h = capable(GAP);
     put(&mut h, 1, "app.1", (100.0, 100.0, 400.0, 300.0));
     h.ok(json!({"op":"focus","window":1}));
@@ -771,7 +773,7 @@ fn fit_fill_and_fullscreen_respect_the_usable_area() {
     assert_eq!(shown[0]["fullscreen"], true);
     assert_eq!(
         shown[0]["screen_rect"],
-        rect(OUT1[0] + 440.0, OUT1[1] + 265.0, 400.0, 300.0)
+        rect(OUT1[0] + 80.0, OUT1[1] + 30.0, 400.0, 300.0)
     );
 }
 
@@ -1083,7 +1085,9 @@ fn mid_cycle(toml: &str) -> Host {
     assert!(coasting(&mut h));
     // History 3, 2, 1: the step selects window 2, and the adapter focuses it.
     let step = h.ok(json!({"op":"action","output":1,"action":"cycle-windows forward","held":true}));
-    assert_eq!(step["navigation"]["animating"], true, "{step}");
+    // v0.20: Alt-Tab does not pan to a window the view already shows whole,
+    // and window 2 is whole on this view after the flick: focus only.
+    assert_eq!(step["navigation"], Value::Null, "{step}");
     assert_eq!(step["effects"][0]["window"], 2, "{step}");
     h.confirm(&step["effects"][0]);
     assert_eq!(h.focus_state()["cycle"], 1);
@@ -1137,8 +1141,9 @@ fn a_tap_runs_its_action_once_through_the_action_prelude() {
     assert_eq!(h.ok(tap_command(OPTION_SHIFT, Value::Null)), switched());
 
     // `pointer` and `held` are as `action` takes them. A tap bound to
-    // focus-center centers the window under the pointer, and without one does
-    // nothing; a held cycle-windows step stays open.
+    // focus-center centers the window under the pointer, and without one is
+    // center-window since v0.20 (the focused window, here 2); a held
+    // cycle-windows step stays open.
     let toml =
         "[keybindings]\n\"ctrl\" = \"focus-center\"\n\"shift\" = \"cycle-windows forward\"\n";
     let mut h = running(toml);
@@ -1146,10 +1151,13 @@ fn a_tap_runs_its_action_once_through_the_action_prelude() {
         put(&mut h, wid, &format!("app.{wid}"), (x, 100.0, 300.0, 200.0));
         h.observe_focus(wid);
     }
+    let reply = tap(&mut h, CONTROL);
     assert_eq!(
-        tap(&mut h, CONTROL),
-        json!({"navigation":null,"effects":[],"dirty":false})
+        armed(&reply, 1),
+        view((650.0 - CENTER1.0, 200.0 - CENTER1.1), 1.0),
+        "{reply}"
     );
+    assert_eq!(reply["effects"][0]["window"], 2, "{reply}");
     let over = point(OUT1[0] + 100.0, OUT1[1] + 200.0);
     let mut command = tap_command(CONTROL, json!(1));
     command["pointer"] = over;
@@ -1164,7 +1172,8 @@ fn a_tap_runs_its_action_once_through_the_action_prelude() {
     // Every modifier is up when a tap fires unless the shell says otherwise:
     // the step is committed as a release would commit it.
     let reply = tap(&mut h, SHIFT);
-    assert_eq!(reply["navigation"]["animating"], true, "{reply}");
+    // Both windows are whole on the view, so v0.20's Alt-Tab step is focus only.
+    assert_eq!(reply["navigation"], Value::Null, "{reply}");
     assert_eq!(h.focus_state()["release_pending"], true);
     let mut command = tap_command(SHIFT, json!(1));
     command["held"] = json!(true);

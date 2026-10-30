@@ -9,3 +9,8 @@ description = "Platform-independent persistent window canvas for DriftWM"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+
+[dev-dependencies]
+# Upstream's own snap.rs unit tests (tests/upstream/snap.rs) are property tests;
+# the oracle compiles the file unedited, so they need the same crate.
+proptest = "1"

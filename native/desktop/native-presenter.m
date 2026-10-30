@@ -284,8 +284,13 @@ static BOOL DWNativeGuardedParkingMatches(NSDictionary *guard,const DWNativePlac
 static uint64_t uptime(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW)/1000000; }
 // How long the main thread may stay away from its run loop before the session is closed for it.
 static const uint64_t DWStall=10000;
+// How long the last audited family of a root is kept when the window server's answer cannot be read again. Chromium's hover cards, tooltips and
+// completion lists are windows that come without a parent or without a size for a few frames; every read that met one failed the whole report
+// for 4 to 100 ms in the guest. A family the shell has just audited is still the best account of the windows it placed, and a root is not
+// parked on account of a read that failed once. Past this the family is let go (children restored) as it always was.
+static const uint64_t DWNativeFamilyGraceMS=500;
 // One bound window: who it is for the helper, its own frame, and whether an alpha was ever sent for it.
-@interface DWNativeWindow : NSObject { @public struct dw2_identity identity;CGRect bounds;BOOL alpha,familyKnown,declined;NSNumber *logical;uint64_t releaseSeq;uint32_t root,parent; } @end
+@interface DWNativeWindow : NSObject { @public struct dw2_identity identity;CGRect bounds;BOOL alpha,familyKnown,declined;NSNumber *logical;uint64_t releaseSeq,familyAt;uint32_t root,parent; } @end
 @interface DWNativeSpaceReflow : NSObject { @public
     struct dw2_identity identity;
     CGRect original,before,observed;
@@ -463,7 +468,8 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     presenter->_scope=subset?admitted.copy:[scope copy];
     // Only after the empty restoration table was confirmed: a window veiled earlier would have been a leftover. A helper that cannot, or
     // will not, simply leaves new windows to appear as they always did; the session is not refused for it.
-    if(desktop&&(presenter->_info.caps&DW2_CAP_VEIL)){
+    // INFINIFY_NO_VEIL=1 (diagnostic only) does not ask for the veil, to compare a run with and without it.
+    if(desktop&&(presenter->_info.caps&DW2_CAP_VEIL)&&!getenv("INFINIFY_NO_VEIL")){
         uint32_t held=0;int veiled=dw_client_veil(presenter->_client,2000,true,&held);
         presenter->_veiling=DWNativeVeilMayBeOn(veiled);
         if(veiled!=DW_CLIENT_OK&&!presenter.ended)fprintf(stderr,"Infinify: the helper did not confirm the arrival veil (%d)%s\n",veiled,presenter->_veiling?"; it may be on, so windows this shell will not manage are released explicitly":"; new windows show at their native place until placed");
@@ -791,6 +797,12 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         return;
     }
     NSString *why=nil;if(!family)family=DWNativeWindowFamily(identity,&why);
+    // A report that could not be read (nil, or the empty marker of a requested audit that failed) is not a report of a changed family: a root whose
+    // family was audited a moment ago keeps it, with its children placed, until the next read; one that stays unreadable is let go as before.
+    if((!family||![family isKindOfClass:NSDictionary.class]||!family.count)&&window->familyKnown&&uptime()-window->familyAt<DWNativeFamilyGraceMS){
+        if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native family kept root=%u reason=%s\n",wid.unsignedIntValue,why.UTF8String?:"unreadable");
+        return;
+    }
     if(!family||![family[@"identity"]isEqual:identity]||![family[@"root"]isEqual:wid]){
         [self forgetChildrenOf:wid reason:why?:@"identity changed"];return;
     }
@@ -841,7 +853,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
         if(attached->parent!=parent){[self invalidatePlacementReadiness];attached->parent=parent;_forced=YES;}
         if(!CGRectEqualToRect(attached->bounds,frame)){[self invalidatePlacementReadiness];attached->bounds=frame;_forced=YES;}
     }
-    _families[wid]=members.copy;if(!window->familyKnown){window->familyKnown=YES;[self invalidatePlacementReadiness];}
+    _families[wid]=members.copy;window->familyAt=uptime();if(!window->familyKnown){window->familyKnown=YES;[self invalidatePlacementReadiness];}
 }
 - (void)releaseWindow:(DWNativeWindow *)window {
     [self invalidatePlacementReadiness];
@@ -1052,14 +1064,17 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
             double mx=rootSize.width/sw,my=rootSize.height/sh;
             double dx=root?window->bounds.origin.x-root->bounds.origin.x:0,dy=root?window->bounds.origin.y-root->bounds.origin.y:0;
             double m[6]={mx,0,0,my,-sx*mx-dx,-sy*my-dy};
-            // Space ownership belongs to the complete audited family. Losing
-            // that report must not move a root while its children are restored.
-            BOOL sound=!spaceFrames||(targetSpace!=0&&root&&root->familyKnown);
+            // Space ownership belongs to the complete audited family. Losing that report must not move a root to another Space while its
+            // children are restored; it does not hide the root either: a root that is placed stays placed, and only its Space request waits
+            // for the family. Parking it hid the window until the next good audit, and an audit fails whenever a frame is read mid-resize,
+            // a popup-level window (a context menu) is refused, or a Chromium window meets a transient child with no parent or size yet
+            // (parked, its main window vanished for 4 to 339 ms of each such read: the browser "flashing").
+            BOOL sound=!spaceFrames||(targetSpace!=0&&root),spaceSound=sound&&(!spaceFrames||root->familyKnown);
             // The helper's bounds on a matrix; a placement they cannot express (a window a million points off, a zoom of a thousandth) is parked.
             for(int i=0;i<6;i++)if(!isfinite(m[i])||fabs(m[i])>1e6)sound=NO;
             if(sound){
                 memcpy(record.m,m,sizeof(m));nativePlaced=YES;
-                if(targetSpace)windowSpaces[wid]=@(targetSpace);
+                if(targetSpace&&spaceSound)windowSpaces[wid]=@(targetSpace);
                 NSValue *viewport=viewports[p[@"output"]];DWNativeClipGeometry geometry={0};
                 if(viewport&&root&&DWNativeClipPlacement(window->bounds,root->bounds,CGRectMake(sx,sy,sw,sh),NSRectToCGRect(viewport.rectValue),&geometry)){
                     DWNativeClipRecord clip={.identity=window->identity,.logical=logicals[wid].unsignedLongLongValue,.output=[p[@"output"]unsignedLongLongValue],.root=window->root,.viewport=NSRectToCGRect(viewport.rectValue),.geometry=geometry};
@@ -1070,6 +1085,13 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
                     }
                 }
             }
+        }
+        // INFINIFY_DEBUG: one line when a window starts or stops being parked, and why, so a window that vanishes is explained.
+        if(getenv("INFINIFY_DEBUG")){
+            static NSMutableSet *parkedWindows;if(!parkedWindows)parkedWindows=[NSMutableSet set];
+            BOOL was=[parkedWindows containsObject:wid];
+            if(!nativePlaced&&!was){[parkedWindows addObject:wid];fprintf(stderr,"debug: native park begin wid=%u placement=%d screen=%gx%g own=%gx%g root=%gx%g family_known=%d reason=%s\n",window->identity.wid,p!=nil,sw,sh,own.width,own.height,rootSize.width,rootSize.height,root?root->familyKnown:-1,!p?"no_placement":!(sw>=1&&sh>=1)?"screen_extent":!(own.width>0&&own.height>0&&rootSize.width>0&&rootSize.height>0)?"native_extent":"matrix_or_space");}
+            else if(nativePlaced&&was){[parkedWindows removeObject:wid];fprintf(stderr,"debug: native park end wid=%u\n",window->identity.wid);}
         }
         // Alpha is sent for a window from the first frame its opacity is not 1, and from then on always, 1 included: a window whose
         // alpha nobody asked to change is never written, and the helper journals no alpha for it. The one exception is a window the

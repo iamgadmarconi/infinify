@@ -618,3 +618,56 @@ frame of the display (a display link; 60 Hz until 2026-10-10); the toolbar
 buttons a normal run also had until 2026-10-10 went with its toolbar strip,
 and the shortcut path is built but unrun. See the
 [shell README](../../native/desktop/README.md).
+
+## DriftWM v0.20.0 / v0.21.0
+
+Adapted from `src/state/navigation.rs` (`reveal_element`, `RevealPan`,
+`MinimalPan`, `minimal_pan_camera`, `pan_minimally_to_element`, `reveal_frame`,
+`related_to_focus`, `window_fully_in_view_at`, `window_shown_as_fully_at`,
+`navigation_target_zoom`), `src/state/viewport.rs` (`landing_view_on`,
+`set_camera_anchor`) and `src/input/actions.rs` (`nearest_in_direction`,
+`FocusNearest`, `center_on_anchor`, `FocusCenter`) at
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`, read at `third_party/driftwm`. The
+minimal pans are `driftwm-core`'s `canvas::{minimal_reveal_camera,
+leading_edge_camera}`. Code: [`src/window_actions.rs`](src/window_actions.rs),
+[`src/navigation.rs`](src/navigation.rs). Scenarios:
+[`tests/focus_nearest_flow.rs`](tests/focus_nearest_flow.rs), derived by hand.
+
+- **The landing view.** `landing_view` is where an output's flight ends: the
+  anchor's camera at the flight's zoom when an anchor is armed (the zoom tick
+  steers by it and clears the camera target), else the camera target, else the
+  live camera. Navigation judges visibility and measures its search there, not
+  at the frame a flight happens to have reached, and a `Keep` navigation keeps
+  the zoom the view is heading to (so `msg zoom 0.5` then a window navigation
+  no longer stops the zoom partway). `set-bookmark` records the landing view;
+  `go-to-bookmark`, `msg camera` and `msg focus` arm an anchored flight at the
+  landing zoom, so a camera move sent during an animation lands (`msg zoom 0.5;
+  msg camera X Y`). A flight is `arm_anchor`: `navigation_target` of v0.19 is the
+  same flight with the window's center as the anchor.
+- **`focus-nearest <dir>`.** The cone search of `center-nearest`, judged at the
+  landing view; a focused window too big for the view anchors the search when it
+  is shown as fully as any pan could show it (`window_shown_as_fully_at`). The
+  hit is revealed (`reveal_window`): focused with the view left alone when it is
+  whole on screen at the landing view; otherwise, if it belongs to the focused
+  window's snap cluster or overlaps its frame (`related_to_focus`, the focused
+  frame measured at the size the exit asked for right after a fullscreen exit),
+  the view scrolls the least that shows it whole, `snap.outer_gap` in from the
+  usable edge and centered on an axis it cannot fit (`MinimalPan::Whole`); any
+  other clipped hit is a jump and parks at `focus_placement` at the kept zoom.
+  An anchor point is landed on through the anchor flight and unfocuses.
+  `center-nearest` is unchanged except for the landing view and the anchor flight:
+  it always parks.
+- **`cycle-windows`** only focuses a window the landing view shows whole; a
+  clipped one parks at `focus_placement`, as before.
+- **`auto_navigate_on_click`**: a completed click on a focused window that is not
+  whole at the live view scrolls it whole with the same minimal pan, at the landing
+  zoom, instead of centering it, so it stays near the pointer. No focus is requested.
+- **`focus-center`** with a screen-pinned window under the pointer focuses the pin
+  and leaves the view; with no canvas window under it, or no pointer at all, it is
+  `center-window`.
+- **Sloppy focus.** The camera moves a navigation makes park the pull and a camera
+  move the user drives restore it: [POINTER.md](POINTER.md#sloppy-focus-after-a-pan-zoom-or-fling).
+
+Not adapted: `pan_minimally_to_element`'s check of a window held back for a
+deferred adopt (no such state here) and `reveal_element`'s stand-in arm (a stand-in
+is a scene window like any other here).

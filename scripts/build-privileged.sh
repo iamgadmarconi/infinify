@@ -74,14 +74,34 @@ xcrun clang -O2 -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra \
 # signs its scripting addition binaries (yabai dd845723416f5fe92af49fad5ebab00369e07edd
 # src/sa.m scripting_addition_prepare_binaries: "codesign -f -s -"). Only the
 # ad-hoc "-" identity is ever used; whether Dock accepts it on 27.2 is unproven.
-codesign --force --sign - "$out/doctor"
+# A build signed with an identity (INFINIFY_SIGN_IDENTITY, which scripts/build-app.sh passes down) signs the doctor and the loader with it,
+# with the hardened runtime and no entitlements: nothing a root loader or the read-only doctor does needs one (measured, see
+# native/privileged/README.md). The payload stays ad hoc either way: it is not an executable, the Dock (not Infinify) maps it, and its
+# exact bytes are what the launch daemon's digest and the manifest pin. An ad-hoc build is signed exactly as before.
+identity=${INFINIFY_SIGN_IDENTITY:--}
+sign_tool() {
+  if [ "$identity" = - ]; then codesign --force --sign - "$1"; else codesign --force --sign "$identity" --options runtime "$1"; fi
+}
+sign_tool "$out/doctor"
 codesign --force --sign - "$out/payload-arm64e.dylib"
-codesign --force --sign - "$out/loader-arm64e"
+sign_tool "$out/loader-arm64e"
 codesign --verify --strict "$out/doctor"
 codesign --verify --strict "$out/payload-arm64e.dylib"
 codesign --verify --strict "$out/loader-arm64e"
+# The launch daemon (loadd) carries the digests of the loader and payload just signed, so that what it runs as root and
+# what the Dock opens are fixed by the daemon's own signed bytes, not by anything the app bundle says about itself.
+# Built last for that reason. packaging signs it with the build identity; here it is ad hoc like its siblings, and an
+# ad-hoc build ships no daemon plist (launchd will not run an ad-hoc daemon, and the daemon needs a team to name its caller).
+loader_sha256=$(shasum -a 256 "$out/loader-arm64e" | cut -d ' ' -f 1)
+payload_sha256=$(shasum -a 256 "$out/payload-arm64e.dylib" | cut -d ' ' -f 1)
+xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror \
+  -DINFINIFY_LOADER_SHA256="\"$loader_sha256\"" -DINFINIFY_PAYLOAD_SHA256="\"$payload_sha256\"" \
+  native/privileged/loadd.m native/privileged/loadd-request.m -framework Foundation -framework Security -o "$out/loadd"
+codesign --force --sign - --identifier com.marengox.infinify.loadd "$out/loadd"
+codesign --verify --strict "$out/loadd"
+if [ "$identity" = - ]; then signed=ad-hoc; else signed='signed (the payload and the daemon ad hoc here; packaging signs the daemon with the identity, hardened runtime)'; fi
 if [ "$mode" = production ]; then
-  printf '%s\n' 'Built production Dock payload, client libraries, read-only doctor and opt-in loader; doctor, payload and loader ad-hoc signed; no fixtures built, nothing injected.'
+  printf '%s\n' "Built production Dock payload, client libraries, read-only doctor and opt-in loader and the launch daemon; $signed; no fixtures built, nothing injected."
 else
-  printf '%s\n' 'Built helper, cooperative host, v2 client library and driver, read-only doctor and opt-in loader; doctor, payload and loader ad-hoc signed; nothing injected.'
+  printf '%s\n' "Built helper, cooperative host, v2 client library and driver, read-only doctor, opt-in loader and launch daemon; $signed; nothing injected."
 fi

@@ -2,37 +2,37 @@
   {
     "name": "EDGES",
     "path": "resize_grab.rs",
-    "start": 243,
-    "end": 254,
+    "start": 245,
+    "end": 256,
     "sha256": "389dbaf09e67358c09a1059ab36c337e4238a43b43db11c5f857e6def12c6c50",
-    "start_byte": 10897,
-    "end_byte": 11247
+    "start_byte": 11091,
+    "end_byte": 11441
   },
   {
     "name": "CLAMP",
     "path": "resize_grab.rs",
-    "start": 75,
-    "end": 91,
+    "start": 77,
+    "end": 93,
     "sha256": "7edf10518b3360b7659d53862cba092eebd1f3a96c53f684d25a576a65648bd0",
-    "start_byte": 3066,
-    "end_byte": 3506
+    "start_byte": 3260,
+    "end_byte": 3700
   },
   {
     "name": "REQUEST",
     "path": "resize_grab.rs",
-    "start": 573,
-    "end": 602,
+    "start": 575,
+    "end": 604,
     "sha256": "4efb52b81a8767e1cec97e4d456898678938339a624ff3cd0d28b273933d1e44",
-    "start_byte": 24655,
-    "end_byte": 25827
+    "start_byte": 24849,
+    "end_byte": 26021
   },
   {
     "name": "SETTLE",
     "path": "compositor.rs",
-    "start": 1267,
-    "end": 1275,
+    "start": 1302,
+    "end": 1310,
     "sha256": "1e71dcdda176d4eabb3f901bee0cb3d43ca926cdcc47eaf2c1b37d0c435fef4e",
-    "start_byte": 64543,
-    "end_byte": 64934
+    "start_byte": 66336,
+    "end_byte": 66727
   }
 ]

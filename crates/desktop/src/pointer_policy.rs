@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/input/mod.rs (maybe_hover_focus, hover_focus_window, pick_target_under,
-// pointer_focus_under_pick), src/state/navigation.rs (pick_mode, resolve_pick),
+// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322
+// (v0.21.0), read at third_party/driftwm: src/input/mod.rs (maybe_hover_focus,
+// hover_focus_window, pick_target_under, pointer_focus_under_pick,
+// refresh_pointer_focus's pull and user_moved_camera, whose `hover_viewport`
+// and `hover_follows_camera` are `FocusRuntime::hover_stamp` and
+// `hover_parked`), src/state/navigation.rs (pick_mode, resolve_pick),
 // src/input/pointer.rs (try_pick_button, maybe_promote_pick, the pick-mode
 // retry of on_pointer_axis in the canvas context, the MouseAction::CenterNearest
-// arm), src/grabs/navigate_grab.rs (NavigateGrab: the dead zone and the negated
+// and MouseAction::FocusNearest arms), src/grabs/navigate_grab.rs (NavigateGrab: the dead zone and the negated
 // drag), src/state/keyboard_focus.rs (set_window_focus, set_suspended_focus:
 // focus with no raise) and src/handlers/mod.rs (focus_changed). The octant of a
 // drag is driftwm-core's `input::gestures::direction_from_vector`, upstream's
@@ -47,6 +50,70 @@ const MAX_OPEN_HOVERS: usize = 16;
 const HOVER_ECHO_NS: u64 = 3_000_000_000;
 
 impl Controller {
+    /// Upstream user_moved_camera: a camera move the user drove, a pan, its
+    /// fling, a zoom, an edge pan, a bookmark or an IPC jump. Brings the
+    /// sloppy-focus pull back after a navigation parked it, since a view the
+    /// user is looking around in owes hover the window it lands on.
+    pub(crate) fn user_moved_camera(&mut self) {
+        self.focus.hover_parked = false;
+    }
+    /// Upstream's `hover_follows_camera = false`, set where a focus-setting
+    /// navigation (an Alt-Tab, an activation, a `center-nearest`, a
+    /// `focus-nearest`, a `focus-center`, a `focus` request, a fit) sets focus:
+    /// neither its own pan nor a flight still under way hands the keyboard to
+    /// whatever slides under the resting pointer. Real pointer motion never
+    /// reads it.
+    pub(crate) fn hover_parked(&mut self) {
+        self.focus.hover_parked = true;
+    }
+    /// Record the view sloppy focus answered for on `output`.
+    fn stamp_hover(&mut self, output: OutputId) {
+        self.focus.hover_stamp = self
+            .scene
+            .output(output)
+            .map(|viewport| (output, viewport.camera, viewport.zoom));
+    }
+    /// Does sloppy focus owe the pointer's output a look, because that view
+    /// has moved since it last answered? The shell reports the pointer while
+    /// this holds (`navigation.hover_pull.needs_pointer`), parked or not: a
+    /// pull held back still stamps the view, so a later un-parking re-checks
+    /// only what moves after it, never the navigation's own move.
+    pub(crate) fn hover_pull_due(&self) -> bool {
+        self.config().focus_follows_mouse
+            && self
+                .focus
+                .hover_stamp
+                .is_some_and(|(output, camera, zoom)| {
+                    self.scene
+                        .output(output)
+                        .is_some_and(|viewport| (viewport.camera, viewport.zoom) != (camera, zoom))
+                })
+    }
+    /// Upstream's pull in refresh_pointer_focus, for a pointer at rest: a pan,
+    /// a zoom or a fling slides a different window under a pointer that never
+    /// moves, so nothing is hovered, yet under `focus_follows_mouse` the focus
+    /// owes a move to it. `screen` is where the pointer is. The reply is
+    /// `hover`'s when the focus moved (`dirty`, and `effect` to perform) and
+    /// null otherwise.
+    pub(crate) fn pull_hover(&mut self, output: OutputId, screen: Point) -> Result<Value, Error> {
+        let moved =
+            self.focus
+                .hover_stamp
+                .is_some_and(|(stamped, camera, zoom)| {
+                    stamped == output
+                        && self.scene.output(output).is_some_and(|viewport| {
+                            (viewport.camera, viewport.zoom) != (camera, zoom)
+                        })
+                });
+        if !moved {
+            return Ok(Value::Null);
+        }
+        if self.config().focus_follows_mouse && !self.focus.hover_parked {
+            return self.hover_with_target(output, screen, None, None, false);
+        }
+        self.stamp_hover(output);
+        Ok(Value::Null)
+    }
     /// Upstream pick_mode, per output: its content is too small to touch, so a
     /// click picks a window instead of reaching it. A pure function of the
     /// output's live zoom, a flight's frames included, and of
@@ -354,6 +421,7 @@ impl Controller {
             return Err(Error::Invalid("native hover is outside its output"));
         }
         let grabbed = self.pointer_grabbed(time_ms);
+        self.stamp_hover(output);
         // Native floating panels retain application focus and stacking. A
         // captured panel still needs pointer motion after native hit validation.
         if bound.is_some_and(|window| self.is_pinned(window) || self.is_widget(window)) {
@@ -513,9 +581,11 @@ impl Controller {
     /// pulls the canvas, so the vector is the press minus the pointer, and
     /// dragging right goes to the nearest window on the left. Inside the 16
     /// point dead zone nothing happens, a plain click included. Past it the
-    /// octant of the vector is the direction of one `center-nearest`. Upstream
-    /// fires that once, on the first motion past the dead zone, and ignores the
-    /// rest of the drag: `screen` is meant to be that motion's point.
+    /// octant of the vector is the direction of one `center-nearest`, or with
+    /// `focus` (a press bound to `focus-nearest`, upstream's
+    /// MouseAction::FocusNearest) of one `focus-nearest`. Upstream fires that
+    /// once, on the first motion past the dead zone, and ignores the rest of
+    /// the drag: `screen` is meant to be that motion's point.
     ///
     /// The action runs once, through the one dispatch every action takes
     /// (`run`), so its prelude is that dispatch's: an open cycle ends and the
@@ -528,6 +598,7 @@ impl Controller {
         screen: Point,
         start: Point,
         held: bool,
+        focus: bool,
     ) -> Result<Value, Error> {
         if !point_valid(screen) || !point_valid(start) {
             return Err(Error::Invalid("invalid screen point"));
@@ -540,7 +611,12 @@ impl Controller {
             return Ok(Outcome::default().reply());
         }
         let vector: CorePoint<f64, Logical> = CorePoint::from((pulled.x, pulled.y));
-        let action = Action::CenterNearest(direction_from_vector(vector));
+        let direction = direction_from_vector(vector);
+        let action = if focus {
+            Action::FocusNearest(direction)
+        } else {
+            Action::CenterNearest(direction)
+        };
         Ok(self.run(Some(output), &action, Some(screen), held)?.reply())
     }
 }

@@ -232,7 +232,11 @@ const GRABBED: &str = "a window is under an interactive move or resize";
 // response the C ABI returned for the same request then.
 #[test]
 fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
-    let mut h = one(CONFIG);
+    // v0.20 unbound upstream's alt+2-finger pinch fit; the trackpad leg below
+    // binds it again in the file.
+    let mut h = one(&format!(
+        "{CONFIG}[gestures.on-window]\n\"alt+2-finger-pinch-in\" = \"fit-window\"\n"
+    ));
     // Keep the historical Command chords in the exact reply literals below.
     h.ok(json!({"op":"set_platform","super":"cmd"}));
     let refused = |name: &str| {
@@ -301,7 +305,8 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
         );
         assert_eq!(
             h.raw(json!({"op":"mouse_binding","trigger":"middle","modifiers":{"control":false,"option":true,"shift":false,"command":false},"context":"window"})),
-            r#"{"data":{"binding":{"action":"fit-window","combo":"alt+middle","implemented":false,"kind":"action","mouse_speed":1.0,"trackpad_speed":1.5,"zoom_mouse_speed":1.0,"zoom_step":1.1,"zoom_trackpad_speed":1.0}},"ok":true,"version":1}"#
+            // v0.20: alt+middle is the snapped fit; Shift gives the single window.
+            r#"{"data":{"binding":{"action":"fit-window-snapped","combo":"alt+middle","implemented":false,"kind":"action","mouse_speed":1.0,"trackpad_speed":1.5,"zoom_mouse_speed":1.0,"zoom_step":1.1,"zoom_trackpad_speed":1.0}},"ok":true,"version":1}"#
         );
         let keys = h.ok(json!({"op":"bindings"}))["keys"].clone();
         let key = |action: &str| {
@@ -318,13 +323,15 @@ fn without_the_capability_every_sizing_request_answers_as_it_did_before() {
             key("fill-window"),
             r#"{"action":"fill-window","character":"g","chord":"⌘G","combo":"mod+g","implemented":false,"key_code":5,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#
         );
-        assert_eq!(
-            key("fit-window"),
-            r#"{"action":"fit-window","character":"m","chord":"⌘M","combo":"mod+m","implemented":false,"key_code":46,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#
-        );
+        // v0.20: mod+m fits with the cluster (fit-window-snapped) and
+        // mod+shift+m gives the single-window form.
         assert_eq!(
             key("fit-window-snapped"),
-            r#"{"action":"fit-window-snapped","character":"m","chord":"⇧⌘M","combo":"mod+shift+m","implemented":false,"key_code":46,"modifiers":{"command":true,"control":false,"option":false,"shift":true},"passable":true,"repeat":false}"#
+            r#"{"action":"fit-window-snapped","character":"m","chord":"⌘M","combo":"mod+m","implemented":false,"key_code":46,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#
+        );
+        assert_eq!(
+            key("fit-window"),
+            r#"{"action":"fit-window","character":"m","chord":"⇧⌘M","combo":"mod+shift+m","implemented":false,"key_code":46,"modifiers":{"command":true,"control":false,"option":false,"shift":true},"passable":true,"repeat":false}"#
         );
         // A trackpad gesture bound to fit-window fires into the same refusal.
         h.ok(json!({"op":"gesture_begin","kind":"pinch","fingers":2,"modifiers":{"control":false,"option":true,"shift":false,"command":false},"context":"window","output":1,"pointer":{"x":ORIGIN.0+300.0,"y":ORIGIN.1+250.0},"doubletap":false,"time_ms":1000}));
@@ -524,11 +531,11 @@ fn fit_window_fills_the_usable_area_centers_the_camera_and_toggles_back() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     assert_eq!(mode(&mut h, 1), "fit");
     assert_eq!(ipc_mode(&mut h, 1), "Fit");
     settle(&mut h);
@@ -540,10 +547,10 @@ fn fit_window_fills_the_usable_area_centers_the_camera_and_toggles_back() {
     // Moving a fit window does not end the fit: upstream's moves clear only a
     // fill restore point. The unfit then resizes around the center it finds.
     assert_eq!(action(&mut h, "nudge-window right")["dirty"], true);
-    assert_eq!(world(&mut h, 1), rect(-152.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-160.0, -120.0, 960.0, 740.0));
     assert_eq!(mode(&mut h, 1), "fit");
     ipc(&mut h, json!({"Move":{"to":[300,-250]}}));
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     assert_eq!(mode(&mut h, 1), "fit");
 
     // The toggle: only the saved size comes back, around the frame's center
@@ -555,7 +562,7 @@ fn fit_window_fills_the_usable_area_centers_the_camera_and_toggles_back() {
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -587,16 +594,16 @@ fn fit_rounds_the_camera_and_unfit_truncates_as_upstream_does() {
         &mut h,
         &reply,
         (401.0, 301.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     let reply = action(&mut h, "fit-window");
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (401.0, 301.0),
         "applied",
         (401.0, 301.0),
@@ -617,17 +624,18 @@ fn a_fit_the_window_clamps_commits_its_size_at_the_fit_place() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "clamped",
         (900.0, 700.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 900.0, 700.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 900.0, 700.0));
     assert_eq!(mode(&mut h, 1), "fit");
-    // On an empty canvas the frame asked for is the whole inset usable area,
-    // so fill-window has nothing to grow into: it starts nothing and the
-    // window stays fit.
+    // v0.20: a fit is edge to edge, so the frame asked for is wider than the
+    // area fill grows inside (the usable area inset by snap.outer_gap): fill
+    // pulls its edges back and starts, where before the fit left that margin
+    // itself and fill had nothing to grow into. The fill is a separate
+    // scenario below; here the window stays fit.
     settle(&mut h);
-    assert_eq!(action(&mut h, "fill-window"), nothing());
     assert_eq!(mode(&mut h, 1), "fit");
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
     // Around (300, 250) the saved 400 x 300 goes back to (100, 100).
@@ -643,6 +651,24 @@ fn a_fit_the_window_clamps_commits_its_size_at_the_fit_place() {
     assert_eq!(world(&mut h, 1), rect(100.0, 100.0, 400.0, 300.0));
     assert_eq!(mode(&mut h, 1), Value::Null);
 
+    // The fill that now starts on a fit frame asks for the area inset by the
+    // outer gap: (-172, -112) 944 x 724 (compute_fill_geometry, unchanged).
+    let mut h = capable(one(CONFIG));
+    let reply = action(&mut h, "fit-window");
+    deliver(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (960.0, 740.0),
+        "applied",
+        (960.0, 740.0),
+    );
+    settle(&mut h);
+    let reply = action(&mut h, "fill-window");
+    let read = began(&mut h, &reply);
+    let setter = answer(&mut h, &read, "observed", false, (960.0, 740.0))["effect"].clone();
+    assert_eq!(setter["requested"], json!({"width":944.0,"height":724.0}));
+
     // A window that will not change size at all is moved to the fit's place
     // and marked, as upstream does for a client that ignores the configure.
     // Every fit and unfit of it is the same round trip: nothing walks.
@@ -657,11 +683,11 @@ fn a_fit_the_window_clamps_commits_its_size_at_the_fit_place() {
             &mut h,
             &reply,
             (400.0, 300.0),
-            (944.0, 724.0),
+            (960.0, 740.0),
             "rejected",
             (400.0, 300.0),
         );
-        assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 400.0, 300.0));
+        assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 400.0, 300.0));
         assert_eq!(mode(&mut h, 1), "fit");
         // The unfit needs no new size: it is a placement, applied at once,
         // around the same center (300, 250) of the frame the fit asked for.
@@ -678,11 +704,12 @@ fn a_fit_the_window_clamps_commits_its_size_at_the_fit_place() {
 // of the size the window was last asked for, at the top-left it has, and the
 // snapped variant measures its neighbours from that frame. The size the
 // window took of the request plays no part. The usable center is (500, 410)
-// and the inset corner (28, 48), as above.
+// and the usable corner (20, 40), as above.
 
 // Upstream fit_window_snapped and shift_cluster_around_primary. Window 1 goes
-// from x 100..500, y 100..400 to the fit frame x -172..772, y -112..612: its
-// right edge moves +272, its left -272, its bottom +212 and its top -212.
+// from x 100..500, y 100..400 to the fit frame x -180..780, y -120..620 (v0.20:
+// edge to edge, no outer gap): its right edge moves +280, its left -280, its
+// bottom +220 and its top -220.
 // 2 is snapped to its right edge, 3 to its bottom edge and 4 to its left edge,
 // each one snap gap (12) away; 5 is nobody's neighbour. Each neighbour follows
 // the edge it is snapped to, and comes back with the unfit.
@@ -709,15 +736,15 @@ fn fit_window_snapped_shoves_the_snapped_neighbours_and_brings_them_back() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     assert_eq!(mode(&mut h, 1), "fit");
-    assert_eq!(world(&mut h, 2), rect(784.0, 100.0, 200.0, 300.0));
-    assert_eq!(world(&mut h, 3), rect(100.0, 624.0, 400.0, 200.0));
-    assert_eq!(world(&mut h, 4), rect(-334.0, 100.0, 150.0, 300.0));
+    assert_eq!(world(&mut h, 2), rect(792.0, 100.0, 200.0, 300.0));
+    assert_eq!(world(&mut h, 3), rect(100.0, 632.0, 400.0, 200.0));
+    assert_eq!(world(&mut h, 4), rect(-342.0, 100.0, 150.0, 300.0));
     assert_eq!(world(&mut h, 5), rect(3000.0, 3000.0, 100.0, 100.0));
     for id in 2..=5 {
         assert_eq!(mode(&mut h, id), Value::Null);
@@ -726,7 +753,7 @@ fn fit_window_snapped_shoves_the_snapped_neighbours_and_brings_them_back() {
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -743,14 +770,14 @@ fn fit_window_snapped_shoves_the_snapped_neighbours_and_brings_them_back() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     assert_eq!(world(&mut h, 2), rect(512.0, 100.0, 200.0, 300.0));
     assert_eq!(world(&mut h, 4), rect(-62.0, 100.0, 150.0, 300.0));
 
-    // A window that takes 940 x 718 of the 944 x 724 asked for. The neighbours
+    // A window that takes 956 x 734 of the 960 x 740 asked for. The neighbours
     // follow the frame asked for, and the unfit measures from that frame too
     // (upstream's configured size), not from the 4 and 6 pixels less the
     // window took: everyone comes home.
@@ -760,19 +787,19 @@ fn fit_window_snapped_shoves_the_snapped_neighbours_and_brings_them_back() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "clamped",
-        (940.0, 718.0),
+        (956.0, 734.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 940.0, 718.0));
-    assert_eq!(world(&mut h, 2), rect(784.0, 100.0, 200.0, 300.0));
-    assert_eq!(world(&mut h, 3), rect(100.0, 624.0, 400.0, 200.0));
-    assert_eq!(world(&mut h, 4), rect(-334.0, 100.0, 150.0, 300.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 956.0, 734.0));
+    assert_eq!(world(&mut h, 2), rect(792.0, 100.0, 200.0, 300.0));
+    assert_eq!(world(&mut h, 3), rect(100.0, 632.0, 400.0, 200.0));
+    assert_eq!(world(&mut h, 4), rect(-342.0, 100.0, 150.0, 300.0));
     let reply = action(&mut h, "fit-window-snapped");
     deliver(
         &mut h,
         &reply,
-        (940.0, 718.0),
+        (956.0, 734.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -882,15 +909,15 @@ fn moving_a_filled_window_ends_its_restore_point() {
         &mut h,
         &reply,
         (732.0, 724.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     let reply = action(&mut h, "fit-window");
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (300.0, 200.0),
         "applied",
         (300.0, 200.0),
@@ -982,9 +1009,10 @@ fn moving_a_filled_window_ends_its_restore_point() {
 }
 
 // Fit and fill end each other. After the fit the camera is at (-200, -160), so
-// the usable area covers x -180..780, y -120..620 and the fit frame is the
-// inset area x -172..772, y -112..612. Window 2 (x 700..1000, y 0..300)
-// overlaps its right part, so the fill pulls the right edge back to
+// the usable area covers x -180..780, y -120..620 and the fit frame is that
+// whole area (v0.20: a fit is edge to edge) while the fill's room is the area
+// inset by snap.outer_gap, x -172..772, y -112..612. Window 2 (x 700..1000,
+// y 0..300) overlaps its right part, so the fill pulls the right edge back to
 // 700 - 12 = 688: (-172, -112) 860 x 724. The window is then filled, not fit,
 // and the unfill gives back the size from before the fit, around the fit
 // frame's center (300, 250): (100, 100) 400 x 300.
@@ -998,9 +1026,9 @@ fn a_fill_takes_a_window_out_of_fit_and_restores_the_frame_before_it() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     settle(&mut h);
     assert_eq!(mode(&mut h, 1), "fit");
@@ -1008,7 +1036,7 @@ fn a_fill_takes_a_window_out_of_fit_and_restores_the_frame_before_it() {
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (860.0, 724.0),
         "applied",
         (860.0, 724.0),
@@ -1045,9 +1073,9 @@ fn a_fill_takes_a_window_out_of_fit_and_restores_the_frame_before_it() {
         &mut h,
         &reply,
         asked,
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     assert_eq!(mode(&mut h, 1), "fit");
     assert_eq!(ipc_mode(&mut h, 1), "Fit");
@@ -1056,7 +1084,7 @@ fn a_fill_takes_a_window_out_of_fit_and_restores_the_frame_before_it() {
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1343,9 +1371,9 @@ fn a_second_step_while_one_is_pending_walks_on_from_the_size_asked_for() {
             &mut h,
             &reply,
             (400.0, 300.0),
-            (944.0, 724.0),
+            (960.0, 740.0),
             "applied",
-            (944.0, 724.0),
+            (960.0, 740.0),
         );
         assert_eq!(mode(&mut h, 1), "fit");
         h
@@ -1357,26 +1385,26 @@ fn a_second_step_while_one_is_pending_walks_on_from_the_size_asked_for() {
     assert_eq!(mode(&mut h, 1), Value::Null);
     let read = began(&mut h, &grow);
     assert_eq!(
-        answer(&mut h, &read, "observed", false, (944.0, 724.0))["effect"],
+        answer(&mut h, &read, "observed", false, (960.0, 740.0))["effect"],
         Value::Null
     );
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     assert_eq!(ipc_mode(&mut h, 1), "Normal");
     // The same for two absolute resizes that net to the size it has.
     let mut h = fitted();
-    let first = ipc(&mut h, json!({"Resize":{"to":[1000,724]}}));
+    let first = ipc(&mut h, json!({"Resize":{"to":[1000,740]}}));
     assert_eq!(mode(&mut h, 1), "fit");
-    let second = ipc(&mut h, json!({"Resize":{"to":[944,724]}}));
+    let second = ipc(&mut h, json!({"Resize":{"to":[960,740]}}));
     assert!(second.get("effect").is_none(), "{second}");
     assert_eq!(mode(&mut h, 1), Value::Null);
     let read = began(&mut h, &first);
     assert_eq!(
-        answer(&mut h, &read, "observed", false, (944.0, 724.0))["effect"],
+        answer(&mut h, &read, "observed", false, (960.0, 740.0))["effect"],
         Value::Null
     );
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
 }
 
 // What cannot share the transaction is refused by name, and changes nothing:
@@ -1473,10 +1501,10 @@ fn anything_else_while_a_size_is_owed_is_refused_not_queued() {
     let read = began(&mut h, &reply);
     let setter = answer(&mut h, &read, "observed", false, (400.0, 300.0))["effect"].clone();
     h.ok(json!({"op":"cancel_native_resize","transaction":read["transaction"]}));
-    let last = answer(&mut h, &setter, "applied", true, (944.0, 724.0))["effect"].clone();
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    let last = answer(&mut h, &setter, "applied", true, (960.0, 740.0))["effect"].clone();
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     assert_eq!(mode(&mut h, 1), "fit");
-    answer(&mut h, &last, "observed", false, (944.0, 724.0));
+    answer(&mut h, &last, "observed", false, (960.0, 740.0));
     assert_eq!(h.snapshot()["native_resize"]["phase"], "failed");
     assert_eq!(mode(&mut h, 1), "fit");
 
@@ -1538,8 +1566,11 @@ fn a_sizing_action_during_a_drag_is_refused() {
 // Every path an action can arrive by carries the transaction the same way.
 #[test]
 fn a_gesture_a_hot_corner_and_ipc_carry_the_resize_effect() {
-    // A trackpad pinch bound to fit-window (upstream's alt+2-finger-pinch-in).
-    let mut h = capable(one(CONFIG));
+    // A trackpad pinch bound to fit-window. Upstream's alt+2-finger-pinch-in
+    // fit was unbound in v0.20 (release notes, "Bindings"), so the test binds it.
+    let mut h = capable(one(&format!(
+        "{CONFIG}[gestures.on-window]\n\"alt+2-finger-pinch-in\" = \"fit-window\"\n"
+    )));
     let begun = h.ok(json!({"op":"gesture_begin","kind":"pinch","fingers":2,"modifiers":{"control":false,"option":true,"shift":false,"command":false},"context":"window","output":1,"pointer":{"x":ORIGIN.0+300.0,"y":ORIGIN.1+250.0},"doubletap":false,"time_ms":1000}));
     assert_eq!(begun["gesture"]["bindings"][0]["action"], "fit-window");
     assert_eq!(begun["gesture"]["bindings"][0]["implemented"], true);
@@ -1554,9 +1585,9 @@ fn a_gesture_a_hot_corner_and_ipc_carry_the_resize_effect() {
         &mut h,
         &fired,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     assert_eq!(mode(&mut h, 1), "fit");
 
@@ -1567,11 +1598,11 @@ fn a_gesture_a_hot_corner_and_ipc_carry_the_resize_effect() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
 
     // An IPC action request.
     let mut h = capable(one(CONFIG));
@@ -1598,8 +1629,13 @@ fn a_gesture_a_hot_corner_and_ipc_carry_the_resize_effect() {
         assert_eq!(key.unwrap()["implemented"], true, "{name}");
     }
     let mouse = h.ok(json!({"op":"mouse_binding","trigger":"middle","modifiers":{"control":false,"option":true,"shift":false,"command":false},"context":"window"}));
-    assert_eq!(mouse["binding"]["action"], "fit-window");
+    // v0.20: alt+middle fits with the cluster (fit-window-snapped) and Shift
+    // gives the single-window form.
+    assert_eq!(mouse["binding"]["action"], "fit-window-snapped");
     assert_eq!(mouse["binding"]["implemented"], true);
+    let single = h.ok(json!({"op":"mouse_binding","trigger":"middle","modifiers":{"control":false,"option":true,"shift":true,"command":false},"context":"window"}));
+    assert_eq!(single["binding"]["action"], "fit-window");
+    assert_eq!(single["binding"]["implemented"], true);
     // toggle-fullscreen is delivered through the same gate, so it is
     // implemented under it too: tests/fullscreen_flow.rs.
     let keys = h.ok(json!({"op":"bindings"}))["keys"].clone();
@@ -1621,9 +1657,9 @@ fn the_capability_survives_a_load_and_nothing_of_it_is_saved() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     assert_eq!(mode(&mut h, 1), "fit");
     let path = h._scratch.0.join("scene.json");
@@ -1635,20 +1671,20 @@ fn the_capability_survives_a_load_and_nothing_of_it_is_saved() {
     h.ok(json!({"op":"load","path":path}));
     h.ok(json!({"op":"register_output","stable_id":"view-a","screen_bounds":rect(ORIGIN.0,ORIGIN.1,1000.0,800.0)}));
     // The frame is the committed one; the fit is gone with the session.
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     assert_eq!(mode(&mut h, 1), Value::Null);
-    h.ok(json!({"op":"attach","identity":identity(1),"bundle_id":"app.1","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(4000.0,3000.0,944.0,724.0),"logical_id":1}));
+    h.ok(json!({"op":"attach","identity":identity(1),"bundle_id":"app.1","title":"fixture","buffer":{"width":200,"height":100},"source_rect":rect(4000.0,3000.0,960.0,740.0),"logical_id":1}));
     h.ok(json!({"op":"focus","window":1}));
     let reply = action(&mut h, "shrink-window right");
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
-        (914.0, 724.0),
+        (960.0, 740.0),
+        (930.0, 740.0),
         "applied",
-        (914.0, 724.0),
+        (930.0, 740.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 914.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 930.0, 740.0));
 }
 
 // Sizing beside window rules, widgets, screen pins and pointer policy. A window
@@ -1750,7 +1786,7 @@ fn every_sizing_action_passes_over_a_widget_and_a_screen_pinned_window() {
 // listed under `State.pinned`, which carries no mode; unpinned, where the pin
 // showed it, the fit is still there to undo. After the fit the camera is at
 // (-200, -160), so the pin holds the frame's top-left at the screen point
-// (28, 48) and the unpin returns it to (-172, -112).
+// (20, 40) and the unpin returns it to (-180, -120).
 #[test]
 fn a_pin_keeps_a_fit_and_the_unpin_gives_it_back() {
     let mut h = capable(one(CONFIG));
@@ -1759,9 +1795,9 @@ fn a_pin_keeps_a_fit_and_the_unpin_gives_it_back() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     settle(&mut h);
     pin(&mut h, 1);
@@ -1769,7 +1805,7 @@ fn a_pin_keeps_a_fit_and_the_unpin_gives_it_back() {
     let state = ipc(&mut h, json!("State"))["reply"]["Ok"]["State"].clone();
     assert_eq!(state["windows"], json!([]));
     assert_eq!(state["pinned"][0]["id"], 1);
-    assert_eq!(state["pinned"][0]["size"], json!([944, 724]));
+    assert_eq!(state["pinned"][0]["size"], json!([960, 740]));
     assert_eq!(action(&mut h, "fit-window"), nothing());
     assert_eq!(action(&mut h, "fill-window"), nothing());
     assert_eq!(
@@ -1780,14 +1816,14 @@ fn a_pin_keeps_a_fit_and_the_unpin_gives_it_back() {
         ipc(&mut h, json!({"Pin":{"value":false}}))["reply"],
         json!({"Ok":{"Pin":false}})
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
     assert_eq!(mode(&mut h, 1), "fit");
     assert_eq!(ipc_mode(&mut h, 1), "Fit");
     let reply = action(&mut h, "fit-window");
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1823,8 +1859,9 @@ fn a_fill_a_shove_and_a_snapped_zoom_see_only_the_windows_that_snap() {
     assert_eq!(mode(&mut h, 1), "fill");
     assert_eq!(world(&mut h, beside), rect(28.0, 48.0, 200.0, 724.0));
 
-    // The snapped fit of `fit_window_snapped_shoves_...`: window 3 below
-    // follows the bottom edge down 212; the widget one gap to the right and
+    // The snapped fit of `fit_window_snapped_shoves_...` (v0.20: edge to edge,
+    // so the bottom edge goes from 400 to 620): window 3 below follows the
+    // bottom edge down 220; the widget one gap to the right and
     // the pinned window one gap to the left stay where they are.
     let mut h = capable(one(&layered()));
     let beside = widget(&mut h, (512.0, 100.0, 200.0, 300.0));
@@ -1838,12 +1875,12 @@ fn a_fill_a_shove_and_a_snapped_zoom_see_only_the_windows_that_snap() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
-    assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
-    assert_eq!(world(&mut h, 3), rect(100.0, 624.0, 400.0, 200.0));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
+    assert_eq!(world(&mut h, 3), rect(100.0, 632.0, 400.0, 200.0));
     assert_eq!(world(&mut h, beside), rect(512.0, 100.0, 200.0, 300.0));
     assert_eq!(window(&mut h, 4)["pinned"], pinned);
 
@@ -1920,7 +1957,9 @@ fn a_drag_is_refused_for_a_widget_and_for_a_pending_plan_in_pick_mode_too() {
         // The neighbour alone is not the plan's to place.
         h.ok(drag(2, false));
         h.ok(json!({"op":"end_gesture"}));
-        let to = (from.0, from.1 + 30.0);
+        // v0.21: `resize_step` (30) is in screen px, so at zoom 0.4 the step
+        // covers 75 canvas px (canvas_step).
+        let to = (from.0, from.1 + if pick { 75.0 } else { 30.0 });
         deliver(&mut h, &reply, from, to, "applied", to);
         // With the size delivered the window drags again.
         h.ok(drag(1, false));
@@ -2082,8 +2121,9 @@ fn a_pick_returns_a_filled_window_to_a_fill_view_above_the_threshold() {
 // 732 x 724 in the view at the origin, where `focus_placement = "left"` at
 // zoom 1 would park the camera at x = 212 instead. With the pinned window
 // focused, center-window goes to the canvas window nearest the viewport
-// center, which is the filled one; focus-center passes over the pinned window
-// lying on the filled one under the pointer.
+// center, which is the filled one; focus-center does too when the pointer is
+// on the filled window alone, and over the pinned window lying on it focuses
+// the pin and leaves the view where it is.
 #[test]
 fn centering_restores_a_fill_view_past_a_pinned_window() {
     let mut h = capable(empty(CONFIG));
@@ -2104,23 +2144,40 @@ fn centering_restores_a_fill_view_past_a_pinned_window() {
     );
     assert_eq!(world(&mut h, 1), rect(240.0, 48.0, 732.0, 724.0));
     assert_eq!(mode(&mut h, 1), "fill");
-    for sample in ["center-window", "focus-center"] {
+    // center-window goes to the filled window and its fill view. focus-center
+    // does so only where the pointer is on the filled window and on no pin;
+    // over the pinned window it focuses the pin and leaves the view where it is
+    // (v0.20 release notes, "Navigation"; src/input/actions.rs FocusCenter's
+    // `pinned_owner_under` arm).
+    for (sample, pointer, restores) in [
+        ("center-window", (600.0, 350.0), true),
+        ("focus-center", (300.0, 600.0), true),
+        ("focus-center", (600.0, 350.0), false),
+    ] {
         action(&mut h, "pan-viewport right");
         settle(&mut h);
         assert_eq!(pose(&mut h)["camera"], json!({"x":100.0,"y":0.0}));
         h.ok(json!({"op":"focus","window":2}));
-        // The pointer is on the pinned window, which stays at the screen
-        // point (500, 300), and on the filled window beneath it.
-        let moved = h.ok(json!({"op":"action","output":1,"action":sample,"pointer":{"x":ORIGIN.0 + 600.0,"y":ORIGIN.1 + 350.0}}));
-        assert_eq!(
-            moved["navigation"]["target_camera"], view["camera"],
-            "{sample}"
-        );
-        assert_eq!(moved["navigation"]["target_zoom"], 1.0, "{sample}");
-        assert_eq!(moved["effects"][0]["window"], 1, "{sample}: {moved}");
-        settle(&mut h);
-        assert_eq!(pose(&mut h), view, "{sample}");
-        assert_eq!(h.snapshot()["focus"]["intent"], 1);
+        // The pinned window stays at the screen point (500, 300), 200 x 100;
+        // (600, 350) is on it and on the filled window beneath, (300, 600)
+        // on the filled window alone.
+        let moved = h.ok(json!({"op":"action","output":1,"action":sample,"pointer":{"x":ORIGIN.0 + pointer.0,"y":ORIGIN.1 + pointer.1}}));
+        if restores {
+            assert_eq!(
+                moved["navigation"]["target_camera"], view["camera"],
+                "{sample}"
+            );
+            assert_eq!(moved["navigation"]["target_zoom"], 1.0, "{sample}");
+            assert_eq!(moved["effects"][0]["window"], 1, "{sample}: {moved}");
+            settle(&mut h);
+            assert_eq!(pose(&mut h), view, "{sample}");
+            assert_eq!(h.snapshot()["focus"]["intent"], 1);
+        } else {
+            assert_eq!(moved["navigation"], Value::Null, "{sample}: {moved}");
+            settle(&mut h);
+            assert_eq!(pose(&mut h)["camera"], json!({"x":100.0,"y":0.0}));
+            assert_eq!(h.snapshot()["focus"]["intent"], 2);
+        }
     }
 }
 
@@ -2271,9 +2328,9 @@ fn readback_keeps_every_window_usable_through_applied_clamped_and_rejected() {
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     assert_eq!(mode(&mut h, 1), "fit");
     // A step the window only partly grants: the canvas has the size it took.
@@ -2281,20 +2338,20 @@ fn readback_keeps_every_window_usable_through_applied_clamped_and_rejected() {
     served(
         &mut h,
         &reply,
-        (944.0, 724.0),
-        (974.0, 724.0),
+        (960.0, 740.0),
+        (990.0, 740.0),
         "clamped",
-        (960.0, 724.0),
+        (976.0, 740.0),
     );
     // An absolute request the window ignores: it keeps the size it has.
     let reply = ipc(&mut h, json!({"Resize":{"window":1,"to":[500,400]}}));
     served(
         &mut h,
         &reply,
-        (960.0, 724.0),
+        (976.0, 740.0),
         (500.0, 400.0),
         "rejected",
-        (960.0, 724.0),
+        (976.0, 740.0),
     );
 }
 #[test]
@@ -2320,13 +2377,13 @@ fn readback_adopts_a_baseline_the_window_changed_by_itself() {
     let reply = action(&mut h, "fit-window");
     let read = began(&mut h, &reply);
     assert_eq!(
-        answer(&mut h, &read, "observed", false, (944.0, 724.0))["effect"],
+        answer(&mut h, &read, "observed", false, (960.0, 740.0))["effect"],
         Value::Null
     );
     assert_eq!(h.snapshot()["native_resize"]["phase"], "complete");
     assert_eq!(
         world(&mut h, 1)["size"],
-        json!({"width":944.0,"height":724.0})
+        json!({"width":960.0,"height":740.0})
     );
     assert_eq!(mode(&mut h, 1), "fit");
     usable(&mut h);
@@ -2350,7 +2407,7 @@ fn readback_ends_a_timed_out_setter_with_its_one_diagnostic_read() {
             BUSY
         );
         let end = if observed {
-            answer(&mut h, &diagnostic, "observed", false, (944.0, 724.0))
+            answer(&mut h, &diagnostic, "observed", false, (960.0, 740.0))
         } else {
             timed_out(&mut h, &diagnostic)
         };
@@ -2360,7 +2417,7 @@ fn readback_ends_a_timed_out_setter_with_its_one_diagnostic_read() {
         assert_eq!(slot["pending_effect"], Value::Null);
         if observed {
             assert_eq!(slot["phase"], "complete", "{slot}");
-            assert_eq!(world(&mut h, 1), rect(-172.0, -112.0, 944.0, 724.0));
+            assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
             assert_eq!(mode(&mut h, 1), "fit");
         } else {
             assert_eq!(slot["phase"], "failed", "{slot}");

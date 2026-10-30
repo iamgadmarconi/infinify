@@ -5,6 +5,14 @@ extern crate self as smithay;
 #[path = "support/canvas_shim.rs"]
 mod shim;
 pub use shim::{config, utils};
+// v0.21's canvas.rs names `crate::layout::snap::SnapRect` (minimal_reveal_camera,
+// leading_edge_camera): the original, unedited snap.rs provides it.
+#[allow(dead_code, clippy::all)]
+#[path = "upstream/snap.rs"]
+mod upstream_snap;
+mod layout {
+    pub(crate) use crate::upstream_snap as snap;
+}
 #[allow(dead_code, clippy::all)]
 #[path = "upstream/canvas.rs"]
 mod upstream;

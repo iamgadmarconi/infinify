@@ -415,10 +415,11 @@ fn snap_settings_govern_the_logical_drag() {
     );
     // corners: docked side by side, a top edge 20 off its neighbour's aligns.
     let beside = || rect(412.0, 15.0, 400.0, 300.0);
-    assert_eq!(drag("", beside(), &[(0.0, 5.0)]), [(412.0, 20.0)]);
+    // v0.20 turned corners on by default.
+    assert_eq!(drag("", beside(), &[(0.0, 5.0)]), [(412.0, 0.0)]);
     assert_eq!(
-        drag("[snap]\ncorners = true\n", beside(), &[(0.0, 5.0)]),
-        [(412.0, 0.0)]
+        drag("[snap]\ncorners = false\n", beside(), &[(0.0, 5.0)]),
+        [(412.0, 20.0)]
     );
     // centers: a shorter neighbour's middle, 5 off, aligns with the middle.
     let shorter = || rect(412.0, 40.0, 400.0, 200.0);
@@ -469,11 +470,13 @@ fn navigation_speed_and_focus_placement_come_from_the_config() {
         point(2200.0 - 210.0, 1150.0 - 160.0)
     );
     // Upstream's per-output rule, keyed here by the output's stable id.
+    // The default outer gap is 12 since v0.20, so the bottom placement keeps
+    // the frame 12 in from the usable edge: its center at 800 - 12 - 150.
     assert_eq!(
         navigate(
             "focus_placement = \"top-left\"\n[[outputs]]\nname = \"view\"\nfocus_placement = \"bottom\"\n"
         ),
-        point(2200.0 - 500.0, 1150.0 - 650.0)
+        point(2200.0 - 500.0, 1150.0 - 638.0)
     );
 }
 
@@ -669,12 +672,16 @@ fn default_bindings_map_to_macos_chords() {
         mod+minus | 0x1B - ⌃⌥ repeat zoom-out
         mod+ctrl+shift+q | 0x0C q ⌃⌥⇧⌘ once quit
         mod+Return | 0x24 none ⌃⌥ once exec-terminal
-        mod+shift+Up | 0x7E none ⌃⌥⇧ repeat nudge-window up",
+        mod+shift+Up | 0x7E none ⌃⌥⇧ repeat move-to-snap up
+        mod+Up | 0x7E none ⌃⌥ once focus-nearest up
+        mod+shift+q | 0x0C q ⌃⌥⇧ once suspend-window
+        mod+m | 0x2E m ⌃⌥ once fit-window-snapped
+        mod+shift+m | 0x2E m ⌃⌥⇧ once fit-window",
     );
     assert_eq!(keys["mod+a"]["chord"], "⌃⌥A", "{table}");
     assert_eq!(keys["mod+alt+Right"]["chord"], "⌃⌥⇧⌘Right", "{table}");
     for combo in [
-        "mod+c", "mod+a", "mod+z", "mod+f", "mod+w", "mod+t", "mod+q", "mod+Tab",
+        "mod+c", "mod+a", "mod+m", "mod+f", "mod+w", "mod+t", "mod+q", "mod+Tab",
     ] {
         assert_eq!(keys[combo]["modifiers"], chord("⌃⌥"), "{combo}: {table}");
     }
@@ -698,13 +705,19 @@ fn default_bindings_map_to_macos_chords() {
     // Host-owned default system controls stay out of the registered table,
     // even though this fixture puts every upstream Linux tool on PATH.
     assert_eq!(reply["warnings"], json!([]), "{table}");
-    assert_eq!(keys.len(), 46, "{table}");
+    // v0.20 removed mod+e (toggle-cursor-pan) and mod+z (zoom-reset; mod+0
+    // still resets) and added mod+shift+q (suspend-window): 46 - 2 + 1.
+    assert!(
+        !keys.contains_key("mod+e") && !keys.contains_key("mod+z"),
+        "{table}"
+    );
+    assert_eq!(keys.len(), 45, "{table}");
     assert!(!keys.contains_key("mod+l"), "{table}");
     let chords: BTreeSet<String> = keys
         .values()
         .map(|k| format!("{} {}", k["key_code"], k["modifiers"]))
         .collect();
-    assert_eq!(chords.len(), 46, "{table}");
+    assert_eq!(chords.len(), 45, "{table}");
     assert_eq!(reply["media_keys"], json!([]), "{table}");
     let skipped = by_combo(&reply["skipped"]);
     assert_eq!(skipped.len(), 13, "{table}");
@@ -809,7 +822,8 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
         mod+equal | 0x18 = ⌘ repeat zoom-in",
     );
     assert_eq!(reply["warnings"], json!([]), "{table}");
-    assert_eq!(keys.len(), 46, "{table}");
+    // v0.20: 46 default chords, less mod+e and mod+z, plus mod+shift+q.
+    assert_eq!(keys.len(), 45, "{table}");
     assert_eq!(reply["super"], "cmd");
 
     // A chord that holds Command and Control leaves nothing to displace an
@@ -821,7 +835,7 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
     let reply = h.ok(json!({"op":"bindings"}));
     let table = listing(&reply);
     let keys = by_combo(&reply["keys"]);
-    assert_eq!(keys.len(), 41, "{table}");
+    assert_eq!(keys.len(), 40, "{table}");
     assert_keys(
         &reply,
         "mod+alt+Right | 0x7C none ⌃⌥⌘ once send-to-output right",
@@ -865,7 +879,7 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
         mod+equal | 0x18 = ⌥ repeat zoom-in",
     );
     assert!(!keys.contains_key("mod+alt+Right"), "{table}");
-    assert_eq!(keys.len(), 42, "{table}");
+    assert_eq!(keys.len(), 41, "{table}");
     assert_eq!(reply["warnings"], json!([]), "{table}");
 
     // mod_key = "mod3": macOS has no such modifier, so the upstream F3 and
@@ -882,7 +896,7 @@ fn the_super_chord_and_mod_key_choose_the_physical_modifiers() {
         listing(&reply)
     );
     let warnings = reply["warnings"].as_array().unwrap();
-    assert_eq!(warnings.len(), 42);
+    assert_eq!(warnings.len(), 41);
     assert!(warnings.iter().all(|w| {
         w.as_str()
             .unwrap()
@@ -1065,11 +1079,11 @@ fn toml_string(text: &str) -> String {
 const DEFAULT_MOUSE: &str = "
 left - ⌥ window | move_window alt+left
 left - ⌥⇧ window | move_snapped_windows alt+shift+left
-right - ⌥ window | resize_window alt+right
-right - ⌥⇧ window | resize_window_snapped alt+shift+right
-middle - ⌥ window | action alt+middle no fit-window
-middle - ⌥⇧ window | action alt+shift+middle no fit-window-snapped
-middle - ⌃⌥ window | action mod+middle no toggle-fullscreen
+right - ⌥ window | resize_window_snapped alt+right
+right - ⌥⇧ window | resize_window alt+shift+right
+middle - ⌥ window | action alt+middle no fit-window-snapped
+middle - ⌥⇧ window | action alt+shift+middle no fit-window
+middle - ⌃⌥ window | action mod+middle no fill-window
 left - - canvas | pan_viewport left
 left - - window | -
 right - - window | -
@@ -1078,8 +1092,6 @@ middle - - window | -
 left - ⌥ canvas | -
 left - ⌃⌥ window | pan_viewport mod+left
 left - ⌃⌥ canvas | pan_viewport mod+left
-left - ⌃⌥⌘ window | center_nearest mod+ctrl+left
-left - ⌃⌥⌘ canvas | center_nearest mod+ctrl+left
 left - ⌘ canvas | -
 scroll finger - canvas | pan_viewport trackpad-scroll
 scroll wheel - canvas | zoom wheel-scroll
@@ -1126,6 +1138,16 @@ fn mouse_bindings_resolve_from_physical_chords() {
             h.mouse(lookup[0], source, lookup[2], lookup[3]),
             expected,
             "{line}"
+        );
+    }
+    // v0.20: mod+ctrl+drag is focus-nearest (the shell's navigate press, with
+    // `focus` set) where it was center-nearest; Shift gives the single window
+    // form of alt+right, alt+middle and mod+m, and mod+middle is fill-window.
+    for context in ["window", "canvas"] {
+        assert_eq!(
+            h.mouse("left", Value::Null, "⌃⌥⌘", context),
+            json!({"kind":"center_nearest","action":null,"combo":"mod+ctrl+left","implemented":null,"focus":true}),
+            "{context}"
         );
     }
     // A binding carries the speeds its gesture scales by.
@@ -1337,11 +1359,20 @@ fn session_flags_govern_what_a_scene_file_restores() {
     let scratch = Scratch::new();
     let scene = scratch.path("scene.json");
     let absent = scratch.path("absent.toml");
+    // v0.20 turned all three restore flags on by default; the scenarios that
+    // are about the flags being off write them off.
+    let off = scratch.write(
+        "off.toml",
+        "[session]\nrestore_windows = false\nrestore_camera = false\nrestore_bookmarks = false\n",
+    );
     let restoring = scratch.write(
         "restore.toml",
         "[session]\nrestore_camera = true\nrestore_bookmarks = true\n",
     );
-    let bookmarks_only = scratch.write("bookmarks.toml", "[session]\nrestore_bookmarks = true\n");
+    let bookmarks_only = scratch.write(
+        "bookmarks.toml",
+        "[session]\nrestore_camera = false\nrestore_bookmarks = true\n",
+    );
     let saved_camera = point(300.0, 200.0);
     let saved_bookmarks = json!({"1":[5.0,5.0],"saved":[40.0,50.0]});
     // A scene written by a run with no config: camera and bookmarks as left.
@@ -1359,10 +1390,21 @@ fn session_flags_govern_what_a_scene_file_restores() {
     };
     assert_eq!(file(&scene)["bookmarks"], saved_bookmarks);
 
-    // Upstream's defaults restore neither: the output starts at a new
-    // output's camera and the registry is the config seeds alone.
+    // Upstream's defaults restore both (v0.20): the camera and the saved
+    // registry laid over the seeds come back.
+    let mut restored_by_default = seeds();
+    restored_by_default["1"] = json!([5.0, 5.0]);
+    restored_by_default["saved"] = json!([40.0, 50.0]);
     let mut h = Host::new();
     h.load_config(&absent);
+    h.ok(json!({"op":"load","path":scene}));
+    register(&mut h);
+    assert_eq!(h.camera(), saved_camera);
+    assert_eq!(h.bookmarks(), restored_by_default);
+    // With both flags off the output starts at a new output's camera and the
+    // registry is the config seeds alone.
+    let mut h = Host::new();
+    h.load_config(&off);
     h.ok(json!({"op":"load","path":scene}));
     register(&mut h);
     assert_eq!(h.camera(), point(0.0, 0.0));
@@ -1384,7 +1426,7 @@ fn session_flags_govern_what_a_scene_file_restores() {
     assert_eq!(h.camera(), point(70.0, 80.0));
     // An output that never connects keeps its saved camera in the file.
     let mut h = Host::new();
-    h.load_config(&absent);
+    h.load_config(&off);
     h.ok(json!({"op":"load","path":scene}));
     h.ok(json!({"op":"save","path":copy}));
     assert_eq!(
@@ -1420,7 +1462,7 @@ fn session_flags_govern_what_a_scene_file_restores() {
     // The shell may load the scene before the config, and even show an output
     // first: the first config still decides, with the same results.
     for (config, camera, bookmarks) in [
-        (&absent, point(0.0, 0.0), seeds()),
+        (&off, point(0.0, 0.0), seeds()),
         (&restoring, saved_camera.clone(), restored.clone()),
     ] {
         let mut h = Host::new();
@@ -1441,13 +1483,18 @@ fn session_flags_govern_what_a_scene_file_restores() {
         // Only the first config of a run is the launch: a reload moves nothing.
         h.ok(json!({"op":"pan","output":1,"screen_delta":point(11.0, 12.0)}));
         let moved = h.camera();
-        h.load_config(&absent);
+        h.load_config(&off);
         h.load_config(&restoring);
         assert_eq!(h.camera(), moved);
     }
     // A scene loaded under a config keeps that config.
     let mut h = Host::new();
-    h.load_config(&scratch.write("pan.toml", "[navigation]\npan_step = 250.0\n"));
+    // The camera is not restored (it is by default since v0.20), so the
+    // step is measured from the origin.
+    h.load_config(&scratch.write(
+        "pan.toml",
+        "[navigation]\npan_step = 250.0\n[session]\nrestore_camera = false\n",
+    ));
     h.ok(json!({"op":"set_platform","super":"cmd"}));
     h.ok(json!({"op":"load","path":scene}));
     register(&mut h);

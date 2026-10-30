@@ -2,9 +2,9 @@
 //
 // Ported verbatim from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/layout/fill.rs
-//   sha-256:    2aae4c9f33279b95b82b915f51d9aa842527d77178b753d801d8a758ab2843f7 (upstream file)
+//   sha-256:    5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3 (upstream file)
 // Changes from upstream: this header only; everything below is unmodified.
 // See PORT.md in the crate root for the full change log.
 
@@ -34,12 +34,7 @@ pub fn fill_rect(
     min_size: (f64, f64),
     max_size: (f64, f64),
 ) -> Option<SnapRect> {
-    let b = SnapRect {
-        x_low: bounds.x_low + bounds_inset,
-        x_high: bounds.x_high - bounds_inset,
-        y_low: bounds.y_low + bounds_inset,
-        y_high: bounds.y_high - bounds_inset,
-    };
+    let b = bounds.inset(bounds_inset);
     if !current.overlaps(&b) {
         return None;
     }

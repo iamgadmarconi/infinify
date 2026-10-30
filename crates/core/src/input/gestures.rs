@@ -2,7 +2,7 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/input/gestures.rs
 //   sha-256:    6a07e9e9a620b45bd5a52aa59136887775d609d00ad94b9c53d93c89ac3323d3 (upstream file)
 // This is an EXTRACT, not the whole file. Kept: `direction_from_vector`

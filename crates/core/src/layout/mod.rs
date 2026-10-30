@@ -2,7 +2,7 @@
 //
 // Ported verbatim from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/layout/mod.rs
 //   sha-256:    30e14c74317edb70c7d93e8a0c5e873f2a31ef518bef29eef5deb931d3d99030 (upstream file)
 // Changes from upstream: this header only; everything below is unmodified.

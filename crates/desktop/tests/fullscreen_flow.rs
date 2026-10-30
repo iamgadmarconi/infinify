@@ -309,6 +309,25 @@ fn deliver(
     let read = began(h, reply);
     perform(h, &read, from, asks, outcome, took);
 }
+/// `deliver` for a request that may ask for the size the window already has.
+/// v0.20's fit is the whole usable area, which is also the size this fixture's
+/// fullscreen asks for, so a toggle between the two changes no size: the reply
+/// then begins no transaction and the window is placed at once.
+fn deliver_unless_unchanged(
+    h: &mut Host,
+    reply: &Value,
+    from: (f64, f64),
+    asks: (f64, f64),
+    outcome: &str,
+    took: (f64, f64),
+) {
+    if reply["effect"].is_object() {
+        deliver(h, reply, from, asks, outcome, took);
+    } else {
+        assert_eq!(from, asks, "{reply}");
+        assert_eq!(h.snapshot()["native_resize"]["pending_effect"], Value::Null);
+    }
+}
 /// Window 1 fullscreen on output 1, having taken the size it was offered.
 fn entered(h: &mut Host) {
     let reply = action(h, 1, "toggle-fullscreen");
@@ -666,16 +685,21 @@ fn native_decoration_directional_actions_reject_stale_bindings() {
 fn without_the_capability_fullscreen_answers_as_it_did_before() {
     const ACTION: &str = r#"{"error":"action not implemented on macOS yet: toggle-fullscreen","ok":false,"version":1}"#;
     const IPC: &str = r#"{"data":{"dirty":false,"effects":[],"navigation":null,"reply":{"Err":"action not implemented on macOS yet: toggle-fullscreen"}},"ok":true,"version":1}"#;
-    const MOUSE: &str = r#"{"data":{"binding":{"action":"toggle-fullscreen","combo":"mod+middle","implemented":false,"kind":"action","mouse_speed":1.0,"trackpad_speed":1.5,"zoom_mouse_speed":1.0,"zoom_step":1.1,"zoom_trackpad_speed":1.0}},"ok":true,"version":1}"#;
+    // v0.20: mod+middle is fill-window; fullscreen is on mod+f only.
+    const MOUSE: &str = r#"{"data":{"binding":{"action":"fill-window","combo":"mod+middle","implemented":false,"kind":"action","mouse_speed":1.0,"trackpad_speed":1.5,"zoom_mouse_speed":1.0,"zoom_step":1.1,"zoom_trackpad_speed":1.0}},"ok":true,"version":1}"#;
     const BEGIN: &str = r#"{"data":{"dirty":false,"effects":[],"fired":null,"gesture":{"bindings":[{"action":"toggle-fullscreen","combo":"alt+3-finger-pinch-in","implemented":false},{"action":"toggle-fullscreen","combo":"alt+3-finger-pinch-out","implemented":false}],"output":1,"state":"pinch_threshold","window":null},"navigation":null,"needs_frames":false,"note":null,"trackpad":true},"ok":true,"version":1}"#;
     const UPDATE: &str = r#"{"data":{"dirty":false,"effects":[],"fired":{"action":"toggle-fullscreen","error":"action not implemented on macOS yet: toggle-fullscreen"},"gesture":{"output":1,"state":"pinch_threshold","window":null},"navigation":null,"needs_frames":false,"note":null,"trackpad":true},"ok":true,"version":1}"#;
     const END: &str = r#"{"data":{"dirty":false,"effects":[],"fired":null,"gesture":{"cancelled":false,"output":1,"state":"pinch_threshold","window":null},"navigation":null,"needs_frames":false,"note":null,"trackpad":true},"ok":true,"version":1}"#;
-    const STATE: &str = r#"{"data":{"dirty":false,"effects":[],"navigation":null,"reply":{"Ok":{"State":{"active_bookmark":null,"camera":[500.0,-400.0],"canvas_layers":[],"fullscreen":[],"layers":[],"layout":"","layout_short":"","outputs":[{"active":true,"active_bookmark":null,"camera":[500.0,-400.0],"name":"view-a","size":[1000,800],"zoom":1.0},{"active":false,"active_bookmark":null,"camera":[400.0,-300.0],"name":"view-b","size":[800,600],"zoom":1.0}],"pinned":[],"windows":[{"app_id":"app.1","id":1,"is_focused":true,"is_widget":false,"mode":"Normal","position":[300,-250],"size":[400,300],"suspended":false,"title":"fixture"}],"zoom":1.0}}}},"ok":true,"version":1}"#;
+    const STATE: &str = r#"{"data":{"dirty":false,"effects":[],"navigation":null,"reply":{"Ok":{"State":{"active_bookmark":null,"camera":[500.0,-400.0],"canvas_layers":[],"fullscreen":[],"layers":[],"layout":"","layout_short":"","outputs":[{"active":true,"active_bookmark":null,"camera":[500.0,-400.0],"name":"view-a","size":[1000,800],"zoom":1.0},{"active":false,"active_bookmark":null,"camera":[400.0,-300.0],"name":"view-b","size":[800,600],"zoom":1.0}],"pinned":[],"windows":[{"app_id":"app.1","id":1,"is_focused":true,"is_widget":false,"mode":"Normal","pid":123,"position":[300,-250],"size":[400,300],"suspended":false,"title":"fixture"}],"zoom":1.0}}}},"ok":true,"version":1}"#;
     const KEY: &str = r#"{"action":"toggle-fullscreen","character":"f","chord":"⌘F","combo":"mod+f","implemented":false,"key_code":3,"modifiers":{"command":true,"control":false,"option":false,"shift":false},"passable":true,"repeat":false}"#;
     const ATTACH: &str = r#"{"data":{"adopted":false,"background":false,"dirty":true,"effect":{"effect_id":2,"generation":2,"identity":{"birth_sec":1800000000,"birth_usec":0,"owner":null,"pid":123,"wid":2},"op":"focus_native_window","window":2},"navigation":{"animating":true,"generation":1,"output":1,"target_camera":{"x":0.0,"y":0.0},"target_zoom":1.0},"window":2},"ok":true,"version":1}"#;
     const RULE: &str = r#"{"blur":false,"border_color":null,"border_color_focused":null,"border_width":null,"corner_radius":null,"decoration":null,"focus_on_open":null,"fullscreen":true,"layer_order":null,"not_applied":["fullscreen"],"opacity":null,"output":"view-b","pass_keys":"none","pass_mouse":"none","pinned_to_screen":false,"position":null,"preserve_aspect_ratio":false,"restore_windows":null,"shadow":null,"size":null,"suspend_on_close":null,"widget":false}"#;
     // Freeze the historical placement and Command chords behind the exact reply literals.
-    let config = format!("window_placement = \"center\"\n{CONFIG}");
+    // v0.20 unbound upstream's alt+3-finger pinch fullscreen toggle; the file
+    // binds it again so the historical refusal is still exercised.
+    let config = format!(
+        "window_placement = \"center\"\n{CONFIG}[gestures.on-window]\n\"alt+3-finger-pinch-in\" = \"toggle-fullscreen\"\n\"alt+3-finger-pinch-out\" = \"toggle-fullscreen\"\n"
+    );
     let mut h = fixture(&config);
     h.ok(json!({"op":"set_platform","super":"cmd"}));
     let option = json!({"control":false,"option":true,"shift":false,"command":false});
@@ -825,7 +849,7 @@ fn a_toggle_fills_the_output_and_a_second_restores_everything_exactly() {
     let reported = state(&mut h);
     assert_eq!(
         reported["fullscreen"],
-        json!([{"id":1,"output":"view-a","app_id":"app.1","title":"fixture"}])
+        json!([{"id":1,"output":"view-a","app_id":"app.1","title":"fixture","pid":123}])
     );
     let listed: Vec<&Value> = reported["windows"].as_array().unwrap().iter().collect();
     assert_eq!(listed.len(), 1);
@@ -1458,8 +1482,8 @@ fn a_new_window_is_tucked_behind_a_fullscreen_one_and_a_ruled_one_takes_its_outp
     assert_eq!(
         inventory,
         json!([
-            {"id":1,"output":"view-a","app_id":"app.1","title":"fixture"},
-            {"id":3,"output":"view-b","app_id":"app.ruled","title":"R"},
+            {"id":1,"output":"view-a","app_id":"app.1","title":"fixture","pid":123},
+            {"id":3,"output":"view-b","app_id":"app.ruled","title":"R","pid":123},
         ])
     );
 
@@ -1683,16 +1707,16 @@ fn a_hot_corner_is_suppressed_on_a_fullscreen_output_unless_its_rule_says_otherw
 // first: upstream src/tests/fullscreen_handoff.rs.
 #[test]
 fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_window() {
-    // From fit and back. The fit frame is the usable area less the gap.
+    // From fit and back. The fit frame is the whole usable area (v0.20: edge to edge, no outer gap).
     let mut h = capable(CONFIG);
     let reply = action(&mut h, 1, "fit-window");
     deliver(
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     let fit = world(&mut h, 1);
     assert_eq!(mode(&mut h, 1), "fit");
@@ -1700,22 +1724,22 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     let rested = pose(&mut h, 1);
     let reply = action(&mut h, 1, "toggle-fullscreen");
     assert_eq!(mode(&mut h, 1), "fullscreen");
-    deliver(
+    deliver_unless_unchanged(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (USABLE.2, USABLE.3),
         "applied",
         (USABLE.2, USABLE.3),
     );
     let reply = action(&mut h, 1, "toggle-fullscreen");
-    deliver(
+    deliver_unless_unchanged(
         &mut h,
         &reply,
         (USABLE.2, USABLE.3),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     assert_eq!(world(&mut h, 1), fit);
     assert_eq!(mode(&mut h, 1), "fit");
@@ -1725,7 +1749,7 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
     deliver(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (400.0, 300.0),
         "applied",
         (400.0, 300.0),
@@ -1744,16 +1768,16 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
         &mut h,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     settle(&mut h);
     let reply = action(&mut h, 1, "toggle-fullscreen");
-    deliver(
+    deliver_unless_unchanged(
         &mut h,
         &reply,
-        (944.0, 724.0),
+        (960.0, 740.0),
         (USABLE.2, USABLE.3),
         "applied",
         (USABLE.2, USABLE.3),
@@ -1854,22 +1878,22 @@ fn fit_and_fill_survive_fullscreen_and_a_sizing_action_runs_on_the_restored_wind
         &mut plain,
         &reply,
         (400.0, 300.0),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     let fitted = world(&mut plain, 1);
     let mut h = capable(CONFIG);
     entered(&mut h);
     let reply = action(&mut h, 1, "fit-window");
     assert_eq!(fullscreen(&mut h, 1), Value::Null);
-    deliver(
+    deliver_unless_unchanged(
         &mut h,
         &reply,
         (USABLE.2, USABLE.3),
-        (944.0, 724.0),
+        (960.0, 740.0),
         "applied",
-        (944.0, 724.0),
+        (960.0, 740.0),
     );
     assert_eq!(world(&mut h, 1), fitted);
     assert_eq!(mode(&mut h, 1), "fit");
@@ -3391,13 +3415,15 @@ fn readback_an_exit_the_window_never_answers_leaves_the_slot_free() {
     assert_eq!(world(&mut h, 1), rect(START.0, START.1, USABLE.2, USABLE.3));
     h.ok(json!({"op":"focus","window":2}));
     let reply = action(&mut h, 1, "grow-window right");
+    // v0.21: `resize_step` (20) is in screen px and the view is at zoom 0.5,
+    // so the step covers 40 canvas px (canvas_step).
     deliver(
         &mut h,
         &reply,
         (200.0, 100.0),
-        (220.0, 100.0),
+        (240.0, 100.0),
         "applied",
-        (220.0, 100.0),
+        (240.0, 100.0),
     );
 }
 

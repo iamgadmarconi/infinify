@@ -322,14 +322,64 @@ status line and chooser unchanged.
   it says which is missing, has an Allow… button for each (the request to
   macOS, then the matching pane of System Settings, from that click only),
   Relaunch and Quit, looks again once a second, and opens the canvas by itself
-  as soon as both are there. Stage Manager on holds the launch at the same
-  window ([Limits of desktop mode](#limits-of-desktop-mode)). macOS gives Screen Recording only to a process
+  as soon as both are there. Stage Manager is no part of that check: the run
+  switches it off itself ([Stage Manager and window tiling are off](#what-a-normal-run-is)
+  below). macOS gives Screen Recording only to a process
   started after the grant, so the window says so and Relaunch starts the run
   again: the same executable with the same arguments, in the same process,
   after the usual cleanup, so a run started by the login item stays the login
   item's. A saved scene that could not be loaded is shown in the same window
   with Quit alone. Autostart commands run when the canvas opens, not while this
   window is up, so a relaunch does not start them twice.
+- **Stage Manager and window tiling are off while the canvas is open.**
+  macOS moves windows by itself in two ways that fight a canvas that places
+  them: Stage Manager shrinks every window outside the current stage into a
+  thumbnail in its strip, and window tiling snaps a window dragged or
+  resized to an edge to half or the whole of the screen. When a normal run
+  opens its canvas (not `--windowed`, `--manual`, `--only-pid` or the demos) it
+  writes `false` to four keys of `com.apple.WindowManager`: `GloballyEnabled`
+  (Stage Manager), `EnableTilingByEdgeDrag`, `EnableTopTilingByEdgeDrag` and
+  `EnableTilingOptionAccelerator` (the three window-tiling drag switches of
+  Desktop & Dock: the side edges, the top edge and the Option key).
+  `EnableTiledWindowMargins` is left alone: it only sets the gap between tiled
+  windows. The write is `CFPreferencesSetAppValue`, as `defaults write` does,
+  and WindowManager follows it live: nothing is restarted, and in particular
+  not the Dock, whose helper the compositor needs
+  (`native/desktop/system-takeover.m`, a translation of Sunlight's takeover
+  preferences, see its header for the functions and lines).
+  - **Before the first write**, the originals of the four keys are read and
+    written atomically (aside, fsync, rename) to
+    `~/Library/Application Support/Infinify/window-prefs-snapshot.plist`; a key
+    that was absent is recorded as absent and removed again at the end, never
+    defaulted. Each write is read back. If one does not stick (a managed
+    preference, for one) every key written is put back, the file is removed
+    and the run goes on with the settings as they were, with one line on
+    stderr that says so. Stage Manager then is a note like any other run's.
+  - **At every orderly end** the originals go back, after the canvas is gone
+    and every window has been returned (so none is still parked or scaled when
+    Stage Manager comes back on): the quit action and `msg action quit`, the
+    exit chord, SIGTERM, SIGINT and SIGHUP, a log out (AppKit's quit), a
+    relaunch, and `exit()` from anywhere else. One line on stderr names the
+    values put back. Run in the guest: `msg action quit`, SIGTERM, SIGHUP,
+    SIGINT and an AppleScript quit; the exit chord, a real log out, a relaunch
+    and an `exit()` reach the same code and were not run.
+  - **A run that did not end** (`kill -9`, a crash, a power cut) leaves the
+    file and the keys as the run set them. The next normal launch puts the
+    file's originals back first, as soon as it holds the single-instance lease
+    and before it asks for any access, and takes over again when its canvas
+    opens. Should some key not come back, the old file stays and is what the
+    new takeover keeps as the originals, so a second crash cannot make the off
+    values look like the user's.
+  - **What the user changes while the run is up is theirs.** The end writes an
+    original back only to a key that still holds the `false` the run wrote. A
+    key the user switched back on in System Settings or Control Centre, or
+    removed, stays as they left it and is named on stderr. Stage Manager
+    switched on under the open canvas is not switched off again: it is named
+    once on stderr, with what its windows will look like, and the run goes on.
+  - Nothing here is a setting of Infinify's: there is no config key to leave
+    the user's settings alone; use `--windowed`, `--manual` or `--only-pid`
+    for that. Tiling a window by hand (Window menu, keyboard shortcuts)
+    is not one of these four switches and is untouched.
 - **Status notes go to stderr.** What the status line used to flash ("Bookmark
   2 saved", "Zoom limit reached", a refused shortcut, a window that was not
   adopted, `Windows are not managed: …`) is written to stderr, one line each,
@@ -391,6 +441,9 @@ status line and chooser unchanged.
 - `login-item on | off | status`: see below. Handled before AppKit starts, like
   `msg`: no window, no privacy grant.
 - `--demo*`, `--owned-resize-*`, `--source`: unchanged.
+- `--windowed`, `--manual`, `--only-pid` and the demos never write Stage
+  Manager or window-tiling settings ([What a normal run
+  is](#what-a-normal-run-is)); a normal run does, while its canvas is open.
 
 ### Installed, signed, started at login
 
@@ -441,6 +494,56 @@ A run started by launchd has launchd's environment and no terminal:
 [CONFIG.md](../../crates/desktop/CONFIG.md#started-at-login) says what that
 changes for the config path, `exec-terminal`, `PATH` and relative paths.
 
+### Compositor mode at login, and Dock restarts
+
+These are for the owner to run; the commands below are the whole surface. The Dock helper
+(native presentation of the real windows, the `native-desktop` path) is no longer only an
+owner-run terminal command with an interactive `sudo` per load. The design, the launch
+daemon and its checks are in
+[native/privileged/README.md](../privileged/README.md#launch-daemon-login-start-and-dock-reload);
+what the app does is:
+
+1. `~/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop enable` (a build signed
+   with a team identity, installed with `scripts/install-app.sh`). It runs the launcher's
+   read-only `--check`, registers the launch daemon with `SMAppService`, opens System Settings >
+   General > Login Items & Extensions for the owner's one approval, waits for it (up to three
+   minutes), checks the daemon answers this app, records compositor mode as the login default in
+   `~/Library/Application Support/Infinify/native-desktop/login.plist`, and registers the login
+   item if it was not on. The login item's program is `Infinify login-start`, which starts compositor
+   mode (`launch.sh --login`: no terminal, the launch daemon loads, the app is exec'd) when that
+   record exists and capture mode as before when it does not. `login-item on` and `off` still manage
+   only the registration of that item.
+2. While compositor mode runs with the daemon on, the app watches the Dock (`dock-reload.m`). A Dock
+   that restarts takes the payload with it; the app notices the new Dock, waits 1.5 s, runs the
+   bundled launcher's `--reload` (the same recovery-aware logic as a manual start: journal handoff from
+   the retired Dock, same boot session, no prompt) and hands the new helper's runtime and nonce to the
+   native presenter, which reconnects with its usual authenticated audit and puts the windows back.
+   Until then it says `Native presentation lost; restoring and reconnecting`, as before. A Dock
+   restart during or within a minute of a load is a strike; at three in a row the app stops loading for
+   this payload digest, remembers that across launches in `auto-reload-paused.plist`, prints why and
+   quits with status 0 (so the login item is not restarted; the restarted Dock had reset the windows' transforms, so they are drawn at the screen's top-left corner until a by-hand run restores them from the journal).
+   Running `Infinify native-desktop` by hand, or `enable` again, lifts the pause. A new build (another
+   payload digest) is not paused.
+3. `native-desktop status` prints whether compositor mode is the login default, the login item, the
+   launch daemon, whether automatic reload is paused, and the launch record (a pending marker is
+   reported as such: the launcher never loads over one). The launcher's login-time output is
+   `~/Library/Application Support/Infinify/native-desktop/login.log`.
+4. `native-desktop disable` removes the record and any pause, unregisters the daemon and, if `enable`
+   had registered the login item, unregisters it too (which ends the instance launchd started); it
+   leaves a login item the owner had turned on before. It stops no instance started by hand and
+   deletes no launch record, runtime or journal.
+
+What the app's stderr does under the login item: the launcher redirects its own output to `login.log` before it execs the app, so the
+app's one-line notes (`Native presentation lost`, `The Dock restarted`, `Dock payload reloaded`, `Native presentation reconnected`, the
+pause) land in that file too. A Dock restart leaves the windows at the top-left corner for about five seconds before they are back
+where the canvas put them. What was run, and what was not, is in
+[native/privileged/README.md](../privileged/README.md#what-was-run): the guest, never the owner's Mac.
+
+Ad-hoc builds carry no daemon property list and cannot enable this; they keep `native-desktop` in a
+terminal with `sudo`. Everything the launcher refused before it still refuses: an unknown or pending
+earlier load, a schema-2 journal, a different boot session's journal, a live earlier Dock, a payload
+that differs from the bundle.
+
 ### What changes for someone who used the previous build
 
 - No toolbar: Home, Fit, the zoom buttons, Center, Previous and Next are their
@@ -489,20 +592,26 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
   line for each such press and each native focus request, and one every two
   seconds that says how the canvas is keeping up
   ([the frame line](#managing-only-named-processes)).
-- **Stage Manager has to be off.** With it on, macOS keeps only the current
-  stage's windows at their size and scales every other window into a
-  thumbnail in its strip. The window's bounds, its picture and the place a
-  click has to go are then the thumbnail's, and every application switch
-  swaps which windows that is. This was seen on the first runs on real
-  windows (2026-10-10): tiles blurred and still, clicks that did nothing, a
-  capture size that swung between about 150 by 170 and the window's own. A
-  normal launch therefore reads `com.apple.WindowManager` `GloballyEnabled`
-  and, while it is on, shows the small window with that said and a button
-  that opens Desktop & Dock; it never writes the setting, and it opens the
-  canvas as soon as it is off. Switched on under a running canvas it is named
-  once on stderr and the run goes on. `--windowed` and `--manual` launches
-  are not held. That the canvas works on real windows with it off has not
-  been observed yet.
+- **Stage Manager and window tiling are switched off by the run, not asked
+  of the user.** With Stage Manager on, macOS keeps only the current stage's
+  windows at their size and scales every other window into a thumbnail in its
+  strip. The window's bounds, its picture and the place a click has to go are
+  then the thumbnail's, and every application switch swaps which windows that
+  is. This was seen on the first runs on real windows (2026-10-10): tiles
+  blurred and still, clicks that did nothing, a capture size that swung
+  between about 150 by 170 and the window's own. Until 2026-10-29 a normal
+  launch only read `GloballyEnabled` and held at the small window until the
+  user had turned it off; it now writes the setting itself, together with the
+  three window-tiling switches, for as long as its canvas is open, and puts
+  the user's settings back ([the bullet above](#what-a-normal-run-is) has the
+  rules; [What was run for the settings takeover](#what-was-run-for-the-settings-takeover)
+  has the evidence). `--windowed`, `--manual` and `--only-pid` launches are not
+  held and do not write. Not established: anything on a physical Mac (the
+  evidence is the disposable macOS 27.0.1 guest), on the owner's Mac or on
+  macOS 26; a Mac that sets these keys through a configuration profile
+  refuses the write, and then the run goes on with the settings as they were
+  and says so (that path is covered by the substituted-store regression only,
+  not by a managed Mac).
 - **A window on another desktop (Space): addressed, never run.** A window
   left on a desktop that is not the one shown is in no Accessibility list, so
   a click on its tile used to do nothing (`native focus … outcome=missing_window`,
@@ -549,6 +658,30 @@ changes for the config path, `exec-terminal`, `PATH` and relative paths.
 - **macOS keeps its own gestures and corners.** Mission Control, the system's
   hot corners and the Dock still answer where they did; Infinify changes no
   setting.
+- **The volume, brightness and media keys are macOS's and every tap keeps off
+  them** (owner report of 2026-10-29, build c49eae1 on a MacBook with macOS
+  27.2: "brightness, volume, media control buttons don't work"; the config
+  skips the `XF86Audio*` and `XF86MonBrightness*` rows on purpose, so macOS is
+  meant to keep them). The top-row keys of a Mac laptop are no key events: they
+  arrive system-defined (`NX_SYSDEFINED`, event type 14, subtype 8, an aux
+  control button, `data1 = key<<16 | state<<8`), unless "Use F1, F2, etc. keys
+  as standard function keys" is on (`com.apple.keyboard.fnState`; it was
+  absent from the owner's Mac when read, the default, so the owner's keys are
+  the system-defined kind). Cause, reproduced in the guest: the annotated
+  session tap (`DWNativeInput`) asked for every event type, and an *active*
+  tap at the annotated location makes macOS ignore these keys although the
+  callback returns the very event it was given. It is not the callback's work
+  (a bare tap that returns the event without looking at it fails the same
+  way) and not the Dock helper (capture mode failed the same way). The tap now asks for the
+  pointer, scroll, tablet and gesture types it acts on and nothing else
+  (`DWNativeInputAnnotatedMask`, `native/desktop/native-input.m`); the
+  [measurements](#what-was-run-for-the-media-keys) are below. Other taps were
+  not the cause: the global trackpad, early title, Dock-control, navigation
+  (listen-only) and hot-key taps never ask for types 13 or 14. Left as it was:
+  `F3` (keycode 99) is taken by the default `F3 = zoom-to-fit` binding while
+  Infinify runs (in the guest it reached the annotated location without
+  Infinify and not with it); keycode 160 (the Mission Control key, which the
+  hot-key tap maps to F3) and F11 never reached it even without Infinify.
 - **A status text made of several notes is one line more.** Where the status
   line would have shown a summary (`Shortcut unavailable: X (+1 more)`) or two
   notes joined by ` · `, that text is written after its parts: a launch with
@@ -734,6 +867,172 @@ corners at the display's corners, the quit at log out,
 `scripts/install-app.sh`, `login-item on` and `off`, the LaunchAgent under
 launchd, a restart after a crash, and signing with a real identity.
 
+### What was run for the media keys
+
+2026-10-29, in the disposable guest only (UTM, macOS 27.0.1 (26A434), SIP off,
+Apple virtual sound device), never on the owner's Mac; Infinify c49eae1 for
+the failures, the same tree plus the mask change for the fix. Keys were
+posted as the HID system posts them: an `NSEventTypeSystemDefined` event,
+subtype 8, `data1 = key<<16 | 0xa<<8` then `0xb<<8`, through
+`CGEventPost(kCGHIDEventTap, …)` from a throwaway probe. Volume was set to 50
+and read back with `osascript` (`output volume of (get volume settings)`),
+three presses of volume up, 160 ms apart: 69 means all three registered.
+
+| Run | Result |
+|---|---|
+| Infinify not running: up x3, down x2, mute, mute | 69, 56, muted, unmuted |
+| c49eae1, compositor mode (`native-desktop`), at rest | 50 after up x3, down x2 and mute: nothing registered |
+| c49eae1, capture mode (`open Infinify.app`), at rest | the same: nothing registered |
+| Throwaway debug build with an environment switch per tap | all taps off; or only the hot-key, Dock-control, navigation, multitouch or early tap on; or all on but the annotated and early pair: keys worked. Annotated tap on, early on or off: nothing registered |
+| Bare pass-through tap, annotated location, mask = type 14 only | nothing registered; the same at the plain session tap and at the HID tap: 69 |
+| Same, annotated location, key types only; every type but 14 | worked once each (the latter lost a step in later runs, see next row) |
+| Bare tap, annotated, every type but 14 and the keys | 10 of 12 bursts registered all three presses (5 of 12 when the callback also made an `NSEvent`) |
+| Bisect of that mask by type groups | type 13 (AppKit-defined, which macOS posts as the volume moves): 12 of 16; types 15, 16, 17: 16 of 16 each; groups {0, 8, 9}, {19, 20, 21}, {28, 31}: 12 of 12 each; the pointer, scroll, tablet and gesture types: 12 of 12 |
+| Fixed build, compositor mode, mask `0x6fc000fe` (read back from the live tap list) | up x3, down x2, mute, unmute all worked; 24 of 24 bursts at rest and 24 of 24 within 0.2 s of a click |
+| Fixed build, capture mode | the same sequence worked; 24 of 24 at rest and 24 of 24 after a click |
+
+An earlier fix that left type 13 in the mask still lost a step in 8 of 24
+bursts with Infinify running (none in 24 without it), which is how type 13 was
+found. F1 to F12 and keycode 160, posted as key events with and without the Fn
+flag and watched by a listen-only tap at the annotated location, arrived
+identically with Infinify not running, with c49eae1 and with the fix, except
+F3 (99), which the `F3 = zoom-to-fit` binding takes whenever Infinify runs,
+and F11 (103) and 160, which did not arrive even with Infinify not running.
+`tests/e2e/native-input-policy.sh` (in-memory, no tap and no posting) holds 26
+aux packets (13 keys, down and up) and 52 function-key packets (13 keycodes,
+with and without Fn, down and up) untouched through the annotated, early and
+global handlers with no consumer asked, and the annotated mask equal to
+exactly the pointer, scroll, tablet and gesture types; with the old all-events
+mask it fails.
+
+Not established: that the owner's physical keys behave as the posted ones (no
+physical key and no virtual HID keyboard was available in the guest:
+`IOHIDUserDevice` needs an entitlement macOS kills an ad hoc binary for);
+macOS 27.2 itself (the guest is 27.0.1); the effect of brightness, keyboard
+backlight, play, next and previous (a VM shows no brightness and has no player,
+so only volume up, down and mute were observed to act, and the others rest on
+being the same event type and the same mask); that a pinch still reaches the
+annotated tap's fallback path through types 29 and 30 (no trackpad; the
+global tap's path owns pinch as before, and the types are the ones it uses).
+In the guest the tap list reported the latency of the last pointer event
+through the active annotated tap anywhere from 167 microseconds to 3.5
+seconds (the host was also running other builds); that was seen, not
+investigated, and the bare-tap runs above show it is not what stopped the keys.
+
+### What was run for the settings takeover
+
+2026-10-29, a disposable UTM guest (macOS 27.0.1, 26A434, one 2023x1250-point
+display, `admin` logged in at its console), build of this tree
+(`target/app/Infinify.app`, executable sha256 beginning `363073834c6e876c`,
+deployed with `vm-tools/deploy`). The guest started, and was left, with Stage Manager off
+(`GloballyEnabled` 0) and the edge-tiling keys on (1), as the owner's Mac has
+them. Input was real HID events posted with `CGEventPost(kCGHIDEventTap, ...)`
+from the guest's SSH session (a small scratch tool, not kept in the tree: mouse
+down on a Finder window's title bar, 40 drag events to the display's left edge
+at x = 0 with a delta of -4 pushed against it for 1.5 s, mouse up; the drag
+tiles only when the events carry deltas). Evidence logs and screenshots are in
+`target/evidence-takeover/` (not committed).
+
+- **What makes WindowManager follow the keys: only the preference write.**
+  No restart and no notification: WindowManager's process id was 965 before
+  and after the writes.
+  - With the three tiling keys on, the left-edge drag of a 700x500 Finder
+    window at (300, 250) ended as `7,38 999x1114` (the left half), a top-edge
+    drag as `8,38 2007x1114` (the whole screen) and an Option-held left-edge
+    drag as `7,38 999x1114`.
+  - All three keys written `false` with `defaults write`, two to three
+    seconds before the drag: the left-edge drag left the size at 700x500 and
+    the window where the pointer took it (`-480,579`), the top-edge drag
+    left it at `300,30 700x500`, and the Option drag did not tile. Written
+    `true` again, the same drag tiled again, without a restart.
+  - Which key does what, one at a time: `EnableTilingByEdgeDrag` off alone
+    changes nothing (left, top and Option drags all still tile), and so do
+    `EnableTopTilingByEdgeDrag` off alone and `EnableTilingOptionAccelerator`
+    off alone. With the accelerator on and the other two off, all three drags
+    still tile. With the edge key and the accelerator off and the top key on,
+    only the top-edge drag tiles; with the top key and the accelerator off and
+    the edge key on, the left and the Option drags tile and the top-edge drag
+    does not. So all three have to be written, which is what the run does.
+  - Stage Manager: with the Finder window in front, `defaults write ...
+    GloballyEnabled -bool true` turned the Calendar window into a thumbnail in
+    the strip within 4 s (a WindowManager window of 130x106 at `9,587`), and
+    `false` brought it back to `326,360 1140x598` within 4 s, with the same
+    WindowManager process.
+- **Capture mode** (`open ~/Applications/Infinify.app`, stderr in a file):
+  after 9 s the canvas was open with the Finder window on it; the three tiling
+  keys read 0, `GloballyEnabled` stayed 0 (it already was), the snapshot file
+  held `true`, `true`, `true`, `false` for the keys in the order edge, option
+  accelerator, top edge and Stage Manager, and stderr said `Infinify: Stage
+  Manager and window tiling are off while it runs (were: GloballyEnabled=0
+  EnableTilingByEdgeDrag=1 EnableTopTilingByEdgeDrag=1
+  EnableTilingOptionAccelerator=1); they go back when it ends`. `msg action
+  quit` ended it: the keys read 0, 1, 1, 1 again as before, the snapshot file
+  was gone and the last stderr line was `Infinify: put back Stage Manager and
+  window tiling (...)`; a left-edge drag after the quit tiled the Finder window
+  again (`7,38 999x1114`). A drag on the open capture canvas moved neither the
+  world window nor the real one (the real window stayed at `300,250`), so in
+  capture mode the drag cannot tell tiling off from tiling on; the evidence
+  that tiling is off there is the keys and the compositor run below.
+- **Compositor mode** (`run-native`, which needed `killall Dock` first
+  because the Dock payload of the guest differed from this bundle's): the same
+  keys and snapshot file, the same stderr line. With the keys off, the title
+  bar of the real Finder window (shown at `662,390 700x500`) dragged to the
+  left edge through the compositor ended at `49,723 700x500`: moved, not
+  tiled. The control, in the same run: the three keys written `true` by hand,
+  the same drag from the new title bar ended at `369,178 999x1114`, a left-half
+  tile, and the compositor's world rectangle for the window followed to 999x1114.
+  The keys were written `false` again by hand before the quit. `quit-native`:
+  keys 0, 1, 1, 1, snapshot file gone, the window back at its own frame
+  (`300,250`, now 999x1114 from the tile), stderr `put back ...`.
+- **Stage Manager on first** (compositor mode): `GloballyEnabled` 1 with a
+  Calendar window in front and the Finder window a thumbnail in the strip
+  (89x96). Sampled every 0.25 s from the launch: at 0.27 s Stage Manager was
+  still on, at 0.93 s `GloballyEnabled` read 0 and the Finder window had left
+  the strip (682x488, mid-transition), and by 1.63 s it read `-570,83 1000x1114`, the size the
+  earlier compositor run had left it at. About 23 s after the launch the canvas held both windows at their real sizes
+  (Calendar 1140x598, Finder 999x1114, no strip), and the snapshot file held
+  `GloballyEnabled` `true`. `quit-native`: `GloballyEnabled` 1 again, the Finder
+  window a thumbnail in the strip again, snapshot file gone, the Calendar window
+  at `326,360 1140x598`; the `put back` line is the last one in the log, after
+  native presentation had ended (the order is the code's, not separately timed).
+- **`kill -9`** (capture mode): after the kill the keys still read 0, 0, 0
+  (the three tiling keys) and the snapshot file was byte-identical to the one
+  saved at launch. The next launch printed `Infinify: put back Stage Manager
+  and window tiling (...)` and then the takeover line, the keys read 0 again
+  and the file was byte-identical (`cmp`) to the first one. A second kill and a
+  third launch did the same. `msg action quit`: the originals, exactly, and no
+  file.
+- **Other ends** (capture mode, one launch each): SIGTERM, SIGHUP, SIGINT and
+  an AppleScript `quit` (AppKit's own quit, the path a log out takes) each
+  ended the process and left the keys at 0, 1, 1, 1 with no snapshot file.
+  A real log out was not run.
+- **A key the user changes while the run is up:** with the canvas open,
+  `GloballyEnabled` written `true` by hand, the run printed once `Stage Manager
+  was switched on again while Infinify runs: ...`, and `msg action quit`
+  left `GloballyEnabled` 1 and put the three tiling keys back, with `put
+  back ... ; left as you set them: GloballyEnabled`.
+- **A launch that must not touch the settings:** a second `Infinify` while one
+  runs printed `another Infinify already owns ...infinify.sock` and left the
+  keys and the file alone; `--windowed 1100x700 --state ... --socket ...` left
+  the keys alone and wrote no file.
+- **The regression, `tests/e2e/system-takeover.sh`** (47 checks, no
+  preference of the host's is read or written): the file exists before the
+  first write; absent keys come back absent and an integer and a bool come
+  back as such; engage and restore twice change nothing; a leftover is put
+  back first and its originals are kept through two crashes in a row, and
+  through a leftover that cannot be put back; a refused write, at each of the
+  four positions and with an undo that is refused too, or a snapshot that
+  cannot be saved, leaves nothing changed; a user's own change is kept; an
+  unreadable file is set aside. Five mutants of `system-takeover.m` (restore
+  over the user's change, no undo, no file before the first write, an absent
+  key defaulted, a file left after a failed takeover) each failed it.
+
+Not run: a physical Mac or the owner's M5 Pro, a physical trackpad or mouse, a
+managed-preferences profile, macOS 26, a real log out, the exit chord, the
+login item's restart after a crash, a second display, and a user dragging
+through macOS's own tiling preview with a real mouse (the posted events
+reproduce tiling, but a hand's drag was not compared).
+
 ## Controls
 
 A normal run has no toolbar, no status line and no button: everything below
@@ -753,6 +1052,10 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   canvas opened this way manages no window. The chooser stays open above the
   canvas. A run that manages windows by itself has no chooser: a window it did
   not take, or one whose capture failed, cannot be added by hand there.
+- Volume, brightness, media and keyboard-backlight keys: macOS's, never taken
+  or delayed by any Infinify tap, in every mode ([Limits of desktop
+  mode](#limits-of-desktop-mode)). They are not bindable: the `XF86Audio*` and
+  `XF86MonBrightness*` rows of the default table stay inert.
 - Close and suspend: Control-Option-Q (`close-window`) asks the focused window's
   application to close it, by pressing that window's own close button through
   Accessibility; on a focused placeholder it dismisses the placeholder.
@@ -892,7 +1195,11 @@ is a line on stderr ([Desktop mode](#desktop-mode)).
   The app's underlying native frame stays fixed during that gesture. Traffic-light
   controls, document proxies and content keep their native input. Title recognition
   needs fresh Accessibility geometry; custom or ambiguous title layouts remain
-  with their application and have not been validated for transformed dragging.
+  with their application. A press left to the application on a transformed window
+  that the application then turns into its own window drag (the native frame moves,
+  its size does not) is taken over at that first packet and continues as the same
+  world-move gesture from the press point
+  ([Dragging, resizing and context menus of a transformed window](#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper)).
   Finder's measured search-scope header below its toolbar also uses this gesture
   when its exact Accessibility structure is recognized. Its scope controls,
   Save button and filter toggle remain native. Physical Finder drags at 75% and
@@ -1962,9 +2269,11 @@ move was diagnostic; production handoff does not write native origins.
 
 The handoff implementation adds negotiated `FRAME_SPACE` requests. The presenter
 resolves each exact physical viewport to its active ordinary Space, includes it
-in placement acknowledgement correspondence, and parks roots whose display or
-complete family audit is unavailable. Withheld, parked and released records do
-not request a Space move. The helper admits transfers only between active
+in placement acknowledgement correspondence, and parks roots whose display is
+unavailable. A root whose complete family audit is unavailable is not parked: it
+keeps its placement and requests no Space move until the family is audited again
+(see "A root whose family cannot be read" below). Withheld, parked and released
+records do not request a Space move. The helper admits transfers only between active
 ordinary Spaces on distinct physical displays, journals original membership
 before moving, and checks membership before acknowledging placement. It retains
 the original Space for restoration, including when a parent move carries a
@@ -2647,7 +2956,11 @@ frame (one frame is made for several declines together) and retired by any answe
 helper holds nothing of is a no-op, and one for a window the presenter already binds is never queued. A child
 of a managed root (the TextEdit *Save* sheet) is placed by the family reconciliation (in an earlier run, before the
 helper stopped veiling windows below alpha 1, it was veiled and placed 9 ms after the announcement); `-windowAppeared:` hands such a window to that path and does not
-decline it.
+decline it. `-windowNotAdopted:` (the manager's decline of a window it does not take for a window of its own: a hover card, a completion
+list) does the same when the window is, by the window server's own parent chain (`DWNativeWindowBelongsToRoot`), a member of a root that is placed: it asks
+for a family reconciliation and releases the helper's veil for that window only 250 ms later (`DWFamilyChildGrace`), if nothing has placed it by then; the
+presenter refuses a release for a window it has bound, so one the family placed meanwhile is never released. Before, such a window was released as soon as the manager
+declined it (125 ms after the window server's announcement in one Chrome run), to be shown where the application put it.
 
 (Meter caveat: a meter that reads a window's transform before its alpha can report a visible window at its old scale that never existed, because
 its two reads straddle the helper's transform write and the alpha write 0.1 to 0.5 ms after it. The meter used for the integrated build's
@@ -2670,6 +2983,270 @@ fade-in still shows at native size for about 22 ms before it is placed; a Dock e
 (a veiled window stayed at alpha 0 after `killall Dock` until the launcher's recovery handoff restored it); these runs
 are meter readbacks, not optical capture, and a frame actually reaching the display was not observed. See
 [`native/privileged/README.md`](../privileged/README.md#arrival-veil) for the helper's rules and tests.
+
+#### Dragging, resizing and context menus of a transformed window (full-desktop Dock helper)
+
+The owner's first compositor-mode run (build `c49eae1`, real Mac) reported windows that jump when dragged and when resized,
+and a Finder window that vanished under a right-click menu. This section is what was measured in the macOS 27.0.1 guest
+(the owner's `com.apple.WindowManager` tiling settings, Stage Manager off) with real HID events posted by a small CGEvent
+program at `kCGHIDEventTap` and read-only probes of `SLSGetWindowBounds`, `SLSGetWindowTransform`, the window list and
+`msg state`, and what changed. Evidence (JSON lines and screenshots) is under `target/interact/evidence/` of the working
+tree, which is not committed.
+
+**Which presses reach the application.** A window the helper has transformed is drawn at a rectangle that is not its native
+frame. The early session tap claims a press only where Accessibility confirms chrome (title region, green button) or the
+canvas resize border; every other press is the application's, and `nativeMouseOwnershipChanged:` only records it (the window is
+withheld from helper frames until the release settles). In the guest, `DWNativeDecorationButtons` accepted TextEdit, Safari
+and Calendar (`accepted`, `accepted_unified_toolbar`) and refused Ghostty 1.4.0 (`child_geometry_or_owner`, the same family of
+refusal as the owner's Ghostty `toolbar_root_geometry_or_owner` and Aside `missing_top_toolbar`). Inside an accepted
+toolbar the exclusion rectangles (controls, and groups to the extent of their children, see "Toolbar groups" below) are also native: a press at
+a Safari toolbar point reported as `native_control` went to Safari. (At `c49eae1` a group was excluded whole.)
+
+**What macOS does with a native window drag of a transformed window** (unchanged `c49eae1`, guest, drag of 300 points):
+
+- Ghostty at zoom 1, drawn at (611,309) with native frame (0,528): after the first drag packets the window list reports the
+  window at its native place under the pointer; the release puts the helper's transform back and the window is drawn at
+  (934,233), 342 points away from the pointer that ended at (591,473) (`evidence/base-344-z1.0.jsonl`); the log says
+  `native mouse owner window=#344 end=adopted displayed origin`, and the world position moved by the displayed displacement
+  (+323,-76) instead of the pointer's (-300,+150).
+- Ghostty at zoom 0.5, drawn 401x317 at (811,474): while the button is down the window list reports 800x632 at the native place
+  (full size); after the release it is drawn 400x316 at (1161,549) with the pointer at (801,556)
+  (`evidence/base-344-z0.5-fine.jsonl`). A drag that held the button for seconds after moving the pointer 100 points
+  left and 60 down moved the drawn window 5 points left and no points down
+  (`evidence/base-ghostty-z0.5-held-mid.png`).
+- Safari at zoom 0.5, pressed at a toolbar point refused as `native_control`: the native frame moved from (574,189) to
+  (1230,599) and the window ended drawn at (1945,980) with the pointer at (1460,607) (`evidence/base-title-343-z0.5.jsonl`).
+- TextEdit and Calendar pressed at an accepted title point (zoom 1 and 0.5): no native motion; the window followed the pointer
+  within 13 points during the drag (a frame's lag) and was where the pointer left it afterwards.
+
+So WindowServer's own title drag starts from where the window is drawn, not from its native frame, and the transform is
+re-applied relative to the moved frame when the button comes up: the drawn window leaves the pointer, and adoption of the
+displayed displacement then moves the world window to the wrong place. macOS tiling reads the native place, which is not the
+drawn one (the owner has since turned tiling off and the jumps remain, so tiling was not the cause).
+
+**Takeover** (`-[Desktop takeOverNativeDrag:event:]`, `-[DWNativeInput takeNativeButton:]`, `native-drag-takeover.h`). A press that was
+left native on a transformed root and then shows the native origin moving with an unchanged extent, with more than 4 points of
+pointer travel, is the application's own window drag (`DWNativeWindowDragStarted`). The first such drag packet takes the pair over: the
+controller begins a window drag from the press point (`begin_drag`), the physical button becomes the canvas's (that packet and every later
+one are swallowed and offered to the same consumer as a recognized title press), the native mouse owner ends without adopting anything,
+and the window moves by the pointer from the press point exactly as after a recognized title press (`gesture_to`). Two measured facts
+shaped it, both found by trying the obvious version first:
+
+- WindowServer's drag is not driven by the events the taps see. With the tail swallowed, the native window (and, below zoom 1, its
+  full-size picture) kept following the pointer. One release posted at the HID tap ends it (`CGEventPost` of a left-up from a
+  private event source, carrying the source's lifetime tag, which both taps let through); posting the release to the
+  application alone with the window number, the route a forwarded click takes (`SLEventPostToPid`), did not end it.
+- That release also clears AppKit's combined button state while the finger is still down, so `-endLostInput` ended the taken-over
+  gesture 50 ms later as "A button release never arrived", after a few points of motion. A gesture marked `takenOverAt` is now
+  left to the tap while `-[DWNativeInput holdsCapturedButton:]` says it still owns the physical pair (bounded at ten minutes).
+
+Resizes (the extent changes), content drags (no native motion), an identity placement (drawn where it is natively) and anything whose
+binding, camera, zoom, output or generation changed since the press stay native. No region of the window is guessed: a press is
+taken over only when the application itself starts moving the window, so tab drags, text selections and scrollbars that never move the
+native frame are untouched. The packet that shows the motion has already reached the application, so up to a frame of native motion
+can still be seen before the window is back under the pointer.
+
+**Restore after a native-origin move** (lane "restore", macOS 27.0.1 guest `vm2`, 1920x1200-point display, `INFINIFY_DEBUG=1`, real HID events,
+the helper and shell of this change unless "unchanged" is said; evidence under `target/restore/` of the working tree, not committed). The takeover above
+lets WindowServer's own title drag move the native frame before the shell takes the pair over, so the native frame of a window dragged that way ends
+elsewhere than it started. Ghostty, zoom 1: native frame `(601,417)` before the first drag in the unchanged build, `(494,399)` after it; in the fixed
+build the next zoom-1 drag read `native=301,254 drawn=301,254` at the takeover (`(494,399)` before the press) and `(299,255)` after, and the zoom-0.5
+drag `native=628,428 drawn=630,427` and `(627,428)` after. The shell does not move it back (below). What broke was the quit: the helper wrote back the
+transform captured at the first touch, `[1,0,0,1,-601,-417]`, which draws the window at the origin it had then. Measured in the unchanged build after
+one zoom-1 Ghostty drag and `quit-native` (`target/restore/out/base/after-quit.txt`, acceptance check 9): Ghostty wid 151 transform `(-601,-417)`, drawn
+at `(601,417)`, native origin `(494,399)`; Safari wid 143 transform `(-40,-136)`, native origin `(41,131)` (Safari had moved its own frame by `(1,-5)`
+after launch, `native origin window=#3 ... old=(40,136) new=(41,131)`; no drag was involved). After a quit without any drag in the first run the same
+check was clean. A session started from such a window captured the stale transform as its original (read from the code; not run on the unchanged build).
+
+Root cause, and why it is in the helper rather than in the takeover: a window server transform maps the screen into the window's own space and so
+carries the window's position (`[1,0,0,1,-x,-y]` untransformed); `SLSSetWindowTransform` writes it as given, whatever the frame is (the unchanged
+build drew Ghostty at `(601,417)` with its frame at `(494,399)`), and a native move of the frame while a transform is set moved the drawn rectangle
+with it on an owned fixture window moved through Accessibility (no shell running: placed rectangle `(125,820)` became `(162,843)` for a move of
+`(+37,+23)`, `evidence/fixture-native-move-NEW-payload.json`). The frame moves for reasons the shell cannot all prevent (the application, the takeover,
+a toolbar re-layout), so the restore must not assume it did not (`native/privileged/README.md`, "Restoring a window whose native frame moved"): the
+original is re-based on the origin read at the write; a plain original (scale 1) is written as `[1,0,0,1,-x,-y]` at that origin, which also heals a
+stale one. The takeover is **not** changed to put the native frame back. Reasons: (1) with the re-based restore the quit is consistent whatever the
+frame did (below); (2) putting the frame back is the shell's first native-origin write to a foreign window (the design says "production handoff does
+not write native origins"), and the fixture measurement above says a native move shifts the drawn picture, so it would need the shell to re-assert
+the transform in the same instant or show a one-frame jump of the window under the pointer (with the shell running, a parked Ghostty moved from
+`(627,428)` to `(300,200)` through Accessibility kept its drawn rectangle at the park position at 50 ms and 1 s; whether the shell or the park state did
+that was not separated); (3) the takeover is only for applications whose title bar the shell cannot recognise. The cost: such a window reappears at its
+native frame as WindowServer left it, not at the one it had before the session.
+
+Guest results, `afterquit.sh` (acceptance check 9: every sized layer-0 window alpha 1, scale 1 and translation `-origin` to half a point; 36 windows
+read each time):
+
+| session | result |
+|---|---|
+| unchanged build: one Ghostty drag at zoom 1, quit (`out/base`) | 2 of 36 not native (Ghostty `(-601,-417)` at origin `(494,399)`; Safari `(-40,-136)` at `(41,131)`) |
+| this build, first quit over those two stale windows, no drag (`out/r1-nodrag`) | 0 of 36 (the stale originals were captured and written back native) |
+| Ghostty, Safari and TextEdit title drags at zoom 1 then 0.5 (Ghostty taken over both times), quit (`out/r2-after-drags-z1-z05`) | 0 of 36; Ghostty `(-627,-428)` at origin `(627,428)` |
+| Safari toolbar matrix and single presses (several takeovers, native frame moved by up to `(461,199)`), quit (`out/r3-after-safari`) | 0 of 36 (Ghostty there had been moved by Accessibility to `(300,200)` while parked: `(-300,-200)`) |
+| Finder presses at zoom 1 and 0.5 (`fdrive.py`), quit (`out/r4-after-finder`) | 0 of 36 |
+
+Zoom 0.5 was not run on the unchanged build for Ghostty. Not run: the owner's Mac (macOS 27.2), a second display, an application that animates its own
+frame during the quit.
+
+**Toolbar groups** (Safari's address field at zoom 0.5). The report was a press-drag on Safari's toolbar background that did not move the window at
+zoom 0.5 (4 of 4; at zoom 1, 3 of 4, the fourth in x only), with `native mouse owner window=#3 end=unchanged native click`. Reproduced on the unchanged
+build (1 of 1: press 3.5 points under the drawn top edge, 50% across, the window and its frame did not move). Accessibility reads of Safari 27.0.1's
+window (`target/restore/tools/axdump.m`): an `AXToolbar [0,0 1835x52]` whose centre child is an `AXGroup [541,0 753x52]` holding the search button
+`[547,11.5 23.5x30]` and the address field `[568,18 720x31]`; the group is the toolbar's height, its controls are not. `DWNativeDecorationButtons`
+excluded the whole group (`native title miss local=917.5,7 excluded=540,-1,755,54`), so the press went to Safari. What Safari and WindowServer then do
+depends on where the press falls, in screen points under the drawn top edge (`target/restore/tools/ymap.py`, unchanged build, 50% across, drag of
+(-60z,+30z) at zoom z; single presses unless a count is given). Zoom 0.5: 1 and 2: the displayed top-left moved by (0,+30) and nothing else (read as the
+shell's canvas resize border); 3 (once) and 3.5 (five times): nothing, `unchanged native click`; 4, 4.5, 5, 7: the window moved, by the application's own drag (taken over or
+adopted); 9: moved 3 points. Zoom 1: 2: the displayed top-left moved by (0,+17); 3 and 4: nothing; 5, 6, 7: the window moved; 8: nothing. So a band a few screen points
+under the top edge is neither a drag nor a control at either zoom, and the matrix point `native y = 7` lies in it at zoom 0.5 (3.5 points) and just
+under it at zoom 1 (7 points), which fits the 4 of 4 against 3 of 4. Why Safari and WindowServer treat that band so is not explained.
+
+Fix (`native-toolbar-extent.h`, `decorationGroupExtent` in `native-decorations.m`): a toolbar item that is an `AXGroup` is native where its children
+are, not as tall as the toolbar. It keeps its full width (a field's rounded ends and a segmented control's edges stay with the control) and its
+vertical extent shrinks to the union of its children's frames, inflated by a point like every control. Best effort inside the lookup's 0.15 s budget
+(a role and a children read per group item, a frame read per child; Safari: three groups, five children; no time left, an unreadable child, or one
+outside the group keeps the whole group native as before; the cost was not measured inside the shell, the whole-tree `axdump` of Safari took 30 to 40 ms
+including process start). The strip above Safari's address field is then the window's: the shell claims the press as a title press before the
+application sees it (`native chrome owned window=#3 kind=title`) at every zoom, with no WindowServer drag and no takeover. The log after:
+`native title miss local=917.5,14 excluded=540,10.5,755,39.5` for a press inside the field. Pure geometry is checked by `sh
+tests/e2e/native-input-policy.sh` (Safari's measured numbers, the fail-safe cases).
+
+Guest results, this build (`r3-safari-matrix.out`, `smatrix.py`; matrix of lane interact: 20%, 50%, 80% across, native y 7 and 14, zoom 0.5 and 1, two
+repetitions): the matrix point `50%, native y 7` moved the window as asked in 4 of 4 (native frame unchanged), and 8 more presses of it in a row (four per
+zoom, `rdrive.py`) moved it in 8 of 8, one at zoom 0.5 ending 19 points short in x. Of the 24 matrix presses 19 moved the window by the whole drag; of the other
+five, two were inside the address field at zoom 1 (left to Safari, window unmoved, as designed), one inside it at zoom 0.5 (moved in x only, native frame
+moved `(-3,2)`), and two were canvas-handled presses at zoom 0.5, 80% across, that moved the window in x only (native frame unchanged; the pattern
+the table above attributes to a neighbouring window's `[snap]`; not investigated). Controls were not taken at zoom 1: a press on Safari's sidebar
+button `(114,26)`, on its share button `(1734,26)` and inside the address field `(917,14)` stayed with Safari (`unchanged native click`, window unmoved); in
+Finder the title text moved the window at both zooms, and the back/forward and search buttons stayed native at zoom 1 (at zoom 0.5 they, like Safari's
+sidebar button, started a WindowServer drag that the takeover handled; the same points were excluded before, so this is not new, and was not
+investigated). No old-build comparison was run for Finder.
+
+**An unknown family parked its root** (a window that vanished for a moment while it was resized, and the Finder window under a
+context menu). Frames for the Dock helper carry, per window, either its placement or a parking transform far off every display
+(256 points beyond the displays' union). With Space frames, which the full-desktop helper uses, the presenter parked a root
+whenever its audited family report was missing (`root->familyKnown` false). That report is dropped (`-forgetChildrenOf:reason:`,
+printed once per root and reason as `native family #N unavailable: …`) whenever an audit fails: a native frame that cannot be read
+for an instant (`-[Desktop track:info:]` calls `-forgetNativeFamily:` when `DWNativeBounds` fails), a member that changed while it
+was being read (`inconsistent, duplicate or changed family member`), or a window the audit refuses, such as a popup-level context
+menu. A window is then parked, off the display, until the next audit passes. In the unchanged build the guest showed it
+during the shell's own edge and corner resizes (14 of 66 mid-drag samples had the resized window parked at the park position,
+none during title drags; `evidence/base-*resize*.jsonl`, `evidence/base-edge-*.jsonl`) and the same line
+`native family #N unavailable: inconsistent, duplicate or changed family member` appeared in its log for the Finder window after
+right-clicks. The root is now still drawn where the canvas puts it, but is not asked to change Space until a good audit again
+(`windowSpaces` is only recorded with a known family), so a lost report no longer moves a window; with `INFINIFY_DEBUG`, one
+`native park begin|end` line says when and why any window is parked. The presenter regression
+`sh tests/e2e/native-presenter-readiness.sh` now checks that an unknown family still gets the placement matrix, not the park
+matrix, and fails against the old rule.
+
+**What was run** (2026-10-29/30, macOS 27.0.1 guest, 2056x1251-point display, tiling settings as the owner's, `INFINIFY_DEBUG=1`; baseline
+is the unchanged `c49eae1` build, "fixed" is this change; real HID events at `kCGHIDEventTap`, one drag of (-120z,+60z) points in 60
+steps over 1 s at zoom z unless said otherwise; evidence in `target/interact/evidence/`, not committed). `final_dev` is how far, in
+points, the pointer ended from its press-time place in the drawn window (0: the window stayed under the pointer):
+
+| drag | baseline `final_dev` | fixed `final_dev` (largest in-drag deviation) |
+|---|---|---|
+| Ghostty, zoom 1 | 220 | 0 (2) |
+| Ghostty, zoom 0.5 | 319 | 0 (1) |
+| Safari, press 50% across its toolbar, zoom 1 | 304 | 0 (30) |
+| Safari, accepted-title point, zoom 0.5 | 1 (native frame moved; the same press in the first session ended 484 and 373 points off) | 0 (9) |
+| TextEdit, title, zoom 1 / 0.5 | 0 / (not measured, window parked by the harness) | 0 (6) / 0 (1) |
+| TextEdit, drag in the text area, zoom 1 / 0.5 | n/a | window and native frame unmoved |
+
+Two Safari toolbar presses (zoom 1 at 35% across and zoom 0.5 at 50%) did not move the window in either build: they land on a control the
+application keeps for itself. Two canvas-handled Safari presses at zoom 0.5 (20% and 80% across, native frame unmoved) ended 13 and 30
+points from the pointer in the fixed build; a neighbouring window's `[snap]` is the likely cause and was not checked. The guest ran one long hold
+at zoom 0.5 with a screenshot taken during a taken-over Ghostty drag: the window is drawn at its zoomed size under the pointer
+(`evidence/acc4-ghostty-z0.5-held-takeover.png`), not at native size.
+
+Resizes, fixed build with the same press recipe (30 cases: TextEdit, Ghostty, Safari; zoom 1 and 0.5; right, left, bottom-right,
+top-left and bottom presses at the drawn edge): the opposite edge or edges did not move in 30 of 30, no sampled instant of 360 had
+the window parked, and the moved edge ended within 3 points of the pointer in 16 of 30; in the other 14 the application granted
+no or part of the size (Ghostty and Safari bottom presses and some Ghostty left/top presses did not resize at all) and that was
+not investigated. In the baseline's own resizes of TextEdit, 14 of 66 sampled instants had the resized window parked
+(`evidence/base-*resize*.jsonl`, `base-edge-*`), none of the title drags did. The fixed run's log held no
+`native family #N unavailable` line and every `native park` was `no_placement` with the family known, so the fixed run
+did not itself exercise the failed audit: that the parking came from the unknown family is read from the code and from the
+baseline's family lines, and the new presenter regression is what fails on the old rule.
+
+Finder right-click (file icon and empty space; zoom 1, 0.5 and, in the baseline, 0.29): in the baseline (first session, probes at 0.3, 1.2 and 2.7 s) and in the fixed build (rectangle unchanged at 4 ms sampling for 4.5 s,
+and after Escape) the menu opened at the pointer and the Finder window stayed drawn where it was, also in the screenshots
+(`evidence/base-finder-rightclick-*.png`, `evidence/acc4-fix2-rc-file-z*.jsonl`). The owner's disappearance was **not reproduced**.
+What is claimed is only the rule change above and its in-memory regression.
+
+In memory, on the host, after the last source change: `sh tests/e2e/controller-hit.sh` (real controller through the C ABI: the null `hit`,
+the owner's exception, `DWControllerHit` on both paths), `sh tests/e2e/native-input-policy.sh` (the takeover packet policy and
+`DWNativeWindowDragStarted`; it reads the host's real mouse-button state in its global-tap part and failed once while that was pressed,
+then passed three times), `sh tests/e2e/native-presenter-readiness.sh` (566 checks, including the unknown-family placement that fails
+on the old rule), `native-view-transfer.sh` (644), `native-family-recovery.sh` (546) and `native-placement-validation.sh` (81). They show
+policy and geometry with substituted reads; they do not show that any application accepts the posted release or follows the pointer.
+
+Not run: Aside or any Electron window (Ghostty stands in for a refused title region), a second display, macOS Spaces, tiling
+on a real drag to a screen edge (the takeover prevents the native drag that tiling reads; no edge drag was posted), and a physical pointer.
+
+#### A root whose family cannot be read (the browser's main window "flashing")
+
+The owner's report (build `c49eae1`, Aside, a Chromium browser, compositor mode): the browser "randomly flashes", other applications do not.
+It was not the arrival veil. The host log (read only) has `Infinify: native family #96 unavailable: inconsistent, duplicate or changed
+family member` and `... unavailable: identity changed` for Aside's main window (each reason is printed once per run, so the log cannot say how
+often), six `native decline pid=711` and one window of Aside announced 61 times by the window server.
+
+What was observed (Google Chrome 156.0.8078.80 in the macOS 27.0.1 guests, the same Chromium window machinery; Aside itself opens on a sign-in wall
+and was not driven, so nothing here is an observation of Aside). Compositor mode, a probe that polls every window of the browser about every
+0.5 ms (alpha first, then transform and bounds; the window list every 20 ms) while real HID events hover the tab strip and the links and type
+into the address bar, 70 s a run. "Parked" is the main window at a translation beyond every display; "native-visible" is any other window of the
+browser on screen, alpha above 0, still at the transform that puts it where the application made it while the browser is drawn elsewhere.
+Runs, evidence in `target/flash/out/RUN/`, pictures in `target/flash/pictures/`, table in `target/flash/summary.txt`:
+
+| run | main window parked | other windows at their native place |
+|---|---|---|
+| `c49eae1`, zoom 1, veil asked (E0) | 7 times, 4 to 67 ms | 7 times, up to 70 ms |
+| `c49eae1`, zoom 1, `INFINIFY_NO_VEIL=1` (E1, E2) | 4 and 4 times, 8 to 102 ms | 7 and 7 times, up to 120 ms |
+| `c49eae1`, zoom 1, other guest, veil asked (C1) | 6 times, 4 to 339 ms | 7 times, up to 669 ms |
+| `c49eae1`, zoom requested 0.5 (left at 1.0 by the new-window reset), veil asked / not asked (E5, E6) | 5 and 5 times, 8 to 86 ms | 8 and 9 times, up to 90 ms |
+| `c49eae1`, zoom 0.5 as asked (`reset_on_new_window = false`, scale 2.000), other guest (C4) | 5 times, up to 56 ms | 4 times, up to 66 ms |
+| this change, zoom 1 (F1, F4) | 0 and 0 | 4 and 5 times, up to 87 ms |
+| this change, zoom requested 0.5 (left at 0.747 by the reset), (F2, F5) | 0 and 0 | 4 and 4 times, up to 109 ms |
+| this change, zoom 0.5 as asked (F6) | 0 | 2 times, up to 62 ms |
+
+The main window's translation jumped to (-2279, -1506) in the first guest, 256 points beyond its display, and back: it vanished for a few
+frames, at random, while the pointer moved over the page. In the run with diagnostics every one of four parks followed this sequence within 6 ms:
+`native family read failed ... reason=Associated child has no verified native parent` (twice) or `... reason=Native member disappeared or has
+invalid bounds` (twice), then `native family forgotten root=`, then `native window parked wid=` with `family_known=0` (the diagnostic lines
+were temporary and are not in the tree). The window server's family of a Chromium window includes windows that, for a few frames, have no
+parent or no size, so the exact audit (`discoverOwnedFamily`) fails as a whole. `bound:family:` then forgot the family, and `describe:` placed a
+root only while `root->familyKnown` when Space frames are on, so the root got the parking record until the next read. The veil was neither
+necessary nor a multiplier: the same number of parks without it (E1, E2, E6 against E0, E5). The probe also shows what a family does for a
+child: in the unmodified build a hover card (a 270 by 122 window whose parent the window server names as the main window) stayed at its native
+place for 669 ms, fading in to alpha 1.0, until the family was read again and placed it (C1, wid 55); with this change the same kind of card was
+placed 23 ms after it appeared, at alpha 0.07 (F1, wid 74).
+
+What changed. (1) `describe:` no longer parks a placed root because its family is unknown: it stays at its placement and requests no Space
+move (the Space request is what needs the complete family); a root whose display has no Space is still parked. (2) `bound:family:` keeps the
+last audited family, with its children placed and its receipt current, when a read cannot be made, for `DWNativeFamilyGraceMS` (500 ms) after that
+audit; a report that is readable but names another window, or is unsound, is let go at once, as is one that stays unreadable past the grace.
+(3) `-windowNotAdopted:` (above) leaves a window that belongs to a placed root's family to the family for 250 ms before it releases the
+helper's veil for it. `INFINIFY_NO_VEIL=1` is a new diagnostic switch: the shell does not ask the helper for the veil. Regressions:
+`native-presenter-regression.m` (578 checks: an unknown family no longer parks its root, a failed read keeps the family, receipt and frame
+inside the grace, lets go after it, a report for another window is not a failed read) and `restore_identity_test.m` (a placed or released
+window announced again is never veiled or written). The helper is unchanged.
+
+With this change, in the second guest (`vm2`): zero parks in five 70 s runs (F1, F4, F2, F5, F6) against 5 or 6 in each of the three
+unmodified runs there (C1, C2, C4); 4 to 9 `family kept` lines a run show the reads that used to park; 3 to 5 decline deferrals a run
+(`native decline deferred`), 22 in the five runs, and the probe saw every one of those 22 windows at the family's placement, not at its native
+transform. (The `native decline` line that follows each by 250 ms is the request; the presenter refuses it for a window it has bound. What
+the deferral changes is only when a family child that is not bound yet is released: 250 ms after the manager's decline, not at it. Whether a
+release at the decline would have shown such a child at its native place was not separated from the grace in these runs.)
+A TextEdit new document (8 a run, zoom 0.5 as asked) was hidden before the meter ever saw it at its native place, `unplaced_ms` 0.0 in
+every window, and shown placed after 33.5 to 244.3 ms (F7) and 33.8 to 115.6 ms (F8), the unmodified build 11.5 to 113.9 ms (C5): runs differ
+by that much without any change (the first guest read 12.5 to 148.6 ms, the same build in the second 185.7 to 635.0 ms at zoom 0.75).
+After `quit-native` the layer-0 windows the guest listed read alpha 1, scale 1 and their own translation (`after-quit.txt` of each fix run: 6 of 6).
+
+Not established. Aside itself, and the owner's M5 Pro and macOS 27.2; whether the 500 ms and 250 ms bounds suit other applications; why a
+family read that fails is not the same read that succeeds 4 to 100 ms later (the children Chromium keeps in its window pool come and go);
+the windows Chromium announces at alpha 0.01 or 0 (hover cards, the 22-point window) are not veiled and are still seen at the place the
+application put them for 2 to 120 ms, with and without the veil, before the family places them: that is what is left of the "transient window
+at the wrong place". A window the application keeps re-announcing without a parent (Aside's wid 1067 in the host log, 61 times) was never seen
+with a parent in these runs and is untouched. No optical capture was taken; every number is a window-server read, polled, not a frame on a display.
 
 ### What was run for managed windows
 
@@ -5616,6 +6193,21 @@ short:
 - Fingers that close, open or turn against each other are a pinch: `scale` is
   the distance between the farthest and the nearest touch over what it was when
   the pinch was recognised, `rotation` the change of their angle in degrees.
+  Since 2026-10-29 every finger counts toward that, not only the two touches
+  `scale` is read from: when the fingers' mean distance from their own centre has
+  grown or shrunk by 4 mm and by more than half of what the centre travelled, the
+  touch is a pinch even if the farthest and the nearest finger drift the same way.
+  A thumb and three fingers that spread while the hand slides (the shape of
+  macOS's Show Desktop and Launchpad gestures, which are bound here as the
+  four-finger pinches) used to be read as a four-finger swipe whenever the two
+  touches' directions agreed. In a sweep of synthetic hands (thumb-to-fingers
+  separation 10, 20, 30 and 40 mm, hand drift 0 to 24 mm in steps of 4, 156 x 96 mm
+  pad) the largest drift a spread could carry and still be a pinch went from 4, 8,
+  12 and 16 mm of drift to 4, 12, 16 and 24 mm; swipes of 3 to 12 mm and a 20 mm
+  swipe with fingers fanning by up to 6 mm stayed swipes (a throwaway program,
+  not kept; the regression keeps four of its hands). The rule is
+  translated from Sunlight's Show Desktop reading (the header of
+  `trackpad-gestures.m` has the lines); nobody has tried it on a hand.
 - Fingers that have not moved more than 1 mm for 180 ms are a hold. Moving ends
   it cancelled; lifting ends it, which is when a hold binding fires.
 - Three fingers that land and lift within 180 ms a step, without moving, are a
@@ -5760,15 +6352,131 @@ runs on a thread of its own, so a busy main thread cannot make the system
 disable it (a 5 s watchdog turns a tap the system disabled quietly back on).
 Because a modifier is not part of the decision, a config that binds only
 `alt+4-finger-swipe-up` still holds back the system's four-finger gestures
-without Option. The session tap `DWGlobalTrackpadInput` still owns Dock swipes
-of every count when the source is not delivering, and leaves them alone when it
-is and this tap is running.
+without Option.
+
+The drop timing is Sunlight's, translated (`dock-guard.m`'s header maps each
+function to its lines of `TrackpadPan.swift`): from the moment a bound count
+lands until the last finger lifts the drop time is 0.3 s ahead of every report,
+however the count moves in between, and the tail runs from the lift. Fingers lift
+one by one, so the count passes through two and one on its way to none; an
+earlier version of this guard decided by the count at each packet and started the
+tail only when the count just before none was a bound one, which a staggered
+lift never is. A stream of Dock-control packets (one gesture of the system's) is
+also decided once, by its first packet, and the rest of it follows, so the Dock is
+never given the middle or the end of a gesture whose beginning was dropped, nor
+loses the end of one it was given the beginning of; a stream that goes a second
+without a packet, or a packet of a format this code cannot decode that comes more
+than 0.3 s after the last, is a new one. The packets of a Show Desktop or
+Launchpad pinch may not be the DockSwipes the decoder knows (axis 1 to 3 of HID
+type 23); they are then dropped or passed all the same, on the same decision.
+
+Two taps ask the guard. `DWDockTap` is the one that exists for it. The session
+tap `DWGlobalTrackpadInput` asks it too, for every Dock-control packet whatever
+its format, so that a packet the first tap did not see, or was not installed to
+see, is still decided (the second tap that sees a packet gets the first's answer).
+Only when the guard has no live touch source (`undecided`) does the session tap
+use its own rule: a DockSwipe whose beginning it saw while it owned an admitted
+touch is dropped to its end, and since nothing else can be told apart, so is any
+other Dock-control packet while it owns an admitted touch of three or more
+fingers and for 0.3 s after. Before 2026-10-29 it dropped only the DockSwipes it
+could decode, and passed every other type-30 packet to the next tap, which is
+also where the "unrecognized type is 30" lines came from (below).
 
 The tap needs Accessibility, which a normal run already needs. Without it, one
 line goes to stderr, nothing is dropped, and the system's gestures stay on;
 it is tried again whenever the native input is configured. It holds back
 Dock-control events and nothing else: the Look up tap, three-finger drag and
 the page swipe are not Dock control.
+
+**The first run on a trackpad, 2026-10-29.** The owner ran build `c49eae1` in
+compositor mode on a MacBook with an M5 Pro, macOS 27.2, built-in trackpad of
+156 x 96 mm, and recorded the screen (32 s, 240 fps). Three- and four-finger
+swipes and a pinch worked. The recording shows, with Infinify running throughout,
+a thumb and three fingers spreading perform macOS's real Show Desktop (the
+windows fly to the screen edges and the macOS wallpaper shows, not Infinify's
+canvas), the same fingers pinching open macOS's Applications grid, and Mission
+Control open once later. So the system's Dock-control gestures were **not**
+held back for those, and the host log said nothing more than `Multitouch source:
+1 device(s), surface 156x96 mm` plus AppKit lines
+`unrecognized type is 30` (86 when it was first read, 606 when last read). That log was overwritten by the next launch before it
+could be correlated with the recording, and it had no gesture or Dock trace, so
+the cause is **not established**: the code shows which paths can let those
+gestures through, and the next run's trace (below) will say which one it was.
+
+- The `unrecognized type is 30` lines are `+[NSEvent eventWithCGEvent:]` being
+  handed a type-30 CGEvent, one line per packet. Two places did it: the session tap
+  (a type-30 packet that did not decode as a DockSwipe fell through to the gesture
+  branch, because `NSEventTypeMagnify` is also 30) and the annotated tap (which
+  converts every event it does not know). A packet that reached either had not been
+  dropped by the earlier taps: the lines were themselves evidence that Dock control
+  was getting through. Neither tap converts type 30 any more
+  (`native-input-regression.m` counts conversions with a substituted
+  `+eventWithCGEvent:`, and reproduces AppKit's line when the guard is removed).
+- Paths that let a thumb-and-three-fingers gesture through, from the code: the
+  multitouch source not delivering (no frame, or frames none of whose records have
+  a state of 3 or 4: the guard is then not live, and the session tap's own rule applied,
+  which dropped only DockSwipes and so passed a pinch whose packets do not decode);
+  the Dock tap not installed (no Accessibility for the process that holds it) or
+  disabled; a bound mask that is empty; a finger count that disagrees with the system's (a
+  fifth contact, or the thumb counted differently); a touch the shell refused; a
+  staggered lift ending with unbound counts and so with no tail, leaving the end of
+  the system's gesture to the Dock; and the Dock simply not depending on the packets
+  a session tap can drop. The last cannot be told from the code, and the log will
+  show a drop decision for packets the Dock acted on if it is the one.
+- What was changed for them is above (stream and tail, both taps, no conversion)
+  and in the recogniser (the thumb pinch reading); what was added to see them is
+  the next list. None of it has run on a trackpad.
+
+**Diagnostics, `INFINIFY_DEBUG=1`.** Lines on stderr, all beginning `debug: `:
+
+- `multitouch: delivering, from a frame of N finger(s) (M framework callbacks so
+  far)` and `multitouch: stopped delivering after N frame(s)`: the source went live
+  or not. `multitouch: touch begins with N finger(s); the framework has called back
+  M times, ... records by state {3:.. 4:..}`, then `N frame(s) in 1.00 s (X/s), K
+  finger(s) now, peak P` each second of a touch and `touch ends after T s, N
+  frame(s), peak P finger(s)`. `callback #N with R record(s) and none on the
+  surface` (every 2 s) when the framework calls back and no record is a finger,
+  with the states it sent; `MTDeviceStart(device ...) returned R`; and `20 s after
+  the start the framework has called back N time(s)`, which says to touch the pad if
+  it is 0.
+- `dock-tap: installed (...)`, `not installed: AXIsProcessTrusted=0|1 ...` (every
+  30 s), `the system disabled the tap (timeout|user input); enabled again`,
+  `the watchdog found the tap disabled; enabled again`, `stopped`; and
+  `dock-guard: Dock control is held back for the finger counts [3,4]` and
+  `a touch source delivers ... | no touch source delivers ...`.
+- `dock-control #N via=dock-tap|global-tap|annotated-tap <began|changed|ended|other>
+  verdict=DROP|pass|undecided reason=<why> fingers=F gesture=G bound=[...] live=L
+  refused=R tail_ms=T reports=N (+K similar not written) real=.. hid=.. axis=..
+  phase=.. [fields: f..=..]`: each stream's first and last packet and any change of
+  verdict, otherwise at most one line a quarter second. Reasons are
+  `source-not-delivering`, `count-not-bound`, `touch-refused`, `bound-fingers`,
+  `bound-gesture`, `tail-after-lift`, `stream-began-dropped`,
+  `stream-began-with-system`; the session tap's own rule says what it saw instead.
+  `via=annotated-tap ... reached-annotated-tap` is a packet that got past both
+  session taps. The first packet of a stream and every packet of an undecoded
+  format also print their non-zero integer event fields (`f..~` is a double), which
+  is how a Show Desktop or Launchpad packet of an unknown format gets decoded.
+- `gestures: touch of N fingers admitted as the canvas's (path multitouch|global-tap)`
+  or `refused: <reason>`; `gestures: gesture_begin kind=pinch fingers=4 path=multitouch
+  guard{...}` and `gesture_end cancelled=0|1 path=... guard{...}`: the recogniser's
+  gestures, with the source that fed them (`multitouch`, `global-tap` or
+  `view-touches`) and the guard's state at that moment.
+
+**What to try on the Mac and what to send back.** Build and run the compositor with
+`INFINIFY_DEBUG=1` and its stderr to a file that is not overwritten by the next
+launch, then, with the pointer over the canvas and no button down: (1) wait 20
+seconds, touch the pad, and note whether `multitouch: delivering` appears; (2) a
+three-finger swipe; (3) a thumb and three fingers spreading, once; (4) the same
+fingers pinching, once; (5) a four-finger swipe up (Mission Control's), once. Say
+for each whether macOS's own gesture happened, and send the log from the start of
+the run, the time of day of each gesture, and, if you can, a short screen recording
+of (3) and (4). The lines to look at are `delivering`, `dock-tap: installed`, and the
+`dock-control` lines of each gesture: a `DROP` line followed by macOS's gesture
+anyway means dropping the packets is not enough on this system; `pass` with
+`count-not-bound` or `source-not-delivering` points at the count or the source;
+`undecided` and a `global-tap` line means the source never delivered; no line at
+all with the gesture happening means neither session tap saw it, and the
+`annotated-tap` line (if any) says that something else did.
 
 That is the whole mechanism, and none of it has run against a trackpad. If the
 source is not delivering (the framework or a device is missing, the opt-out is
@@ -5918,6 +6626,35 @@ on a tree that had neither window navigation nor managed windows, so
   unit is hundredths of a millimetre; it registered no callback and started no
   device. **No frame from MultitouchSupport was received, no event tap was
   installed, and no gesture was performed.**
+
+- The Dock-control guard and the thumb pinch reading, after the owner's first run
+  on a trackpad (2026-10-29, see [Trackpad gestures](#trackpad-gestures)), signed
+  build, nothing launched. `tests/e2e/multitouch-source.sh` gained: a thumb and three
+  fingers (landing as three and then four contacts, 156 x 96 mm) spreading, closing,
+  spreading while the hand drifts, and a four-finger swipe that fans a little,
+  through the source, the feed and the real recogniser (the drifting spread was read
+  as a four-finger swipe before the change and fails the test on the old recogniser;
+  the other three pass on both); the guard holding at three and at four contacts
+  before the recogniser has emitted anything; type-30 packets with the DockSwipe
+  fields through the tap's filter: a stream begun at four contacts dropped to its end
+  through counts of three, one and none and after the tail, a stream begun at five
+  contacts passed through a bound count and its end, a stream that was never ended
+  forgotten after a second, a declined touch, packets of an undecoded format dropped
+  within the tail of a staggered lift and passed after it, no tail after a lift
+  from five at once, the second tap getting the first's answer, and Sunlight's drop
+  time moving on with each report. Taking the stream rule or the tail latch out
+  of the guard made the test that depends on it fail. `tests/e2e/native-input-policy.sh`
+  counts `+[NSEvent eventWithCGEvent:]` calls with a substituted implementation: none
+  for a DockSwipe, an undecodable type-30 packet or one with no field at all, through
+  the session tap and the annotated tap; putting the conversion back made it fail, and
+  printed AppKit's `unrecognized type is 30`, which shows that conversion is the
+  source of that line. It also checks the session tap's own rule (a stream it saw
+  begin, an undecoded packet only while it owns a touch or in its tail) and that
+  Pass and Drop from the guard are final. The packets are built in memory with
+  Sunlight's and iss's field numbers; they are not recordings of the system's.
+  **No frame from MultitouchSupport was received, no event tap was installed and no
+  gesture was performed**; whether the owner's Show Desktop and Launchpad packets decode
+  as DockSwipes, and whether dropping them stops the Dock on macOS 27.2, are unknown.
 
 Only compiled, never executed: everything between a finger and the recogniser,
 and between the recogniser and the controller, inside the app. That is the
@@ -6672,10 +7409,15 @@ environment variable, then the default. The app itself does not read
 it serves for every command it starts (`exec`, `spawn`, `autostart`), so `msg`
 from one of them reaches this instance. The socket's parent directory must exist, be owned by you and
 not be group- or world-writable, the socket is mode 0600, and a peer with another
-user ID is hung up on. A request is one line of at most 64 KiB (a longer one is
-hung up on without a reply), at most 16 connections are served at once, and one
-that completes no request for 30 seconds is closed, unless it has subscribed
-(see [Event stream](#event-stream)). A stale socket file is removed
+user ID is hung up on. A request is one line of at most 1 MiB (a longer one is
+hung up on without a reply), at most 1024 connections are served at once (one
+past it is told `1024 IPC connections are already open` in a line of its own
+and closed; the app raises its open-file limit at launch for that, and gives
+the commands it starts the limit it had), a reply that is not taken within one
+second in all is dropped with its connection, and one that completes no request
+for 30 seconds is closed, unless it has subscribed (see
+[Event stream](#event-stream)). These are DriftWM v0.21.0's caps; the request
+and connection limits were 64 KiB and 16 before. A stale socket file is removed
 only after connecting to it fails with connection refused. Normal launches hold
 exclusive process-lifetime locks for both the socket and saved scene, before
 helper admission or loading state. Separate instances need both separate socket
@@ -7344,6 +8086,28 @@ The source now supplies a pointing hand over pick targets on the canvas,
 directional resize cursors and a closed hand during mouse pan/move grabs.
 These shapes have not been exercised with a physical pointer. The captured
 application's own cursor image remains unavailable over its replica.
+
+### A null controller hit (crash fixed 2026-10-29)
+
+The controller answers a `hit` query with `{"hit": null}` when no source lies under the point
+([POINTER.md](../../crates/desktop/POINTER.md)). The shell's `-[DesktopView hit:output:]` read that reply as
+`NSDictionary *hit=reply[@"hit"]`, and on the ordered path (the renderer's applied order still showed a
+placement under the pointer) it subscripted it as `hit[@"window"]`. JSON null arrives as `NSNull`, which has no keyed
+subscripting, so build `c49eae1` raised `NSInvalidArgumentException` inside the event tap and ended the owner's
+first compositor-mode run (`-[NSNull objectForKeyedSubscript:]` in `-[DesktopView hit:output:]`, called from
+`-[Desktop nativeInput:event:]`). The reply is now read through `DWControllerHit` (`native/desktop/controller-hit.h`),
+which accepts only an object, and on the ordered path only the very window the renderer put on top; a null, a missing
+or a non-object `hit` is no hit on either path. The controller reply itself is also read as an object
+(`NSDictionary *result=asDict(reply[@"data"])` in `-[Desktop call:raw:]`), so a reply whose `data` is not an object is
+a failed call instead of an object-typed `NSNull`. `sh tests/e2e/controller-hit.sh` runs the real controller through
+the C ABI (`register_output`, `attach`, `hit`, `snapshot`), checks that its empty-canvas answer parses as `NSNull`, that
+the old expression raises the owner's exception, and that `DWControllerHit` gives no hit on both paths and still passes a
+real hit; with the helper changed to the old behaviour the test aborts with that exception. It is in-memory only: it does not
+show why the renderer's order and the controller disagreed in the owner's run, and that disagreement has not been reproduced.
+Read from the code, one way it can happen: the placements the renderer draws (`layered_placements`) include a window whose source
+is merely not minimized (`source_presentable`), while the controller's `hit` skips any window whose visibility change is still
+pending (`source_interactive`: `Visible` and not `visibility_pending`), so a window being restored is drawn, found under the
+pointer by the ordered walk, and refused by the controller with a null hit.
 
 ### What has been run for the pointer policy
 

@@ -66,8 +66,9 @@
 // is NO. The window is then focused and raised, the press is never the application's,
 // and the left button is armed to pick.
 - (BOOL)pickPress:(NSDictionary *)hit button:(NSInteger)button claimed:(BOOL)claimed at:(CGPoint)screen output:(NSNumber *)output;
-// A press bound to center-nearest went down at `screen`.
-- (void)nearestPress:(CGPoint)screen output:(NSNumber *)output;
+// A press bound to center-nearest went down at `screen`; `focus` is a press bound to focus-nearest, which the
+// controller answers with focus-nearest's reveal instead of center-nearest's park (the binding's "focus").
+- (void)nearestPress:(CGPoint)screen output:(NSNumber *)output focus:(BOOL)focus;
 // The pointer moved with that button down. YES when the press has just become a window
 // move: the controller accepted begin_drag, and the host carries on from `screen` as its
 // own move gesture. A center-nearest press sends its one pointer_nearest from here.

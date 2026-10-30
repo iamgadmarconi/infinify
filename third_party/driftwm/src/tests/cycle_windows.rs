@@ -1,0 +1,381 @@
+//! Alt-Tab cycle session lifecycle. A modifier-less cycle source (gesture, bare
+//! wheel) has no key release to end the session, so each fire commits its step
+//! immediately (single step, fresh anchor). A held-modifier source (alt+tab,
+//! mod+wheel) keeps the session — the keyboard check / focus choke ends it on
+//! release or the next non-cycle focus change / action.
+//!
+//! Fixture limitation: the in-process harness has no synthetic keyboard input,
+//! so a real held modifier can't be driven. `held_cycle_step` runs the arm's
+//! step without its modifier-gated commit to stand in.
+
+use driftwm::config::Action;
+use smithay::desktop::Window;
+use smithay::utils::{Point, SERIAL_COUNTER};
+
+use crate::state::StageWindow;
+
+use super::{Fixture, TICK, client::ClientId, config, map_window, settle, window_by_app_id};
+
+/// Map toplevels a, b, c on a fresh client; focus history ends [c, b, a].
+/// Returns the client so callers can map more windows.
+fn three_windows(f: &mut Fixture) -> ClientId {
+    let id = f.add_client();
+    map_window(f, id, "a", (400, 300));
+    map_window(f, id, "b", (400, 300));
+    map_window(f, id, "c", (400, 300));
+    id
+}
+
+/// A modifier-less cycle fire: `execute_action` steps then, seeing no cycle-hold
+/// modifier held, commits immediately.
+fn cycle_forward(f: &mut Fixture) {
+    f.state()
+        .execute_action(&Action::CycleWindows { backward: false });
+}
+
+/// One step of a held-modifier cycle: the `CycleWindows` arm's step without
+/// its modifier-gated `end_cycle`.
+fn held_cycle_step(f: &mut Fixture) {
+    f.state().step_cycle(false);
+}
+
+/// Two held-modifier steps, returning the selected window (focus_history[state]).
+fn open_two_step_session(f: &mut Fixture) -> Window {
+    held_cycle_step(f);
+    held_cycle_step(f);
+    let idx = f.state().stage.cycle_state().expect("mid-cycle");
+    f.state().stage.focus_history()[idx]
+        .client()
+        .expect("cycle selection is a client")
+        .clone()
+}
+
+#[test]
+fn modifier_less_fires_commit_each_step() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    three_windows(&mut f);
+    let win_b = window_by_app_id(&mut f, "b").unwrap();
+    let win_c = window_by_app_id(&mut f, "c").unwrap();
+
+    // No modifier held: each fire is a single step that commits immediately, so
+    // the two most-recent windows toggle and no session lingers.
+    cycle_forward(&mut f);
+    assert_eq!(f.state().stage.cycle_state(), None, "no lingering session");
+    assert_eq!(
+        f.state()
+            .stage
+            .focus_history()
+            .first()
+            .and_then(|w| w.client()),
+        Some(&win_b),
+        "first fire commits the previous window"
+    );
+
+    cycle_forward(&mut f);
+    assert_eq!(f.state().stage.cycle_state(), None, "still no session");
+    assert_eq!(
+        f.state()
+            .stage
+            .focus_history()
+            .first()
+            .and_then(|w| w.client()),
+        Some(&win_c),
+        "second fire toggles back"
+    );
+}
+
+#[test]
+fn held_session_digs_deeper_without_committing() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    three_windows(&mut f);
+
+    let before = f.state().stage.focus_history().to_vec();
+    held_cycle_step(&mut f);
+    let after_one = f.state().stage.cycle_state();
+    held_cycle_step(&mut f);
+    let after_two = f.state().stage.cycle_state();
+
+    // While the modifier is held the session persists and digs deeper without
+    // reordering the frozen history.
+    assert!(after_one.is_some(), "first step opens a session");
+    assert!(after_two.is_some(), "second step keeps it open");
+    assert_ne!(after_one, after_two, "the second step digs deeper");
+    assert_eq!(
+        f.state().stage.focus_history().to_vec(),
+        before,
+        "held cycling must not reorder history until it ends"
+    );
+}
+
+#[test]
+fn non_cycle_action_commits_the_selection() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    three_windows(&mut f);
+    let selected = open_two_step_session(&mut f);
+
+    // A non-focus-changing action ends the held session via the execute_action choke.
+    f.state().execute_action(&Action::ZoomReset);
+
+    assert_eq!(f.state().stage.cycle_state(), None, "the session ended");
+    assert_eq!(
+        f.state()
+            .stage
+            .focus_history()
+            .first()
+            .and_then(|w| w.client()),
+        Some(&selected),
+        "the selected window is committed to the MRU head"
+    );
+}
+
+#[test]
+fn click_focus_during_cycle_commits_then_promotes() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    three_windows(&mut f);
+    let selected = open_two_step_session(&mut f);
+
+    // A real focus change through the click-to-focus path: raise_and_focus runs
+    // update_keyboard_focus → focus_changed, hitting the cycle choke. Focus a
+    // window other than the selection.
+    let clicked = window_by_app_id(&mut f, "c").unwrap();
+    assert_ne!(
+        clicked, selected,
+        "focus a different window than the selection"
+    );
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&clicked, serial);
+
+    assert_eq!(f.state().stage.cycle_state(), None, "the session ended");
+    let history = f.state().stage.focus_history();
+    assert_eq!(
+        history.first().and_then(|w| w.client()),
+        Some(&clicked),
+        "clicked window on top"
+    );
+    assert_eq!(
+        history.get(1).and_then(|w| w.client()),
+        Some(&selected),
+        "the selection committed just under the clicked window, not lost"
+    );
+}
+
+#[test]
+fn mapping_a_window_during_cycle_commits_the_selection() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = three_windows(&mut f);
+    let selected = open_two_step_session(&mut f);
+
+    // A newly mapped window takes focus at map time → focus_changed → the cycle
+    // choke commits the selection before the new window promotes.
+    map_window(&mut f, id, "d", (400, 300));
+    let mapped = window_by_app_id(&mut f, "d").unwrap();
+
+    assert_eq!(f.state().stage.cycle_state(), None, "the session ended");
+    let history = f.state().stage.focus_history();
+    assert_eq!(
+        history.first().and_then(|w| w.client()),
+        Some(&mapped),
+        "the new window is on top"
+    );
+    assert_eq!(
+        history.get(1).and_then(|w| w.client()),
+        Some(&selected),
+        "the selection committed just under the new window, not lost"
+    );
+}
+
+/// A step onto a window already fully on screen moves focus without moving
+/// the view, and that focus change runs inside the cycle-navigating mark, so
+/// a held session survives it; the modifier release still commits.
+#[test]
+fn a_fully_visible_step_holds_the_camera_and_the_session() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    three_windows(&mut f);
+    settle(&mut f);
+    let win_b = window_by_app_id(&mut f, "b").unwrap();
+    assert!(
+        f.state().window_fully_in_viewport(&win_b),
+        "precondition: b is fully on screen"
+    );
+    let camera = f.state().camera();
+
+    held_cycle_step(&mut f);
+
+    assert_eq!(f.state().focused_window(), Some(win_b.clone()));
+    assert_eq!(f.state().camera_target(), None, "no pan was armed");
+    assert_eq!(f.state().camera(), camera, "and the camera stayed put");
+    assert!(
+        f.state().stage.cycle_state().is_some(),
+        "the focus-only step kept the held session open"
+    );
+
+    f.state().end_cycle();
+    assert_eq!(
+        f.state()
+            .stage
+            .focus_history()
+            .first()
+            .and_then(|w| w.client()),
+        Some(&win_b),
+        "the release commits the selection"
+    );
+}
+
+/// A step onto a window off screen still pans it in.
+#[test]
+fn an_off_screen_step_still_pans_in() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    three_windows(&mut f);
+    let win_b = window_by_app_id(&mut f, "b").unwrap();
+    f.state().map_window(
+        StageWindow::Client(win_b.clone()),
+        Point::from((6000, 6000)),
+        false,
+    );
+    settle(&mut f);
+
+    cycle_forward(&mut f);
+
+    assert_eq!(f.state().focused_window(), Some(win_b.clone()));
+    assert!(f.state().camera_target().is_some(), "the step armed a pan");
+    settle(&mut f);
+    assert!(
+        f.state().window_fully_in_viewport(&win_b),
+        "b is on screen once the pan lands"
+    );
+}
+
+/// Place a, b, c at fixed canvas spots and park the view at the canvas origin,
+/// zoom 1, nothing in flight.
+fn place_three(f: &mut Fixture, a: (i32, i32), b: (i32, i32), c: (i32, i32)) {
+    for (app_id, pos) in [("a", a), ("b", b), ("c", c)] {
+        let window = window_by_app_id(f, app_id).unwrap();
+        f.state()
+            .map_window(StageWindow::Client(window), Point::from(pos), false);
+    }
+    f.state().with_output_state(|os| {
+        os.camera = Point::from((0.0, 0.0));
+        os.camera_target = None;
+        os.zoom = 1.0;
+        os.zoom_target = None;
+        os.zoom_animation_anchor = None;
+    });
+}
+
+/// Tab-Tab faster than the animation: the second step lands on a window that
+/// is on screen at this frame but not where the first step's pan is heading,
+/// so it must re-target the pan rather than focus in place.
+#[test]
+fn a_step_mid_pan_retargets_the_pan() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    three_windows(&mut f);
+    let win_a = window_by_app_id(&mut f, "a").unwrap();
+    let win_b = window_by_app_id(&mut f, "b").unwrap();
+    // Parking b on the center carries a off screen.
+    place_three(&mut f, (800, 400), (2600, 400), (100, 400));
+
+    held_cycle_step(&mut f);
+    let toward_b = f
+        .state()
+        .camera_target()
+        .expect("the pan toward b is armed");
+    assert_eq!(f.state().focused_window(), Some(win_b));
+    // One frame in: the zoom tick driving a navigation pan has cleared
+    // `camera_target`, though the flight is still under way.
+    f.state().apply_zoom_animation(TICK);
+    assert_eq!(f.state().camera_target(), None);
+    assert!(f.state().zoom_target().is_some(), "still in flight");
+    assert!(
+        f.state().window_fully_in_viewport(&win_a),
+        "precondition: at this frame a still reads as fully on screen"
+    );
+
+    held_cycle_step(&mut f);
+
+    assert_eq!(f.state().focused_window(), Some(win_a.clone()));
+    let toward_a = f.state().camera_target().expect("the pan is still armed");
+    assert_ne!(toward_a, toward_b, "and now heads for a instead of b");
+    settle(&mut f);
+    assert!(
+        f.state().window_fully_in_viewport(&win_a),
+        "a is on screen once the view rests"
+    );
+}
+
+/// A step during a zoom animation onto a window clipped where the zoom lands
+/// parks it at the zoom the view is heading to, so the zoom lands instead of
+/// freezing where this frame caught it.
+#[test]
+fn a_clipped_step_during_a_zoom_out_lets_the_zoom_land() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    three_windows(&mut f);
+    let win_b = window_by_app_id(&mut f, "b").unwrap();
+    place_three(&mut f, (800, 400), (2600, 400), (100, 400));
+    let resting = f.state().zoom_target();
+
+    f.state().execute_action(&Action::ZoomOut);
+    let heading = f.state().zoom_target().expect("zoom-out armed a zoom");
+    assert_ne!(Some(heading), resting, "the zoom target moved");
+    f.state().apply_zoom_animation(TICK);
+    f.state().apply_camera_animation(TICK);
+    assert!(
+        f.state().zoom() > heading,
+        "precondition: the zoom is under way"
+    );
+    let (camera, zoom) = f.state().landing_view();
+    assert!(
+        !f.state().window_fully_in_view_at(&win_b, camera, zoom),
+        "precondition: b is clipped where the zoom lands"
+    );
+
+    cycle_forward(&mut f);
+    assert_eq!(f.state().focused_window(), Some(win_b.clone()));
+    settle(&mut f);
+    assert_eq!(f.state().zoom(), heading, "the zoom-out landed");
+    assert!(f.state().window_fully_in_viewport(&win_b));
+}
+
+/// Alt-Tab is a jump, not a walk: a clipped target parks on `focus_placement`
+/// rather than taking the minimal pan `focus-nearest` does.
+#[test]
+fn a_clipped_step_parks_on_the_placement_point() {
+    let mut f = Fixture::with_config(config(
+        "focus_placement = \"left\"\n[snap]\nouter_gap = 20.0\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    three_windows(&mut f);
+    let win_b = window_by_app_id(&mut f, "b").unwrap();
+    place_three(&mut f, (100, 700), (1750, 400), (100, 300));
+    assert!(
+        !f.state().window_fully_in_viewport(&win_b),
+        "precondition: b is clipped"
+    );
+
+    cycle_forward(&mut f);
+    assert_eq!(f.state().focused_window(), Some(win_b.clone()));
+    settle(&mut f);
+
+    let rect = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(win_b))
+        .unwrap();
+    let left = rect.x_low - f.state().camera().x;
+    assert!(
+        (left - 20.0).abs() < 1e-6,
+        "b parks on the left placement point: {left}"
+    );
+}

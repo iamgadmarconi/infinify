@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from malbiruk/driftwm src/config/toml.rs at
-// 352333a8fa1b22171492d4b71a54102045c9a19d (GPL-3.0-or-later).
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
 // Changes from upstream: the config directory under `$XDG_CONFIG_HOME` (or
 // `~/.config`) is the new constant `CONFIG_DIR_NAME` ("infinify") where upstream
 // hard-codes "driftwm". Nothing else; the `DRIFTWM_CONFIG` override is kept.
@@ -32,7 +32,8 @@ pub(super) struct ConfigFile {
     pub touch: TouchFileConfig,
     pub env: HashMap<String, String>,
     pub xwayland: XwaylandConfig,
-    /// Placement mode for newly mapped windows: `"center"` (default) or `"cursor"`.
+    /// Placement mode for newly mapped windows: `"auto"` (default), `"center"` or
+    /// `"cursor"`.
     pub window_placement: Option<String>,
     /// Where a centering navigation parks the focused window in the viewport:
     /// `"center"` (default), an edge, or a corner.
@@ -190,12 +191,11 @@ pub(super) struct SessionFileConfig {
     /// suspended windows on the next launch.
     pub restore_windows: Option<bool>,
     /// Seed each output's camera and zoom from the durable session on the next
-    /// launch. Off by default, so the default config starts every output at its
-    /// centered camera.
+    /// launch. On by default; off starts every output at its centered camera.
     pub restore_camera: Option<bool>,
     /// Restore the bookmark registry from the durable session on the next
-    /// launch, overlaying saved bookmarks on top of the config seeds. Off by
-    /// default, so runtime bookmark edits don't persist across restarts.
+    /// launch, overlaying saved bookmarks on top of the config seeds. On by
+    /// default; off keeps runtime bookmark edits from persisting across restarts.
     pub restore_bookmarks: Option<bool>,
 }
 
@@ -454,20 +454,37 @@ impl Default for XwaylandConfig {
 /// `~/.config`) that holds `config.toml`. Upstream hard-codes `driftwm`.
 pub const CONFIG_DIR_NAME: &str = "infinify";
 
+/// Set by `--config`, held in-process so children don't inherit it the way they
+/// would a `DRIFTWM_CONFIG` set on the process env.
+static CONFIG_PATH_OVERRIDE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Point [`config_path`] at `path` for the rest of the process. Only the first
+/// call takes effect.
+pub fn set_config_path(path: &std::path::Path) {
+    let _ = CONFIG_PATH_OVERRIDE.set(expand_config_path(path.as_os_str().to_owned()));
+}
+
 pub fn config_path() -> std::path::PathBuf {
-    // --config <path> sets DRIFTWM_CONFIG at startup; read via var_os so a
-    // non-UTF-8 path still resolves instead of falling through to the default.
+    if let Some(path) = CONFIG_PATH_OVERRIDE.get() {
+        return path.clone();
+    }
     if let Some(p) = std::env::var_os("DRIFTWM_CONFIG") {
-        return match p.into_string() {
-            Ok(p) => std::path::PathBuf::from(expand_tilde(&p)),
-            Err(p) => std::path::PathBuf::from(p),
-        };
+        return expand_config_path(p);
     }
     let config_dir = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         format!("{home}/.config")
     });
     std::path::PathBuf::from(config_dir).join(format!("{CONFIG_DIR_NAME}/config.toml"))
+}
+
+/// `~/` expanded; a non-UTF-8 path is taken as is rather than falling through
+/// to the default.
+fn expand_config_path(path: std::ffi::OsString) -> std::path::PathBuf {
+    match path.into_string() {
+        Ok(p) => std::path::PathBuf::from(expand_tilde(&p)),
+        Err(p) => std::path::PathBuf::from(p),
+    }
 }
 
 pub fn expand_tilde(path: &str) -> String {

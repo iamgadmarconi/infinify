@@ -6,6 +6,8 @@
 #undef main
 #import <Carbon/Carbon.h>
 #include "driftwm_desktop.h"
+#import "controller-hit.h"
+#import "native-drag-takeover.h"
 #import "focus-driver.h"
 #import "resize-driver.h"
 #import "ipc-server.h"
@@ -29,7 +31,10 @@
 #import "compositor.h"
 #import "frame-driver.h"
 #import "login-item.h"
+#import "native-desktop-cli.h"
+#import "dock-reload.h"
 #import "onboarding.h"
+#import "system-takeover.h"
 #import "session-watch.h"
 #import "native-presenter.h"
 #import "native-display-space.h"
@@ -52,6 +57,8 @@
 #include <os/lock.h>
 #include <spawn.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
+#include <sys/sysctl.h>
 #include <fcntl.h>
 #import "../focus/focus.h"
 #import "../resize/resize.h"
@@ -180,18 +187,42 @@ static NSNumber *eventMillis(NSEvent *e) { return @((uint32_t)(uint64_t)(e.times
 static NSDictionary *modifiersJSON(NSEventModifierFlags flags) { return @{@"control":flags&NSEventModifierFlagControl?@YES:@NO,@"option":flags&NSEventModifierFlagOption?@YES:@NO,@"shift":flags&NSEventModifierFlagShift?@YES:@NO,@"command":flags&NSEventModifierFlagCommand?@YES:@NO}; }
 // The first line and how many follow: the status line has room for one.
 static NSString *summary(NSString *subject,NSArray<NSString *> *lines) { return [NSString stringWithFormat:@"%@: %@%@",subject,lines[0],lines.count>1?[NSString stringWithFormat:@" (+%lu more)",(unsigned long)lines.count-1]:@""]; }
+// v0.21.0's raise_nofile_limit and prepare_child (df3de27b26c7998e8a460cffd8a4925cbed3a322,
+// third_party/driftwm/src/state/mod.rs): every client connection of the IPC server holds a descriptor and macOS
+// starts a process with a soft limit of 256, so the soft limit goes up to what the system allows (kern.maxfilesperproc;
+// its hard limit is unlimited). The limit the app started with is kept, and a command it starts gets it back, since
+// some programs still select() on descriptors below 1024. posix_spawn has no hook between fork and exec, so sh restores
+// it first. A relaunch (execv) carries the original in INFINIFY_ORIGINAL_NOFILE, which no command inherits.
+static rlim_t originalOpenFiles=0;
+static void raiseOpenFileLimit(void) {
+    struct rlimit limit;if(getrlimit(RLIMIT_NOFILE,&limit))return;
+    const char *carried=getenv("INFINIFY_ORIGINAL_NOFILE");if(carried&&strtoull(carried,NULL,10)){originalOpenFiles=(rlim_t)strtoull(carried,NULL,10);return;}
+    int perProcess=0;size_t size=sizeof(perProcess);rlim_t ceiling=limit.rlim_max;
+    if(!sysctlbyname("kern.maxfilesperproc",&perProcess,&size,NULL,0)&&perProcess>0&&(ceiling==RLIM_INFINITY||(rlim_t)perProcess<ceiling))ceiling=(rlim_t)perProcess;
+    if(ceiling==RLIM_INFINITY||ceiling<=limit.rlim_cur)return;
+    rlim_t original=limit.rlim_cur;limit.rlim_cur=ceiling;
+    if(setrlimit(RLIMIT_NOFILE,&limit)){fprintf(stderr,"Infinify: setrlimit(NOFILE): %s\n",strerror(errno));return;}
+    originalOpenFiles=original;char text[24];snprintf(text,sizeof(text),"%llu",(unsigned long long)original);setenv("INFINIFY_ORIGINAL_NOFILE",text,1);
+}
 // The exec effect, as upstream's exec_command: /bin/sh -c in a session of its own on
 // /dev/null, with no other descriptor inherited and never waited on by the main loop.
 // env overlays this process's environment; a null value removes the variable.
+// The config path and log filter this process was started with are not passed on (v0.21.0: "Spawned
+// apps no longer inherit ... the DRIFTWM_CONFIG and RUST_LOG it was started with"), nor are the INFINIFY_ debug
+// and test switches; what the caller's env adds is applied after, so an [env] entry or INFINIFY_SOCKET still arrives.
 // `missing` runs on the main queue when sh exits as it does for a program it
 // cannot find (127) or cannot execute (126).
 static NSString *execCommand(NSString *command,NSDictionary *env,void (^missing)(void)) {
     NSMutableDictionary<NSString *,NSString *> *environment=[NSProcessInfo.processInfo.environment mutableCopy];
+    for(NSString *name in environment.allKeys)if([name isEqual:@"DRIFTWM_CONFIG"]||[name isEqual:@"RUST_LOG"]||[name hasPrefix:@"INFINIFY_"])[environment removeObjectForKey:name];
     for(NSString *name in env){if(asString(env[name]))environment[name]=env[name];else [environment removeObjectForKey:name];}
     NSMutableData *pointers=[NSMutableData data];const char *end=NULL;
     for(NSString *name in environment){const char *entry=[NSString stringWithFormat:@"%@=%@",name,environment[name]].UTF8String;if(entry)[pointers appendBytes:&entry length:sizeof(entry)];}
     [pointers appendBytes:&end length:sizeof(end)];
-    char *const arguments[]={"sh","-c",(char *)command.UTF8String,NULL};
+    char original[24];snprintf(original,sizeof(original),"%llu",(unsigned long long)originalOpenFiles);
+    char *const direct[]={"sh","-c",(char *)command.UTF8String,NULL};
+    char *const restoring[]={"sh","-c","ulimit -Sn \"$0\" 2>/dev/null; exec sh -c \"$1\"",original,(char *)command.UTF8String,NULL};
+    char *const *arguments=originalOpenFiles?restoring:direct;
     posix_spawn_file_actions_t actions;posix_spawn_file_actions_init(&actions);
     for(int descriptor=0;descriptor<3;descriptor++)posix_spawn_file_actions_addopen(&actions,descriptor,"/dev/null",descriptor?O_WRONLY:O_RDONLY,0);
     posix_spawnattr_t attributes;posix_spawnattr_init(&attributes);sigset_t none,all;sigemptyset(&none);sigfillset(&all);
@@ -929,6 +960,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property NSTimeInterval scrollPanTime; // event time of that scroll's last pan, 0 once a press has ended it
 @property NSTimeInterval lastDragPan; // event time of the last timed pan under this drag pan's button, its own or a scroll's; 0 for none
 @property CFTimeInterval liftSeen; // when the gesture's button was first read as up while its gesture is still held; 0 while it is down
+@property CFTimeInterval takenOverAt; // a native window drag taken over (-[Desktop takeOverNativeDrag:event:]): when; 0 for any other gesture
 // --debug-pointer: a press the DebugPointer request made is down, with no physical button behind it; the timer ends one its test abandoned.
 @property BOOL injected;
 @property NSTimer *injectedTimer;
@@ -1004,6 +1036,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property BOOL logicalFocus; // --no-native-focus: no native window is ever activated or raised
 @property BOOL focusNoted; // the status line has said that native focus lacks Accessibility
 @property BOOL stageNoted; // stderr has said that Stage Manager is on, since it last was off
+@property DWSystemTakeover *takeover; // a normal run only: Stage Manager and window tiling off while it is the desktop, put back at its end
 @property DWCycleHold *cycleHold;
 @property UInt32 cycleModifiers; // Carbon mask of upstream's cycle_hold
 - (void)cancelNavigation;
@@ -1080,6 +1113,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 @property DWDockGuard *dockGuard;
 @property DWDockTap *dockTap;
 @property NSTimeInterval multitouchRetry;
+@property (copy) NSString *touchPath; // INFINIFY_DEBUG: which source fed the recogniser last: multitouch, global-tap or view-touches
 - (void)configureMultitouch;
 - (void)multitouchFrame:(DWMultitouchFrame *)frame;
 - (void)refreshGestureFingers;
@@ -1192,6 +1226,7 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (NSDictionary *)presentationSnapshot;
 - (void)forgetNativeFamily:(LiveSource *)source;
 @property NSArray<NSDictionary *> *nativeEndpoints; // authenticated launch endpoints, never rediscovered
+@property DWDockReloader *dockReloader; // compositor mode with the launch daemon on: loads the payload into a Dock that replaced the one the helper lived in
 @property BOOL nativeDesktopMode; // explicit login-user desktop authority, never inferred from an empty scope
 @property BOOL nativeRestoring,nativeResumeWanted,nativeResumeInFlight;
 @property uint64_t nativeSessionEpoch;
@@ -1297,6 +1332,8 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 - (void)quit:(id)sender;
 - (void)attachChoice:(id)sender;
 - (void)openCanvas:(id)sender;
+- (void)takeOverWindowSettings;
+- (void)putBackWindowSettings;
 - (void)grantAccess:(id)sender;
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world;
 - (void)poll;
@@ -1310,6 +1347,8 @@ static void compositedStream(SCStreamConfiguration *config,LiveSource *source) {
 // one, and probe, demo and owned-fixture runs have none. DWPolicyPress is a view's
 // `gesture` while a press is the policy's: one in pick mode, or one bound to center-nearest.
 static const NSInteger DWPolicyPress=9;
+// How long a window the manager does not take for its own, but that belongs to a placed root's family, is left to the family reconciliation before the helper's veil is released for it.
+static const NSTimeInterval DWFamilyChildGrace=.25;
 @interface DesktopView ()
 @property DWPointerHover *hover;
 @end
@@ -1610,7 +1649,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     }
     if(ordered&&!under)return nil;
     NSDictionary *reply=[self.desktop call:@{@"op":@"hit",@"output":output,@"screen":pointJSON(p)}];
-    NSDictionary *hit=reply[@"hit"];return ordered&&![hit[@"window"]isEqual:under]?nil:hit;
+    return DWControllerHit(reply[@"hit"],ordered,under);
 }
 // INFINIFY_DEBUG in the environment: one stderr line for each click that goes to a window and each native focus request.
 static BOOL DWInputTrace(void) { static int on=-1;if(on<0)on=getenv("INFINIFY_DEBUG")!=NULL;return on; }
@@ -1905,7 +1944,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     // Upstream's pan grab remembers that it began on empty canvas: released without a drag, it unfocuses.
     else if([kind isEqual:@"pan_viewport"]){self.gesture=1;self.clearsFocus=!hit;}
     // Upstream's NavigateGrab: the drag, not the press, takes the direction.
-    else if([kind isEqual:@"center_nearest"]){self.gesture=DWPolicyPress;[self.hover nearestPress:p output:output];}
+    else if([kind isEqual:@"center_nearest"]){self.gesture=DWPolicyPress;[self.hover nearestPress:p output:output focus:[binding[@"focus"]isEqual:@YES]];}
     // Upstream raises and focuses the window under the pointer, stand-ins included, then runs the action on it.
     else if([kind isEqual:@"action"]&&action){if(hit)[self.desktop applyReply:[self.desktop call:@{@"op":@"focus",@"window":hit[@"window"]}]];[self.desktop action:action output:output at:p held:[DWCycleHold modifiersDown]!=0];return;}
     // Unbound, or bound to a gesture with nothing to act on here: click-to-focus, then the press is the native window's,
@@ -2020,7 +2059,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
 - (void)tabletProximity:(NSEvent *)event { [self tabletPoint:event]; }
 // The end of a press, whatever it had become: at the global point and the event time of its release, or of the moment a release that never
 // arrived was noticed (-[Desktop endLostInput]).
-- (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;
+- (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;self.takenOverAt=0;
     NSDictionary *titleClick=self.nativeTitleReleased&&!self.nativeTitleMoved&&self.gesture==2&&self.gestureButton==0
         &&hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)<=5&&[[self outputAt:p]isEqual:self.dragOutput]
         &&[self nativeTitlePressCurrent]?self.nativeTitlePress:nil;
@@ -2233,8 +2272,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         magnify:^BOOL(NSEvent *event){return [weak globalMagnify:event];}
         ignoreEvent:^BOOL(CGEventRef event){int64_t tag=CGEventGetIntegerValueField(event,kCGEventSourceUserData);return tag&&[weak.postingTags containsObject:@(tag)];}
         cancelled:^{[weak cancelGestures];}];
-    // While the touch source delivers, its own tap holds Dock control back, and for the bound finger counts only; this one would drop it for every count.
-    input.dockElsewhere=^BOOL{Desktop *d=weak;return d.multitouch.delivering&&d.dockTap.running;};
+    // While the touch source delivers, the guard decides Dock control for the bound finger counts only, and per stream: this tap asks it too, so that a Dock-control
+    // packet the guard's own tap did not see (or was not installed to see) is still decided, and for every format. Without a source it applies its own rule.
+    input.dockDecision=^DWDockControlVerdict(CGEventRef event){Desktop *d=weak;return d.dockGuard?[d.dockGuard decide:event via:"global-tap" at:CACurrentMediaTime()]:DWDockControlUndecided;};
     if([input start]){self.globalTrackpad=input;self.globalTrackpadNoted=NO;return;}
     if(!self.globalTrackpadNoted){self.globalTrackpadNoted=YES;[self say:@"Global trackpad takeover needs existing Accessibility/input access. macOS system gestures remain active until the session tap can start."];}
 }
@@ -2248,6 +2288,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             BOOL drag=type==kCGEventLeftMouseDragged||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged;
             CGPoint point=CGEventGetLocation(event),start=jsonPoint(held[@"click_start"]);
             if((drag&&hypot(point.x-start.x,point.y-start.y)>5)||buttons.count>1)held[@"click_possible"]=@NO;
+            if(drag&&type==kCGEventLeftMouseDragged&&buttons.count==1&&[self takeOverNativeDrag:source event:event])return;
             if(!buttons.count){
                 CGPoint point=CGEventGetLocation(event),start=jsonPoint(held[@"click_start"]);NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*binding=nil,*view=nil;
                 for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:source.logical])binding=asDict(row[@"source"]);
@@ -2300,7 +2341,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         @"initial_native":rectJSON(initialNative),@"initial_screen":rectJSON(initialScreen)}mutableCopy];
     NSDictionary *clickBinding=@{@"window":source.logical,@"identity":binding[@"identity"],@"generation":binding[@"generation"]};
     BOOL root=wid==source.router.wid&&CGRectContainsPoint(jsonRect(view[@"screen_bounds"]),CGEventGetLocation(event));
-    source.nativeMouseOwnership[@"click_binding"]=clickBinding;source.nativeMouseOwnership[@"click_start"]=pointJSON(CGEventGetLocation(event));source.nativeMouseOwnership[@"click_possible"]=@(root);
+    source.nativeMouseOwnership[@"click_binding"]=clickBinding;source.nativeMouseOwnership[@"click_start"]=pointJSON(CGEventGetLocation(event));source.nativeMouseOwnership[@"click_possible"]=@(root);source.nativeMouseOwnership[@"root"]=@(root);
     if(root)[self.navigation beginNativeClick:clickBinding output:output];
     source.observationToken=++self.observationEpoch;self.nativeMouseOwner=source;
     [self cancelNativeHoverForWindow:source.logical];self.nativeViewSnapshot=nil;
@@ -2308,6 +2349,57 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // An already submitted frame can still drain before the omission ACK.
     [self render];
     if(DWInputTrace())fprintf(stderr,"debug: native mouse owner window=#%s begin buttons=%lu\n",source.logical.description.UTF8String,(unsigned long)buttons.count);
+}
+// A press that went to a transformed native window and became the application's own window drag. WindowServer moves the native
+// frame from where the window is drawn (not from the native frame), keeps or drops the transform as it likes while the button
+// is down, and puts the transform back at the release: measured in the guest, the window left the pointer at the first packet
+// (it jumped, and at zoom below 1 changed size) and the release adopted a displaced origin; macOS tiling reads the native place.
+// The first drag packet that shows the native origin moving with the extent unchanged takes the pair over instead: the application's
+// drag is ended with a tagged release, the rest of the physical pair is the canvas's, and the window moves by the pointer from
+// the press point exactly as after a recognized title press. Resizes and content drags (the extent or nothing changes) stay native.
+- (BOOL)takeOverNativeDrag:(LiveSource *)source event:(CGEventRef)event {
+    NSMutableDictionary *held=source.nativeMouseOwnership;
+    if(!held||[held[@"taken"]boolValue]||![held[@"root"]boolValue]||!self.nativeInput||self.cleaning||self.sessionInactive||!self.native||self.native.ended||self.nativeFillHandoff
+        ||source.detached||!boundIdentity(source.identity,held[@"identity"])||[held[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch)return NO;
+    CGPoint point=CGEventGetLocation(event),start=jsonPoint(held[@"click_start"]);
+    CGRect first=jsonRect(held[@"initial_native"]),drawn=jsonRect(held[@"initial_screen"]),native;
+    if(hypot(point.x-start.x,point.y-start.y)<=4||!DWNativeBounds(source.router.wid,&native)||!DWNativeWindowDragStarted(first,drawn,native,start,point))return NO;
+    NSNumber *output=held[@"output"];DesktopView *view=nil;
+    for(DesktopView *candidate in self.views)if([[candidate outputAt:start]isEqual:output]){view=candidate;break;}
+    if(!view||view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab||self.nativeGestureView||self.nativeOwnershipTransfer||self.nativeHoverTransfer
+        ||[[self.resize busyWindow]isEqual:source.logical]||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return NO;
+    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*record=nil,*pose=nil;
+    for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:source.logical]){record=row;break;}
+    for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){pose=row;break;}
+    NSDictionary *binding=asDict(record[@"source"]);
+    if(!pose||[record[@"mode"]isEqual:@"fullscreen"]||!boundIdentity(source.identity,binding[@"identity"])||![binding[@"generation"]isEqual:held[@"generation"]]
+        ||![pose[@"camera"]isEqual:held[@"camera"]]||![pose[@"zoom"]isEqual:held[@"zoom"]]||![pose[@"screen_bounds"]isEqual:held[@"screen_bounds"]])return NO;
+    NSDictionary *begun=[self call:@{@"op":@"begin_drag",@"window":source.logical,@"output":output,@"group":@NO}];
+    if(!begun)return NO;
+    // The drag the application started is WindowServer's own (the window follows the pointer whatever the event taps swallow), and
+    // it ends when WindowServer sees the button come up. One release is posted at the HID tap for that, from a private event source so
+    // that AppKit's combined button state keeps the physical button down: a release that cleared it made -endLostInput end the
+    // taken-over gesture 50 ms later as a release that never arrived (measured in the guest). It carries the source's lifetime tag,
+    // which both taps let through.
+    CGEventSourceRef quiet=CGEventSourceCreate(kCGEventSourceStatePrivate);
+    CGEventRef up=quiet?CGEventCreateMouseEvent(quiet,kCGEventLeftMouseUp,point,kCGMouseButtonLeft):NULL;
+    if(up){CGEventSetIntegerValueField(up,kCGEventSourceUserData,source.router.tag);CGEventSetIntegerValueField(up,kCGMouseEventClickState,1);CGEventPost(kCGHIDEventTap,up);CFRelease(up);}
+    if(quiet)CFRelease(quiet);
+    if(!up){[self call:@{@"op":@"end_gesture"}];return NO;}
+    held[@"taken"]=@YES;
+    [self.nativeInput takeNativeButton:0];
+    NSDictionary *intent=@{@"window":source.logical,@"output":output,@"identity":source.identity.copy,@"generation":binding[@"generation"]};
+    [self finishNativeMouseOwner:source reason:@"native window drag taken over"];
+    // The same initialization as -earlyNativeTitle:event:, for a title press that began at the press point.
+    view.clickWindow=nil;[self.navigation releaseCycle];[self cancelGestures];[self cancelNavigation];[self.panLaunch cancel];view.scrollPanTime=0;
+    self.nativeGestureView=view;self.nativeGestureButton=0;
+    view.startPoint=view.lastPoint=start;view.dragOutput=view.lastOutput=output;view.gestureButton=0;view.lastDragPan=0;view.lastScrollPan=0;view.clearsFocus=NO;
+    view.nativeTitlePress=intent;view.nativeTitleMoved=YES;view.nativeTitleReleased=NO;view.takenOverAt=CACurrentMediaTime();
+    view.gesture=2;[self.navigation perform:begun];
+    if([[self call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(point.x-start.x,point.y-start.y)),@"pointer":pointJSON(point)}][@"needs_frames"]boolValue])[self ensureFrames];
+    view.lastPoint=point;[self render];
+    if(DWInputTrace())fprintf(stderr,"debug: native window drag taken over window=#%s native=%g,%g drawn=%g,%g\n",source.logical.description.UTF8String,native.origin.x,native.origin.y,drawn.origin.x,drawn.origin.y);
+    return YES;
 }
 - (void)finishNativeMouseOwner:(LiveSource *)source reason:(NSString *)reason {
     NSDictionary *held=source.nativeMouseOwnership;if(!held)return;
@@ -2380,19 +2472,26 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // or MultitouchSupport's frames. When both report one touch the first answer stands, so the second does not end the gesture the first began.
 - (BOOL)admitContact:(NSUInteger)fingers {
     if(self.multitouch.delivering&&self.globalGestureContact)return YES;
-    if(![self globalGesturesEnabled]||self.nativeFillHandoff||fingers<3)return NO;
+    NSString *why=nil;
+    if(![self globalGesturesEnabled])why=@"global gestures are off (canvas closed, session away or no panels)";
+    else if(self.nativeFillHandoff)why=@"a native fill hand-off is in progress";
+    else if(fingers<3)why=@"fewer than three fingers";
     // A native mouse press already owns its drag session, even when its pointer
     // crosses a canvas panel. Extra fingers cannot begin a new camera contact
     // that steals the original source's physical drag and release.
-    if(NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress)return NO;
+    else if(NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress)why=@"a mouse button is down";
+    if(why){if(DWInputTrace()&&fingers>=3)fprintf(stderr,"debug: gestures: touch of %lu fingers refused: %s\n",(unsigned long)fingers,why.UTF8String);return NO;}
     CGPoint at=pointer();BOOL output=NO;
-    for(DesktopView *view in self.views){if(view.gesture)return NO;if([view outputAt:at])output=YES;}
-    if(!output)return NO;
-    [self.compositor finishGeometryTransitions];if(self.compositor.hasGeometryTransitions)return NO;
-    [self cancelGestures];self.globalGestureContact=YES;return YES;
+    for(DesktopView *view in self.views){if(view.gesture){if(DWInputTrace())fprintf(stderr,"debug: gestures: touch of %lu fingers refused: a view holds a gesture\n",(unsigned long)fingers);return NO;}if([view outputAt:at])output=YES;}
+    if(!output){if(DWInputTrace())fprintf(stderr,"debug: gestures: touch of %lu fingers refused: the pointer (%.0f,%.0f) is over no output\n",(unsigned long)fingers,at.x,at.y);return NO;}
+    [self.compositor finishGeometryTransitions];if(self.compositor.hasGeometryTransitions){if(DWInputTrace())fprintf(stderr,"debug: gestures: touch of %lu fingers refused: a geometry transition is running\n",(unsigned long)fingers);return NO;}
+    [self cancelGestures];self.globalGestureContact=YES;
+    if(DWInputTrace())fprintf(stderr,"debug: gestures: touch of %lu fingers admitted as the canvas's (path %s)\n",(unsigned long)fingers,self.multitouch.delivering?"multitouch":"global-tap");
+    return YES;
 }
 - (void)globalTouches:(DWTrackpadTouchFrame *)frame {
     if(self.multitouch.delivering||!self.trackpad||![self globalGesturesEnabled])return;
+    self.touchPath=@"global-tap";
     for(NSDictionary *touch in frame.touches)[self.trackpad touch:touch[@"identity"] x:[touch[@"x"]doubleValue] y:[touch[@"y"]doubleValue] phase:(DWTouchPhase)[touch[@"phase"]integerValue] time:frame.time];
     [self.trackpad frame:frame.time];self.lastTouches=frame.time;[self armTrackpad];
     if(!frame.fingers)self.globalGestureContact=NO;
@@ -2440,6 +2539,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(!self.touchFeed||!self.trackpad||self.cleaning||self.sessionInactive||![self globalGesturesEnabled]){
         [self.touchFeed cancel:frame.time];if(empty)self.globalGestureContact=NO;else [self.dockGuard refuseContact:frame.contact];return;
     }
+    self.touchPath=@"multitouch";
     BOOL fed=[self.touchFeed consume:frame];
     // The system keeps a touch the canvas declined; the guard learns it at once.
     if(self.touchFeed.refused)[self.dockGuard refuseContact:frame.contact];
@@ -2456,6 +2556,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
 // The recogniser's gesture in progress, for the Dock guard: it holds the system's gestures back for its finger count until it ends.
 - (void)noteDockGesture:(NSDictionary *)event {
     NSString *op=event[@"op"];
+    // INFINIFY_DEBUG: every gesture the recogniser begins or ends, with the source that fed it and what the guard held at that moment.
+    if(DWInputTrace()&&([op isEqual:@"gesture_begin"]||[op isEqual:@"gesture_end"])){
+        DWDockGuardState g=[self.dockGuard state];
+        fprintf(stderr,"debug: gestures: %s%s%s fingers=%s path=%s%s guard{live=%d fingers=%u gesture=%u bound=0x%x refused=%d}\n",op.UTF8String,
+            [op isEqual:@"gesture_begin"]?" kind=":"",[op isEqual:@"gesture_begin"]?[asString(event[@"kind"])UTF8String]?:"?":"",
+            [op isEqual:@"gesture_begin"]?[[asNumber(event[@"fingers"])stringValue]UTF8String]?:"?":"-",self.touchPath.UTF8String?:"?",
+            [op isEqual:@"gesture_end"]?([event[@"cancelled"]boolValue]?" cancelled=1":" cancelled=0"):"",
+            g.live,g.fingers,g.gesture,g.bound,g.refused);
+    }
     if([op isEqual:@"gesture_begin"])[self.dockGuard gesture:[asNumber(event[@"fingers"])unsignedIntegerValue] at:CACurrentMediaTime()];
     else if([op isEqual:@"gesture_end"])[self.dockGuard gesture:0 at:CACurrentMediaTime()];
 }
@@ -2934,6 +3043,8 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         return NO;
     } cancelled:^{[weak cancelCapturedInputForWindow:nil];[weak cancelNativeInput];}];
     input.nativeMouseOwnershipChanged=^(CGEventRef event,NSIndexSet *buttons){[weak nativeMouseOwnershipChanged:event buttons:buttons];};
+    // INFINIFY_DEBUG: a Dock-control packet that gets as far as this tap was dropped by neither session tap; say so (the line is rate-limited like the others).
+    if(DWInputTrace())input.dockControl=^(CGEventRef event){Desktop *d=weak;char detail[96];snprintf(detail,sizeof detail,"reached the annotated tap undropped; multitouch_delivering=%d dock_tap_running=%d",(int)d.multitouch.delivering,(int)d.dockTap.running);DWDockControlTrace("annotated-tap",event,DWDockControlClassify(event,NULL,NULL),DWDockControlPass,"reached-annotated-tap",detail);};
     if([input start]){self.nativeInput=input;self.nativeInputNoted=NO;return;}
     if(!self.nativeInputNoted){self.nativeInputNoted=YES;[self say:@"Native canvas gestures over windows need existing Accessibility/input access. IPC and gestures on empty canvas remain available."];}
 }
@@ -3218,7 +3329,7 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         }else if([kind isEqual:@"resize_window"]||[kind isEqual:@"resize_window_snapped"])
             [view beginResize:source.logical edges:nil snapped:[kind isEqual:@"resize_window_snapped"] at:point output:output];
         else if([kind isEqual:@"pan_viewport"])view.gesture=1;
-        else if([kind isEqual:@"center_nearest"]){view.gesture=DWPolicyPress;[view.hover nearestPress:point output:output];}
+        else if([kind isEqual:@"center_nearest"]){view.gesture=DWPolicyPress;[view.hover nearestPress:point output:output focus:[mouseBinding[@"focus"]isEqual:@YES]];}
         else if([kind isEqual:@"action"]&&asString(mouseBinding[@"action"])){
             [self applyReply:[self call:@{@"op":@"focus",@"window":source.logical}]];
             [self action:mouseBinding[@"action"] output:output at:point held:[DWCycleHold modifiersDown]!=0];
@@ -3330,6 +3441,15 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
             return YES;
         }
         if(toolOut)return NO;
+        // Below [zoom] interact_min (default 0.5, DriftWM v0.20.0) a window takes no pointer input, a pen's dedicated packets included
+        // (upstream's pointer_focus_under_pick gives a pick target no tablet focus): the pen's mouse-subtype packets are the pick's
+        // and its own packets must not reach the application either. Only packets over a pick target are taken; the rest stay as they were.
+        if(self.native&&(type==kCGEventTabletPointer||type==kCGEventTabletProximity)){
+            CGPoint at=CGEventGetLocation(cg);
+            for(DesktopView *view in self.views){NSNumber *output=[view outputAt:at];if(!output)continue;
+                if([asDict([view hit:at output:output])[@"pick"]isEqual:@YES])return YES;
+                break;}
+        }
         if(type==kCGEventTabletPointer||type==kCGEventTabletProximity){
             // The overlay's fresh packets still go through AppKit's normal
             // canvas admission. Observing proximity above does not authorize
@@ -3811,10 +3931,11 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     // Said once, ahead of a notice already up; what a config load left for the status line returns as the resting status.
     [self say:note];self.statusText=!self.statusText.length||[self.statusText isEqual:self.help]?note:[NSString stringWithFormat:@"%@ · %@",note,self.statusText];
 }
-// Stage Manager can be switched on under a canvas that is already open, from Control Centre for one. The run goes on and
-// says once what its windows will look like until it is off again; a launch does not get this far with it on (main()).
+// Stage Manager can be switched on under a canvas that is already open, from Control Centre for one. A normal run switched it off
+// itself when its canvas opened and does not fight the user over it: the run goes on and says once what its windows will look like
+// until it is off again, and what it put back at its end leaves it on, as the user set it. Other runs never touched the setting.
 - (void)refreshStageManager {
-    BOOL on=self.manager&&DWStageManagerOn();if(on&&!self.stageNoted)[self say:DWStageManagerNote];
+    BOOL on=self.manager&&DWStageManagerOn();if(on&&!self.stageNoted)[self say:self.takeover.engaged?DWStageManagerBackNote:DWStageManagerNote];
     self.stageNoted=on;
 }
 - (void)cancelNavigation {
@@ -3865,7 +3986,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     CGPoint p=pointer();NSNumber *output=[self outputUnderPointer:p];
     if(hover)for(DesktopView *view in self.views.copy)[view.hover frame:p output:[view.outputs containsObject:output]?output:nil];
     if(!report||(moved&&CGPointEqualToPoint(p,self.pointerReported)))return;self.pointerReported=p;
-    NSString *status=self.statusText;[self call:@{@"op":@"pointer",@"output":output?:NSNull.null,@"screen":pointJSON(p)}];self.statusText=status;
+    NSString *status=self.statusText;NSDictionary *told=[self call:@{@"op":@"pointer",@"output":output?:NSNull.null,@"screen":pointJSON(p)}];self.statusText=status;
+    // The pull moved the focus: a hover's effect, performed as a hover's is (-pointerFocused:).
+    if([told[@"dirty"]isEqual:@YES]){NSDictionary *effect=asDict(told[@"effect"]);[self.navigation perform:effect?@{@"effect":effect}:@{}];self.sceneDirty=YES;[self render];}
 }
 // One frame of camera motion: every armed flight, a coasting pan, an edge pan. A normal
 // run's coordinator owns the tick; probe, demo and owned-fixture runs tick the controller
@@ -4713,6 +4836,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
 - (void)touches:(NSEvent *)e {
     if(self.globalTrackpad.running||self.multitouch.delivering)return;
     if(!self.trackpad||self.cleaning||self.sessionInactive)return;
+    self.touchPath=@"view-touches";
     for(NSTouch *touch in [e touchesMatchingPhase:NSTouchPhaseAny inView:nil]){
         if(touch.type!=NSTouchTypeIndirect||touch.resting)continue;
         NSPoint p=touch.normalizedPosition;NSSize pad=touch.deviceSize;NSTouchPhase phase=touch.phase;
@@ -4775,6 +4899,9 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
         if(view.gesture&&view==self.nativeGestureView&&self.nativeInput.hasEarlyMousePress){
             view.liftSeen=0;continue;
         }
+        // A taken-over native drag ended the application's own press with a posted release, so the system says the button is up while
+        // the finger is down. The tap still owns that physical pair until its release, which ends the gesture; ten minutes bound a lost one.
+        if(view.gesture&&view.takenOverAt&&now-view.takenOverAt<600&&[self.nativeInput holdsCapturedButton:(NSUInteger)view.gestureButton]){view.liftSeen=0;continue;}
         // A press the DebugPointer request made has no button behind it: its own request or its timer ends it.
         if(!view.gesture||view.injected||(down&(1UL<<view.gestureButton))){view.liftSeen=0;continue;}
         if(!view.liftSeen){view.liftSeen=now;continue;}
@@ -5047,7 +5174,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
     char *response=driftwm_desktop_request(self.controller,request.bytes,request.length);if(!response){self.statusText=@"Controller unavailable";return nil;}
     NSData *data=[NSData dataWithBytes:response length:strlen(response)];driftwm_desktop_response_free(response);if(raw)*raw=data;
     NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];if(![reply[@"ok"]boolValue]){self.statusText=reply[@"error"]?:@"Controller error";return nil;}
-    NSDictionary *result=reply[@"data"];
+    NSDictionary *result=asDict(reply[@"data"]); // every controller reply is an object; a null or other JSON value is no reply
     if(DWInputTrace()){
         NSMutableArray *effects=[asArray(result[@"effects"])mutableCopy]?:[NSMutableArray array];
         if(asDict(result[@"effect"]))[effects addObject:result[@"effect"]];
@@ -5576,7 +5703,8 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
     NSDictionary *presentation=self.native?(self.nativeViews.presentationSnapshot?:snapshot):[self presentationSnapshot];
     // The outputs the pointer is looked up on, and whether cursor edge pan wants it reported: on while the snapshot's navigation.cursor_pan.needs_pointer says so. See -pointerFrame.
     self.pointerOutputs=self.configured&&self.panels.count?asArray(snapshot[@"outputs"]):nil;
-    self.pointerWanted=self.pointerOutputs&&[asDict(asDict(snapshot[@"navigation"])[@"cursor_pan"])[@"needs_pointer"]isEqual:@YES];
+    // Also while sloppy focus owes the pointer's output a look because its view moved under the resting pointer (upstream's pull; navigation.hover_pull).
+    self.pointerWanted=self.pointerOutputs&&([asDict(asDict(snapshot[@"navigation"])[@"cursor_pan"])[@"needs_pointer"]isEqual:@YES]||[asDict(asDict(snapshot[@"navigation"])[@"hover_pull"])[@"needs_pointer"]isEqual:@YES]);
     // pass_keys: every reply the shell applies is drawn from this snapshot, so what the focused window's rule passes is read here and nowhere else:
     // a bound or scripted command's (-applyReply:), a pointer policy press's and a hover's that moved the focus (-pointerApply:, -pointerFocused:),
     // a focus request's answer and a native focus report (the coordinator's `changed`), a size transaction's tail, each frame of a flight.
@@ -5959,9 +6087,20 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row {(void)tableView;(void)column;return self.choices[row][@"label"];}
 // The saved world and its cameras need no capture: placeholders, navigation and
 // view actions work before any source is chosen or any privacy grant exists.
+// A normal run's takeover of Stage Manager and window tiling (system-takeover.m): its own stderr line says what changed. Idempotent.
+// Said before the canvas opens, so a launch that failed to switch them off tells the user why windows may still be thumbnails.
+- (void)takeOverWindowSettings {
+    NSString *note=nil;[self.takeover engage:&note];if(note.length)fprintf(stderr,"%s\n",note.UTF8String);
+}
+// Put back after everything else has ended, so no window is still parked or scaled when Stage Manager comes back on. Idempotent.
+- (void)putBackWindowSettings {
+    NSString *note=nil;[self.takeover restore:&note];if(note.length)fprintf(stderr,"%s\n",note.UTF8String);
+}
 - (void)openCanvas:(id)sender {
     if(self.probe&&sender){self.probeHumanInput=YES;return;}
     (void)sender;if(self.startupError){self.chooserStatus.stringValue=self.startupError;return;}
+    // The canvas about to open must find windows as the user left them, not thumbnails or tiles: macOS follows the change live.
+    [self takeOverWindowSettings];
     // A --manual run has no strip to bring the chooser back from: it stays open above the canvas, the one place a window is added or rebound from.
     [self openPanels];if(!self.configured)[self.chooser orderOut:nil];[self render];
 }
@@ -6433,6 +6572,22 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 // rather than at the helper's own bound. Several arrive together at times, so the frame that carries their releases is made once.
 - (void)windowNotAdopted:(CGWindowID)window pid:(pid_t)pid {
     if(self.cleaning||!self.native||self.native.ended)return;
+    // A window the manager does not take for a window of its own may still be a child of a root that is placed (a hover card, a completion list,
+    // a sheet): the family reconciliation places it with its root, which also lifts the helper's veil. Releasing it at once would show it where
+    // the application put it, not where the browser is drawn. It is released after DWFamilyChildGrace if nothing has placed it by then.
+    for(LiveSource *source in self.sources.allValues)if(!source.detached&&source.router.pid==pid&&source.router.wid!=window){
+        NSMutableDictionary *identity=[source.identity mutableCopy];identity[@"wid"]=@(window);
+        if(!DWNativeWindowBelongsToRoot(identity,source.identity))continue;
+        if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native decline deferred pid=%d wid=%u root=%u at=%.6f\n",(int)pid,(unsigned)window,(unsigned)source.router.wid,NSProcessInfo.processInfo.systemUptime);
+        [self windowFamilyChanged:pid];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(DWFamilyChildGrace*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[self releaseUnplacedWindow:window pid:pid];});
+        return;
+    }
+    [self releaseUnplacedWindow:window pid:pid];
+}
+// The release itself. The presenter refuses it for a window it has bound, so one the family placed in the meantime is never released.
+- (void)releaseUnplacedWindow:(CGWindowID)window pid:(pid_t)pid {
+    if(self.cleaning||!self.native||self.native.ended)return;
     NSArray *born=birth(pid);if(born.count!=2)return;
     if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native decline pid=%d wid=%u at=%.6f\n",(int)pid,(unsigned)window,NSProcessInfo.processInfo.systemUptime);
     [self.native declineWindow:@{@"pid":@(pid),@"wid":@(window),@"birth_sec":born[0],@"birth_usec":born[1]}];
@@ -6511,6 +6666,8 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
         [self suspendPresentationLeavingSession:NO];[self render];
     }
     if(self.sessionInactive||!self.panels.count||!self.nativeResumeWanted||self.nativeRestoring||self.nativeResumeInFlight||CACurrentMediaTime()<self.nativeResumeAfter)return;
+    // The Dock was replaced: the old endpoint is gone with it, and the reloader says when a new one answers (-adoptEndpoint:).
+    if(self.dockReloader.awaitingEndpoint)return;
     // Preserve the endpoint, credentials and authority selected at launch.
     // Scoped recovery pins the original process births; desktop recovery
     // reaudits its Dock peer. Candidates stay inert until this main turn.
@@ -6912,6 +7069,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 }
 - (void)cleanup {
     if(self.cleaning)return;
+    [self.dockReloader stop];self.dockReloader=nil;
     [self closeCaptureEdgeGuard:YES];
     self.compositor.nativeMenuBackground=NO;
     [self stopMacWallpapers];
@@ -6966,7 +7124,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     [self.compositor reset];self.compositor=nil;self.backgroundNote=nil;
     [self stopKeys];[self stopViewKeys];
     if(!self.sources.count)self.resize=nil;
-
+    [self putBackWindowSettings];
 }
 - (void)dealloc { [self stopMacWallpapers];[_ipc stop];[_manager stop];[_session stop];[_onboarding close];[self stopNavigation];[self stopViewKeys];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];[_multitouch stop];[_dockTap stop];[_sceneWriter drain];if(_controller)driftwm_desktop_destroy(_controller); }
 @end
@@ -7026,8 +7184,8 @@ static int runDemo(Desktop *desktop,NSString *directory,BOOL probe) {
             }
             report[@"frames"]=frames;report[@"separate_live_layers"]=@(source.surfaces.count==2);
             NSDictionary *before=[desktop call:@{@"op":@"snapshot"}];NSNumber *first=view.outputs.firstObject;
-            CGPoint anchor=projected(desktop,source.logical,first,CGPointMake(120,120));NSDictionary *hitBefore=[desktop call:@{@"op":@"hit",@"output":first,@"screen":pointJSON(anchor)}][@"hit"];
-            [view zoom:.8 at:anchor output:first];NSDictionary *hitAfter=[desktop call:@{@"op":@"hit",@"output":first,@"screen":pointJSON(anchor)}][@"hit"];
+            CGPoint anchor=projected(desktop,source.logical,first,CGPointMake(120,120));NSDictionary *hitBefore=asDict([desktop call:@{@"op":@"hit",@"output":first,@"screen":pointJSON(anchor)}][@"hit"]);
+            [view zoom:.8 at:anchor output:first];NSDictionary *hitAfter=asDict([desktop call:@{@"op":@"hit",@"output":first,@"screen":pointJSON(anchor)}][@"hit"]);
             [desktop call:@{@"op":@"pan",@"output":first,@"screen_delta":pointJSON(CGPointMake(14,9))}];[desktop render];
             NSDictionary *after=[desktop call:@{@"op":@"snapshot"}];report[@"world_fixed_during_camera_changes"]=@([before[@"windows"] isEqual:after[@"windows"]]);
             CGPoint ba=jsonPoint(hitBefore[@"local"]),aa=jsonPoint(hitAfter[@"local"]);report[@"pointer_anchor_stable"]=@(hypot(ba.x-aa.x,ba.y-aa.y)<.00001);report[@"independent_second_camera"]=@([before[@"outputs"][1]isEqual:after[@"outputs"][1]]);
@@ -7117,26 +7275,24 @@ static NSString *helperNonce(const char *path,const char **why) {
 }
 static int helperRefused(const char *why) { fprintf(stderr,"Infinify: native helper %s\n",why);return 64; }
 static int scopeRefused(const char *why,const char *value) { if(value)fprintf(stderr,"Infinify: --only-pid %s %s\n",value,why);else fprintf(stderr,"Infinify: --only-pid %s\n",why);return 64; }
-// An explicit terminal command starts the bundle's audited native bootstrap.
-// It runs before AppKit and replaces this process, so the ordinary-instance
-// guard cannot mistake this command for a running canvas. No checkout fallback.
-static int nativeDesktopCommand(int argc,const char **argv) {
-    if(argc>1||(argc==1&&strcmp(argv[0],"--check")&&strcmp(argv[0],"--help"))){
-        fputs("usage: Infinify native-desktop [--check | --help]\n",stderr);return 64;
-    }
-    NSString *launcher=[NSBundle.mainBundle pathForResource:@"launch" ofType:@"sh" inDirectory:@"NativeDesktop"];
-    if(!launcher||![NSFileManager.defaultManager isExecutableFileAtPath:launcher]){
-        fputs("Infinify: the bundled native launcher is missing; rebuild or reinstall the complete app.\n",stderr);return 69;
-    }
-    char *arguments[]={(char *)launcher.fileSystemRepresentation,argc?(char *)argv[0]:NULL,NULL};
-    execv(arguments[0],arguments);perror("Infinify: native desktop launcher");return 69;
-}
+// The normal run's settings takeover, for an exit() that does not come back through main(): it puts them back there too (idempotent).
+static DWSystemTakeover *takeoverAtExit;
+static void putBackAtExit(void) { NSString *note=nil;[takeoverAtExit restore:&note];if(note.length)fprintf(stderr,"%s\n",note.UTF8String); }
 int main(int argc,const char **argv) { @autoreleasepool {
     // The IPC client runs before any AppKit initialisation: no window, no privacy grant.
     if(argc>=2&&!strcmp(argv[1],"msg"))return driftwm_desktop_msg(argc-2,argv+2);
     // So does the login item: registered, unregistered or read, and nothing else of the app starts.
     if(argc>=2&&!strcmp(argv[1],"login-item"))return DWLoginItemCommand(argc-2,argv+2);
-    if(argc>=2&&!strcmp(argv[1],"native-desktop"))return nativeDesktopCommand(argc-2,argv+2);
+    // native-desktop starts the bundle's audited native bootstrap (an explicit terminal command, or the login item when the owner
+    // enabled compositor mode) or manages that default. It replaces this process before AppKit, so the ordinary-instance guard
+    // cannot mistake it for a running canvas. No checkout fallback.
+    if(argc>=2&&!strcmp(argv[1],"native-desktop"))return DWNativeDesktopCommand(argc-2,argv+2);
+    // The login item's program: compositor mode when the owner enabled it, else the capture-mode start it always was.
+    if(argc==2&&!strcmp(argv[1],"login-start")){
+        if(DWNativeLoginIsCompositor()){const char *login[]={"--login"};return DWNativeDesktopCommand(1,login);}
+        argc=1;
+    }
+    raiseOpenFileLimit();
     const char **launched=argv; // as given, for the onboarding window's Relaunch
     BOOL windowed=NO,logical=NO,manual=NO;const char *socket=NULL,*config=NULL,*chord=NULL;NSSize windowSize=NSMakeSize(1200,800);const char *filtered[argc+1];int count=0;
     BOOL undelivered=NO; // --no-hover-forwarding
@@ -7171,7 +7327,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(i>0&&!strcmp(argv[i],"--windowed")){if(windowed)return 64;windowed=YES;if(i+1<argc&&isdigit((unsigned char)argv[i+1][0])&&!parseWindowSize(argv[++i],&windowSize))return 64;continue;}
         filtered[count++]=argv[i];}filtered[count]=NULL;argc=count;argv=filtered;
 
-    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access, and Stage Manager off (it keeps every window outside the current stage as a thumbnail): while one is missing or Stage Manager is on a small window says so and offers the Allow buttons, a button that opens Desktop & Dock, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--only-pid PID[,PID…] (may repeat): manage only the windows of these processes, each of which must be running and this user's; needs --windowed, and refuses --manual. It works without Screen Recording access too: the windows are then bound, focused and clicked as ever and their tiles have no picture.\n--debug-pointer: with --only-pid, serve the DebugPointer IPC request, by which a test presses and releases on a window without the pointer.\n--native-helper RUNTIME_DIR NONCE_FILE: with --only-pid, native presentation: the window server draws the managed windows themselves where the canvas places them, moved and scaled by the transform helper whose socket is in RUNTIME_DIR (its nonce is read from NONCE_FILE, mode 0600), and the canvas, behind them, draws live copies for additional independently zoomed display views when Screen Recording access is already available. Popup/sheet copies, metadata cropping and scoped member input are implemented but unverified; native display-boundary clipping remains incomplete. A cooperative helper inside its named process, or an authenticated exact helper allowlist of the named process instances, must match --only-pid. Repeat this pair for up to four explicit helpers: each must audit its own disjoint process subset, and their union must exactly match --only-pid. Same-user helpers and allowlists that cannot be audited are refused; nothing is looked for or loaded. Losing one grouped helper ends presentation and restores its siblings. Without a native helper flag every run is the overlay.\n--native-desktop-helper RUNTIME_DIR NONCE_FILE: explicit whole-desktop native presentation for this login user, including newly opened applications. Requires one authenticated Apple Dock-hosted SAME_USER helper with scope audit and per-window restoration; cannot combine with --only-pid, --windowed, --manual or fixture modes. This only connects to a helper you already started; nothing is injected or installed by the app. Requires Accessibility access and Stage Manager off. Screen Recording is optional for the native primary and enables captured replicas on additional independent display views. Native clipping and application compatibility still need validation.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt; --super cmd restores Command bindings)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nnative-desktop [--check | --help]: run the bundled native desktop launcher from a terminal. --check only verifies the package and reports policy; the explicit start authenticates or loads the helper through its sudo step, then starts native mode. It changes no SIP or settings and refuses an uncertain earlier load.\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file the canvas uses Control-Option, leaving native Command editing and Command-Tab with macOS. Explicit --super cmd and config bindings keep their authored choices. The registered defaults are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Hold Super (Control-Option by default) and scroll with a wheel or two fingers to zoom anywhere. Wheel or two-finger pinch on empty canvas, Control-Option-pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures use DriftWM's [gestures] bindings with Mac defaults: four-finger swipe up toggles overview; other directions select the nearest window. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger swipe or drag pans over windows as well as empty canvas. Two-finger pinch zooms over windows too.\n  Desktop mode intercepts recognized trackpad and Dock swipe streams for canvas navigation; stopping releases interception without changing System Settings. Unknown system gesture formats pass through; hardware behavior needs runtime validation. Where MultitouchSupport reports the trackpad, three or more fingers are read from it wherever the pointer is, and the system's Dock-control gestures are held back only for finger counts a [gestures] binding takes, with a short tail (INFINIFY_NO_MULTITOUCH=1 leaves the views' own touches in charge; not yet run on a physical trackpad). Windowed mode keeps local gestures only.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-Tab or F3: overview toggle (again returns). Control-Option-W: the same zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Shift-Command-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  The default Control-Option-L lock binding and default volume, brightness, media and screenshot program bindings are left to macOS; their Linux commands are never substituted or started.\n  macOS's Lock Screen and screenshot shortcuts stay available. Explicit config bindings still run exactly as authored.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("Infinify.app — macOS 26+ Apple Silicon: DriftWM's canvas as the desktop of native Mac windows\nDefault: the desktop. One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both stay; there is no toolbar, no status line and no chooser. Every real application window on screen (by Accessibility a standard window or a dialog, never a popup or a helper window; without Accessibility every window but an untitled one under 200x150) lives on the canvas: existing windows are adopted, a new one is placed by window_placement, a closed one leaves (or leaves a stand-in under session.suspend_on_close). This needs Screen Recording and Accessibility access: while one is missing a small window says so and offers the Allow buttons, Relaunch (Screen Recording reaches only a newly started app) and Quit, and the canvas opens once nothing is in the way. While the canvas is open the run switches off Stage Manager (it keeps every window outside the current stage as a thumbnail) and macOS window tiling (edge drag, top edge, option accelerator) in com.apple.WindowManager, with one line on stderr, and puts the user's own settings back when it ends (quit, SIGTERM, SIGINT, SIGHUP, log out); a run that was killed has them put back at the next launch from ~/Library/Application Support/Infinify/window-prefs-snapshot.plist. --windowed, --manual, --only-pid and the demos leave the settings alone.\nStatus notes go to stderr, one line each; what a config file has wrong is drawn in the error bar.\n--only-pid PID[,PID…] (may repeat): manage only the windows of these processes, each of which must be running and this user's; needs --windowed, and refuses --manual. It works without Screen Recording access too: the windows are then bound, focused and clicked as ever and their tiles have no picture.\n--debug-pointer: with --only-pid, serve the DebugPointer IPC request, by which a test presses and releases on a window without the pointer.\n--native-helper RUNTIME_DIR NONCE_FILE: with --only-pid, native presentation: the window server draws the managed windows themselves where the canvas places them, moved and scaled by the transform helper whose socket is in RUNTIME_DIR (its nonce is read from NONCE_FILE, mode 0600), and the canvas, behind them, draws live copies for additional independently zoomed display views when Screen Recording access is already available. Popup/sheet copies, metadata cropping and scoped member input are implemented but unverified; native display-boundary clipping remains incomplete. A cooperative helper inside its named process, or an authenticated exact helper allowlist of the named process instances, must match --only-pid. Repeat this pair for up to four explicit helpers: each must audit its own disjoint process subset, and their union must exactly match --only-pid. Same-user helpers and allowlists that cannot be audited are refused; nothing is looked for or loaded. Losing one grouped helper ends presentation and restores its siblings. Without a native helper flag every run is the overlay.\n--native-desktop-helper RUNTIME_DIR NONCE_FILE: explicit whole-desktop native presentation for this login user, including newly opened applications. Requires one authenticated Apple Dock-hosted SAME_USER helper with scope audit and per-window restoration; cannot combine with --only-pid, --windowed, --manual or fixture modes. This only connects to a helper you already started; nothing is injected or installed by the app. Requires Accessibility access and Stage Manager off. Screen Recording is optional for the native primary and enables captured replicas on additional independent display views. Native clipping and application compatibility still need validation.\n--manual: show the chooser first and capture only explicitly selected windows; no window is adopted automatically. Open canvas shows the saved world without adding one. The chooser stays open above the canvas; closed there, it is gone for the run.\n--demo EMPTY_DIRECTORY: disposable interactive fixture, bounded to 60 seconds\n--demo-probe EMPTY_DIRECTORY: automated own-fixture E2E, no permission prompts\n--demo-probe-guard EMPTY_DIRECTORY: own-fixture interruption regression (expected exit 2)\n--no-native-focus: window focus stays logical; no native window is activated or raised\n--no-hover-forwarding: pointer motion over a window is not delivered to its application; focus_follows_mouse and pick mode still follow the pointer\n--state ABSOLUTE_PATH: explicit persistent scene file (default Application Support/Infinify/scene.json)\n--socket ABSOLUTE_PATH: IPC socket of a normal run (default Application Support/Infinify/infinify.sock)\n--windowed [WIDTHxHEIGHT]: open the canvas at launch in one ordinary window instead, all of it canvas (default 1200x800, at least 960x480), with no global shortcuts and whatever access there is; with --manual the chooser comes up above it; msg action quit or Control-C in its terminal ends it\n--config ABSOLUTE_PATH: DriftWM config file of a normal run (default $XDG_CONFIG_HOME/infinify/config.toml, else ~/.config/infinify/config.toml; DriftWM's built-in defaults when it is missing); read again whenever it changes\n--super CHORD: the physical keys of DriftWM's super/mod, a +-joined subset of ctrl|alt|cmd (default ctrl+alt; --super cmd restores Command bindings)\nmsg [--json] [--socket PATH] COMMAND ...: DriftWM-style IPC client for the running app; opens no window\nnative-desktop [--check | --help | enable | disable | status]: run the bundled native desktop launcher from a terminal; enable makes compositor mode the login default (launch daemon approved once in Login Items, reload after Dock restarts), disable reverts it, status reports it. --check only verifies the package and reports policy; the explicit start authenticates or loads the helper through its sudo step, then starts native mode. It changes no SIP or settings and refuses an uncertain earlier load.\nlogin-item on | off | status: register, unregister or report the login item, a LaunchAgent inside the bundle that starts Infinify at login and again after a crash, never after a quit. on starts it at once, off ends the instance it started, status only reads; opens no window. For the installed copy: scripts/install-app.sh puts a signed bundle in ~/Applications\n--source DIR SECONDS NONCE: internal disposable child only\nKeys and pointer gestures are DriftWM's bindings from the config file: ctrl is Control, alt is Option, super (mod) is the --super chord. With no config file the canvas uses Control-Option, leaving native Command editing and Command-Tab with macOS. Explicit --super cmd and config bindings keep their authored choices. The registered defaults are:\n  Drag or two-finger scroll on empty canvas, Control-Option-drag anywhere, three-finger swipe: pan; a released pan coasts (navigation.drift). Hold Super (Control-Option by default) and scroll with a wheel or two fingers to zoom anywhere. Wheel or two-finger pinch on empty canvas, Control-Option-pinch anywhere, three-finger pinch: anchored zoom (max 1x).\n  Option-drag on a window: world move/snap; add Shift: cluster. Held at the view's edge, a move pans the canvas under the window (navigation.edge_pan).\n  Trackpad gestures use DriftWM's [gestures] bindings with Mac defaults: four-finger swipe up toggles overview; other directions select the nearest window. Four-finger hold: center the focused window. Four-finger pinch in / out: zoom-to-fit / home toggle. Three-finger swipe or drag pans over windows as well as empty canvas. Two-finger pinch zooms over windows too.\n  Desktop mode intercepts recognized trackpad and Dock swipe streams for canvas navigation; stopping releases interception without changing System Settings. Unknown system gesture formats pass through; hardware behavior needs runtime validation. Where MultitouchSupport reports the trackpad, three or more fingers are read from it wherever the pointer is, and the system's Dock-control gestures are held back only for finger counts a [gestures] binding takes, with a short tail (INFINIFY_NO_MULTITOUCH=1 leaves the views' own touches in charge; not yet run on a physical trackpad). Windowed mode keeps local gestures only.\n  View actions animate one view's camera only (global shortcuts while the canvas is open, or msg action; held zoom, pan and nudge keys repeat):\n  Control-Option-A: home toggle (origin at 1:1, again to return). Control-Option-Tab or F3: overview toggle (again returns). Control-Option-W: the same zoom-to-fit toggle. Control-Option-Shift-W: the same over the focused window's snap cluster.\n  Control-Option-Equals / Control-Option-Minus: zoom in / out. Control-Option-0 or Control-Option-Z: zoom 1:1.\n  Control-Option-Command-arrows: pan the view under the pointer. Control-Option-Shift-arrows: nudge the focused window.\n  Control-Option-1 to 4: fly to bookmark 1 to 4. Control-Option-Shift-1 to 4: set it.\n  Window navigation flies the camera and focuses the window, natively when Infinify has Accessibility access:\n  Option-Tab / Option-Shift-Tab: cycle windows, most recently focused first; letting go of Option commits the choice.\n  Control-Option-arrows: the nearest window in that direction. Control-Option-C: center the focused window. Control-Option-X: center the window under the pointer.\n  A click on a window gives it canvas focus and starts its native focus, then the click is forwarded; a click on empty canvas unfocuses. Focusing a canvas window in its own application is followed.\n  Pointer motion over a window is delivered to its application; with focus_follows_mouse = true it also focuses that window without raising it, a screen-pinned one before the canvas beneath it and never a widget.\n  Below [zoom] interact_min (off by default) a window on the canvas is one target: a click flies to it, a drag moves it, and no click, scroll or motion reaches its application. A screen-pinned window and a widget are not picked and keep their pointer.\n  Control-Option-Command-drag: center-nearest by pointer, DriftWM's swipe; the direction is taken 16 points from the press.\n  Control-Option-Return: exec-terminal ($TERMINAL, else a new Terminal window). Control-Option-D: exec-launcher ($LAUNCHER, else Apps).\n  Control-Option-Shift-Command-arrows: send-to-output, the focused window to the display on that side (a world move; nothing with one display).\n  The default Control-Option-L lock binding and default volume, brightness, media and screenshot program bindings are left to macOS; their Linux commands are never substituted or started.\n  macOS's Lock Screen and screenshot shortcuts stay available. Explicit config bindings still run exactly as authored.\n  Control-Option-Q: close-window. The focused window's own close button is pressed through Accessibility; a focused placeholder is dismissed.\nThe fixture modes (--demo*) read no config and keep Option-drag pan, Command-wheel and pinch zoom and Control-Option-drag move; they take no trackpad touches. They keep their toolbar strip, status line and chooser, and their Resize status button explains unavailable native layout resizing.\nAn unbound click, drag or scroll on a window (left, right or middle button) is forwarded only to its selected, freshly validated source.\nNative keyboard/IME remain with the real app. Control-Option-Escape (until a binding takes that chord), Control-Option-Command-Shift-Q (quit), msg action quit or SIGTERM ends the run with exit status 0 and returns the native desktop: fullscreens ended, scene saved, panels closed, capture stopped, hot keys released.\nNo SIP/settings changes.");return 0;}
     BOOL child=argc==5&&!strcmp(argv[1],"--source"),demo=argc==3&&!strcmp(argv[1],"--demo"),guard=argc==3&&!strcmp(argv[1],"--demo-probe-guard"),probe=argc==3&&!strcmp(argv[1],"--demo-probe"),state=argc==3&&!strcmp(argv[1],"--state");
     if(argc!=1&&!child&&!demo&&!probe&&!guard&&!state)return 64;
     if((windowed||socket||config||chord||logical||manual)&&(child||demo||probe||guard))return 64;
@@ -7222,9 +7378,33 @@ int main(int argc,const char **argv) { @autoreleasepool {
             :[DWNativePresenter presentersAt:helperEndpoints scope:desktop.scope why:&why];
         if(!desktop.native){fprintf(stderr,"Infinify: native helper %s\n",why.UTF8String);[desktop.ipc stop];return 69;}
         NSMutableArray *savedEndpoints=[NSMutableArray array];for(NSDictionary *endpoint in helperEndpoints)[savedEndpoints addObject:@{@"runtime":endpoint[@"runtime"],@"nonce":endpoint[@"nonce"]}];desktop.nativeEndpoints=savedEndpoints.copy;
-        dw_focus_set_bounds(DWNativeBounds);dw_resize_set_bounds(DWNativeBounds);}
+        dw_focus_set_bounds(DWNativeBounds);dw_resize_set_bounds(DWNativeBounds);
+        // Compositor mode with the launch daemon on (the launcher says so by environment): the Dock is watched, and the payload that
+        // went with a Dock that restarted is loaded into the new one by the launcher's --reload, whose helper then replaces the lost
+        // endpoint and the ordinary authenticated re-admission puts the windows back (dock-reload.h).
+        const char *reload=getenv("INFINIFY_DOCK_RELOAD"),*payloadSHA=getenv("INFINIFY_NATIVE_PAYLOAD_SHA256"),*loadedAt=getenv("INFINIFY_NATIVE_LOADED_AT");
+        NSString *launcher=[NSBundle.mainBundle pathForResource:@"launch" ofType:@"sh" inDirectory:@"NativeDesktop"];
+        if(nativeDesktop&&reload&&!strcmp(reload,"1")&&payloadSHA&&strlen(payloadSHA)==64&&launcher){
+            DWDockReloader *reloader=[[DWDockReloader alloc]initWithLauncher:launcher payloadSHA256:@(payloadSHA) stateDirectory:DWDockReloadStateDirectory() loadedAt:loadedAt?atof(loadedAt):0];
+            __weak Desktop *weak=desktop;
+            reloader.onNote=^(NSString *note){[weak say:note];};
+            reloader.onEndpoint=^(NSString *runtime,NSString *nonceFile){Desktop *d=weak;if(!d)return;
+                const char *failure=NULL;NSString *nonce=helperNonce(nonceFile.fileSystemRepresentation,&failure);
+                if(!nonce){[d say:[NSString stringWithFormat:@"The reloaded helper's nonce is unusable: %s",failure]];return;}
+                d.nativeEndpoints=@[@{@"runtime":runtime,@"nonce":nonce}];d.nativeResumeFailures=0;d.nativeResumeAfter=0;[d say:@"Dock payload reloaded; reconnecting"];};
+            reloader.onPaused=^{Desktop *d=weak;[d say:@"Compositor mode stops here. The Dock that restarted left the windows drawn at the screen's top-left corner (it reset their transforms); Infinify native-desktop, run by hand, restores them from its journal and tries again"];[d quit:nil];};
+            desktop.dockReloader=reloader;[reloader watch:YES];
+        }}
     if(demo||probe||guard){NSString *dir=@(argv[2]);BOOL isDir=NO;if(![NSFileManager.defaultManager fileExistsAtPath:dir isDirectory:&isDir]||!isDir||[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil].count)return 64;desktop.statePath=[dir stringByAppendingPathComponent:@"scene.json"];return runDemo(desktop,dir,probe||guard);}
     desktop.statePath=ownership.statePath;
+    // A normal run is the desktop and switches Stage Manager and window tiling off for as long as its canvas is open (-openCanvas:);
+    // windowed, --manual and scoped runs and the demos leave the user's settings alone. Whatever an earlier run that did not end
+    // left changed is put back now, after the single-instance lease above (a second launch never touches a running one's settings)
+    // and whether or not this launch gets as far as a canvas. Every end after this one puts them back: the quit action, the exit chord,
+    // SIGTERM, SIGINT, SIGHUP and a logout reach -cleanup; exit() from anywhere else reaches the atexit handler. Only a kill that
+    // cannot be caught leaves them to the next launch.
+    if(!windowed&&!manual&&!scoped){desktop.takeover=[DWSystemTakeover system];takeoverAtExit=desktop.takeover;atexit(putBackAtExit);
+        NSString *note=nil;[desktop.takeover restore:&note];if(note.length)fprintf(stderr,"%s\n",note.UTF8String);}
     // Before the config: its binding table counts DriftWM's sizing actions and toggle-fullscreen among those that run here.
     [desktop resizeCapability];
     // Before the scene: the config decides what a load restores.
@@ -7236,11 +7416,12 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // A desktop launch adopts existing toplevels when its required access is ready.
     // Capture overlays require Screen Recording and Accessibility; authenticated
     // native primary windows require Accessibility, with recording optional for
-    // additional captured views. Both retain the Stage Manager gate. Onboarding
-    // waits for these prerequisites or reports a failed scene load. A windowed
+    // additional captured views. Onboarding waits for these prerequisites or
+    // reports a failed scene load; Stage Manager is no prerequisite, a normal run
+    // switches it off when the canvas opens (-takeOverWindowSettings). A windowed
     // run still opens immediately, and --manual keeps its chooser above it.
     desktop.managing=!manual;
-    if(!desktop.startupError&&(windowed||(desktop.managing&&DWDesktopAccessReady(desktop.native==nil,CGPreflightScreenCaptureAccess(),AXIsProcessTrusted(),DWStageManagerOn())))){[desktop openCanvas:nil];if(manual)[desktop showChooser:nil];}
+    if(!desktop.startupError&&(windowed||(desktop.managing&&DWDesktopAccessReady(desktop.native==nil,CGPreflightScreenCaptureAccess(),AXIsProcessTrusted())))){[desktop openCanvas:nil];if(manual)[desktop showChooser:nil];}
     else if(manual)[desktop showChooser:nil];
     else [desktop onboard];
     // Upstream runs autostart on every backend, its nested one included: a managed, a windowed and a chooser-first launch all do.
@@ -7249,7 +7430,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // A pool per turn: what a poll, its controller calls and the events it pumps autorelease ends with the turn.
     while(!stopped){@autoreleasepool{[desktop poll];DWDesktopPump(.08);}}
     // Stopped first: the pending quit reply is written, and no request can arrive during cleanup.
-    [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];[desktop.onboarding close];
+    [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];[desktop.onboarding close];[desktop putBackWindowSettings];
     // Relaunch: the same executable with the same arguments in this very process, once everything above has ended and the socket is free again.
     // The process keeps its place: under launchd it is still the login item's job, in a terminal still that terminal's. Not after a signal, which
     // asked for an end. The lines after execv are reached only if it failed.

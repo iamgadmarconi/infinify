@@ -3,6 +3,12 @@
  * arm64e injection path by Jeremy Legendre; original attribution retained below.
  * DriftWM changes: explicit opt-in/preflight, absolute payload path, private
  * per-user runtime configuration, bounded completion status and cleanup.
+ * Infinify daemon change: get_dock_pid falls back to console_dock_pid (libproc, by path and
+ * owner, root only) where LaunchServices lists no Dock, as in a launch daemon.
+ * Infinify staged-payload change: a root loader also accepts a payload that the launch daemon staged
+ * (staged-payload.h: root-owned, in a root-owned directory, below directories only root writes, so that
+ * nothing the login user can write is on the path the Dock opens); every other payload must still be the
+ * login user's own, as before.
  *
  * The MIT License (MIT)
  *
@@ -40,6 +46,7 @@
 #include <inttypes.h>
 #include <CommonCrypto/CommonDigest.h>
 #include "preflight.h"
+#include "staged-payload.h"
 #include "dwclient.h"
 #include <sys/un.h>
 #include <limits.h>
@@ -143,6 +150,35 @@ static char shell_code[168 + PATH_MAX] =
 "\x00\x00\x00\x00\x00\x00\x00\x00"
 "\x00\x00\x00\x00\x00\x00\x00\x00";
 
+// A launch daemon sits outside the login user's session, where LaunchServices lists no Dock (Sunlight found the
+// same, third_party/sunlight/LiveWindows/helper.m lines 128-148 and its README's "Installation boundary"), so a root
+// loader looks for the console user's Dock by its executable path and owner. Only a root loader does, and the launcher
+// always pins the Dock it has identified (--expected-dock), which is compared against this answer before anything is loaded.
+static pid_t console_dock_pid(void)
+{
+    static const char dock_path[] = "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock";
+    struct stat console;
+    if (getuid() != 0 || stat("/dev/console", &console) != 0 || console.st_uid == 0) return 0;
+    int count = proc_listallpids(NULL, 0);
+    if (count <= 0) return 0;
+    pid_t *pids = calloc((size_t)count + 64, sizeof(pid_t));
+    if (!pids) return 0;
+    count = proc_listallpids(pids, (int)(((size_t)count + 64) * sizeof(pid_t)));
+    pid_t found = 0;
+    int matches = 0;
+    for (int i = 0; i < count; i++) {
+        char path[PROC_PIDPATHINFO_MAXSIZE];
+        struct proc_bsdshortinfo info;
+        if (pids[i] <= 0 || proc_pidpath(pids[i], path, sizeof(path)) <= 0 || strcmp(path, dock_path) != 0) continue;
+        if (proc_pidinfo(pids[i], PROC_PIDT_SHORTBSDINFO, 0, &info, sizeof(info)) == sizeof(info) && info.pbsi_uid == console.st_uid) {
+            found = pids[i];
+            matches++;
+        }
+    }
+    free(pids);
+    return matches == 1 ? found : 0;
+}
+
 static pid_t get_dock_pid(void)
 {
     NSArray *list = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"];
@@ -154,7 +190,7 @@ static pid_t get_dock_pid(void)
         }
     }
 
-    return 0;
+    return console_dock_pid();
 }
 
 static BOOL process_info(pid_t pid,struct proc_bsdinfo *info) {
@@ -435,7 +471,17 @@ int main(int argc, char **argv) { @autoreleasepool {
     // for readiness probing; no user other than root or this login UID may load.
     if(getuid()!=0 && getuid()!=dockInfo.pbi_uid)return 1;
     struct stat st;
-    if(lstat(payload_path,&st)||!S_ISREG(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&0022)){fprintf(stderr,"payload ownership/mode invalid\n");return 1;}
+    // Two classes of payload, told apart by where they are, so that neither can stand in for the other. A path of the staged form
+    // (/private/var/run/infinify-payload.XXXXXX/payload-arm64e.dylib, which only root can create) is a copy the launch daemon made, and
+    // only a root loader takes it: the whole path is checked, root's file in root's directory below directories only root writes, so
+    // there is no window between this check and the Dock's dlopen in which the login user could substitute another dylib. Any other
+    // path is the login user's own regular file that nobody else can write (the owner-run sudo path, where the owner sits at the
+    // terminal that asks for the password), as before.
+    char stagedDirectory[PATH_MAX];
+    if(dw_staged_path_form(payload_path,DW_STAGED_ROOT,stagedDirectory,sizeof(stagedDirectory))) {
+        const char *staged=getuid()==0 ? dw_staged_payload_refusal(payload_path,DW_STAGED_ROOT,0,dockInfo.pbi_uid) : "only a root loader takes a staged payload";
+        if(staged){fprintf(stderr,"staged payload refused: %s\n",staged);return 1;}
+    } else if(lstat(payload_path,&st)||!S_ISREG(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&0022)){fprintf(stderr,"payload ownership/mode invalid (neither the login user's own file nor a payload staged by the launch daemon)\n");return 1;}
     if(lstat(runtime,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&07777)!=0700){fprintf(stderr,"create a fresh 0700 runtime directory as Dock login user first\n");return 1;}
     char nonce[65];
     if(!read_nonce_file(nonceFile,dockInfo.pbi_uid,nonce)){fprintf(stderr,"nonce file must be a login-user-owned regular 0600 file containing 64 lowercase hex bytes and optional newline\n");return 1;}

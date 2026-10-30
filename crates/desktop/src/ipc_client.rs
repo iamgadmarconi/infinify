@@ -3,14 +3,23 @@
 // src/ipc/client.rs (the Msg command tree, run, to_request, parse_region,
 // resolve_output_path, stream_events, print_response, print_state) and the
 // argument grammar docs/cli.md generates from it. Arguments are parsed by hand
-// instead of by clap, and the socket is Infinify's own.
+// instead of by clap, and the socket is Infinify's own. `cursor` and
+// StdoutCapture (the private file `screenshot -o -` is relayed through) are
+// v0.21.0's, df3de27b26c7998e8a460cffd8a4925cbed3a322,
+// third_party/driftwm/src/ipc/client.rs: `-o -` is left empty by
+// resolve_output_path, a file is reserved O_EXCL with mode 0600 before the
+// request, and the client reads that path, never the one in the reply. Upstream
+// reserves it under $XDG_RUNTIME_DIR/driftwm, which macOS has no equivalent of:
+// it is the directory of the socket, which the app requires to be this user's
+// and not writable by group or others.
 //! The `msg` client: connect to a running Infinify's IPC socket, send one
 //! request, print the reply. It never touches a controller.
 use super::ipc::{Event, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
 Usage: infinify msg [--json] [--socket PATH] <command> [arguments]
@@ -36,6 +45,8 @@ Commands:
   zoom [LEVEL]                        Get the zoom level, or set it
   bookmark [NAME] [X] [Y] [--delete]  List bookmarks, get or set one, or delete it
   layout [--short]                    Print the active keyboard layout
+  cursor                              Print the pointer position in the global output layout
+                                      (logical points, Y down, the space slurp prints) and its output
   action <SPEC>...                    Run a config action, e.g. `action go-to-bookmark 1`
   screenshot [--scale S] [-o PATH] [window [APP_ID] [--id ID] | all | region X Y W H [--from-screen]]
                                       Capture a canvas PNG
@@ -185,7 +196,8 @@ fn split(
 /// What to send, and how the reply is consumed.
 struct Invocation {
     request: Request,
-    /// `screenshot -o -`: relay the written PNG to stdout, then delete it.
+    /// `screenshot -o -`: relay the written PNG to stdout, then delete it. The
+    /// request's path is filled in with the file reserved for it (`invoke`).
     stdout_capture: bool,
 }
 impl From<Request> for Invocation {
@@ -206,11 +218,12 @@ fn pair<T>(first: Option<T>, second: Option<T>, lone: &str) -> Result<Option<(T,
 }
 fn to_invocation(command: &str, rest: &[String], global: &mut Global) -> Result<Invocation, Stop> {
     let request = match command {
-        "state" | "subscribe" | "debug-counters" => {
+        "state" | "subscribe" | "debug-counters" | "cursor" => {
             split(rest, &[], &[], false, global)?.at_most(0)?;
             match command {
                 "state" => Request::State,
                 "subscribe" => Request::Subscribe,
+                "cursor" => Request::Cursor,
                 _ => Request::DebugCounters,
             }
         }
@@ -449,11 +462,8 @@ fn resolve_output_path(output: Option<&str>) -> Result<String, String> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let raw = match output {
-        // `-` → a temp file the client streams to stdout, then deletes.
-        Some("-") => std::env::temp_dir().join(format!(
-            "infinify-screenshot-{}-{secs}.png",
-            std::process::id()
-        )),
+        // `-` is left empty for `invoke` to fill with a `StdoutCapture`.
+        Some("-") => return Ok(String::new()),
         Some(p) => PathBuf::from(p),
         None => PathBuf::from(format!("infinify-screenshot-{secs}.png")),
     };
@@ -465,6 +475,34 @@ fn resolve_output_path(output: Option<&str>) -> Result<String, String> {
             .join(raw)
     };
     Ok(abs.to_string_lossy().into_owned())
+}
+
+/// The file `screenshot -o -` has the app write before it is relayed to stdout:
+/// created new in the directory of the socket, which the app only serves from
+/// when it is this user's and not writable by group or others, so no one else
+/// can plant or read it, and removed when this drops.
+struct StdoutCapture {
+    path: PathBuf,
+}
+impl StdoutCapture {
+    fn reserve_in(dir: &Path) -> std::io::Result<Self> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = dir.join(format!("screenshot-{}-{nanos}.png", std::process::id()));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        Ok(Self { path })
+    }
+}
+impl Drop for StdoutCapture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// `args` are the arguments after `msg`. Returns the process exit status.
@@ -505,7 +543,7 @@ fn invoke(args: &[String]) -> Result<(), Stop> {
     let Some(command) = args.get(command_at) else {
         return usage("a command is required");
     };
-    let invocation = to_invocation(command, &args[command_at + 1..], &mut global)?;
+    let mut invocation = to_invocation(command, &args[command_at + 1..], &mut global)?;
     let subscribe = invocation.request == Request::Subscribe;
 
     let path = match global.socket {
@@ -518,6 +556,22 @@ fn invoke(args: &[String]) -> Result<(), Stop> {
             )
             .join("Library/Application Support/Infinify/infinify.sock"),
         },
+    };
+    // `screenshot -o -`: the app writes a file it cannot stream over the socket,
+    // which is then relayed to stdout. It is one this client reserved, never a
+    // path read off the reply.
+    let capture = match &mut invocation.request {
+        Request::Screenshot { path: target, .. } if invocation.stdout_capture => {
+            let socket = std::path::absolute(&path).map_err(failed)?;
+            let dir = socket
+                .parent()
+                .ok_or_else(|| failed("the socket path has no directory to capture in"))?;
+            let capture = StdoutCapture::reserve_in(dir)
+                .map_err(|e| failed(format!("cannot reserve a capture file: {e}")))?;
+            *target = capture.path.to_string_lossy().into_owned();
+            Some(capture)
+        }
+        _ => None,
     };
     let mut stream = UnixStream::connect(&path)
         .map_err(|e| failed(format!("cannot connect to {}: {e}", path.display())))?;
@@ -536,13 +590,16 @@ fn invoke(args: &[String]) -> Result<(), Stop> {
     let pretty = |reply: &Reply| serde_json::to_string_pretty(reply).map_err(failed);
 
     // `-o -` claims stdout for the PNG bytes, so it takes precedence over --json.
-    // Clean up the temp file unconditionally, even if the read or write fails.
-    if invocation.stdout_capture
-        && let Ok(Response::Screenshot { path, .. }) = &reply
+    // The reserved file goes with its guard, even if the read or write fails.
+    if let Some(capture) = &capture
+        && let Ok(Response::Screenshot { .. }) = &reply
     {
-        let bytes = std::fs::read(path);
-        let _ = std::fs::remove_file(path);
-        let bytes = bytes.map_err(|e| failed(format!("cannot read capture {path}: {e}")))?;
+        let bytes = std::fs::read(&capture.path).map_err(|e| {
+            failed(format!(
+                "cannot read capture {}: {e}",
+                capture.path.display()
+            ))
+        })?;
         // Flushed here: this client is entered from C `main`, so no Rust
         // runtime flushes the line-buffered stdout when the process exits.
         let mut out = std::io::stdout().lock();
@@ -599,6 +656,7 @@ fn print_response(response: Response) {
         Response::Camera { x, y } => println!("{x} {y}"),
         Response::Zoom(zoom) => println!("{zoom}"),
         Response::Layout(layout) => println!("{layout}"),
+        Response::Cursor { x, y, output } => println!("{x} {y} {output}"),
         Response::Focused(Some(w)) => {
             println!("#{} {}", w.id, w.app_id.as_deref().unwrap_or("(no app_id)"))
         }

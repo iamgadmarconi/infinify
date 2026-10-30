@@ -1,7 +1,15 @@
 # Canvas snapping contract
 
-The geometric adaptation targets DriftWM commit
-`352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later).
+The geometric adaptation was written against DriftWM commit
+`352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later). Its executable
+oracle is now DriftWM v0.21.0, commit `df3de27b26c7998e8a460cffd8a4925cbed3a322`
+(`third_party/driftwm/src/layout/{snap,cluster}.rs`): the differential traces of
+`snap_parity` were re-run against those files and pass unchanged
+(`cargo test -p driftwm-canvas --test snap_parity`), which is all the re-pin
+establishes. The other statements of this file describe `Scene` and were not
+re-derived from v0.21.0. The `[snap]` configuration defaults that changed in
+v0.20 (`corners` on, `outer_gap` 12) are the controller's configuration, not
+`SnapOptions`' or `DragGesture::with_alignment`'s, whose defaults stay as below.
 `tests/upstream/README.md` records the executable oracle and exact file hashes.
 
 `SnapOptions` has three fields. Defaults are gap 12 world

@@ -250,6 +250,24 @@ static BOOL v2SameTransform(CGAffineTransform a,CGAffineTransform b) {
     return (float)a.a==(float)b.a && (float)a.b==(float)b.b && (float)a.c==(float)b.c && (float)a.d==(float)b.d && (float)a.tx==(float)b.tx && (float)a.ty==(float)b.ty;
 }
 static BOOL v2FiniteRect(CGRect r);
+// What a restore writes. A window server transform is the whole map from the screen into the window's own space, so it carries
+// the window's position: an untransformed window at (x,y) reads [1,0,0,1,-x,-y] and is drawn at (x,y), and writing back a
+// transform captured at another native origin draws the window where it used to be while its native frame (and so its hit
+// testing, and macOS tiling) is elsewhere. The native frame moves during a session for reasons of its own (the application, a
+// window-server drag the shell took over, a toolbar re-layout), so the original is re-based on the native origin read at the
+// time of the write. A plain original (scale 1, no rotation, which is what an unmanaged window has) is native by
+// definition: [1,0,0,1,-x,-y] at the current origin, which also puts right an original that was captured already displaced
+// (an earlier session's stale restore). Any other original keeps its linear part and has its translation moved by the
+// origin change: t' = t - M*(origin_now - origin_captured), which draws it where it was drawn relative to the native frame.
+static BOOL v2PlainMatrix(CGAffineTransform t) {
+    return fabs(t.a-1)<1e-6 && fabs(t.d-1)<1e-6 && fabs(t.b)<1e-6 && fabs(t.c)<1e-6;
+}
+static CGAffineTransform v2RestoreTransform(CGAffineTransform original,CGPoint capturedOrigin,CGPoint origin) {
+    if(v2PlainMatrix(original))return CGAffineTransformMake(1,0,0,1,-origin.x,-origin.y);
+    CGFloat dx=origin.x-capturedOrigin.x,dy=origin.y-capturedOrigin.y;
+    original.tx-=original.a*dx+original.c*dy;original.ty-=original.b*dx+original.d*dy;
+    return original;
+}
 // The sublevel getter has a direct int return, not a status. Fence it with
 // a successful base-level read and exact current identity on both sides.
 static BOOL v2ReadSublevel(DW2Entry *e,int *value) {
@@ -275,7 +293,8 @@ static BOOL v2ReattachCurrent(DW2Entry *e) {
     CGRect bounds=CGRectZero;CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;
     return v2EntryCurrent(e) && !getBounds(mainConnection(),e->who.wid,&bounds) && v2FiniteRect(bounds)
         && CGRectEqualToRect(bounds,e->bounds) && !getTransform(mainConnection(),e->who.wid,&actual) && finiteMatrix(actual)
-        && (v2SameTransform(actual,e->transform) || v2SameTransform(actual,CGAffineTransformIdentity))
+        && (v2SameTransform(actual,e->transform) || v2SameTransform(actual,CGAffineTransformIdentity)
+            || v2SameTransform(actual,v2RestoreTransform(e->transform,e->bounds.origin,bounds.origin)))
         && (!e->alphaTouched || e->veilAlpha || (getAlpha && !getAlpha(mainConnection(),e->who.wid,&alpha) && alpha==e->alpha))
         && (!e->sublevelTouched || v2SublevelMatches(e,e->originalSublevel)) && v2EntryCurrent(e);
 }
@@ -474,7 +493,7 @@ static void v2SpaceRestoreSample(DW2Entry *e) {
     BOOL stable=e->restoreSpaceSample&&!e->pendingSpace&&v2EntryCurrent(e)
         &&v2WindowSpace(e->who.wid)==e->originalSpace
         &&!getBounds(mainConnection(),e->who.wid,&bounds)&&v2FiniteRect(bounds)&&CGRectEqualToRect(bounds,e->restoreSpaceBounds)
-        &&!getTransform(mainConnection(),e->who.wid,&actual)&&v2SameTransform(actual,e->transform)
+        &&!getTransform(mainConnection(),e->who.wid,&actual)&&v2SameTransform(actual,v2RestoreTransform(e->transform,e->bounds.origin,bounds.origin))
         &&(!e->alphaTouched||e->veilAlpha||(getAlpha&&!getAlpha(mainConnection(),e->who.wid,&alpha)&&alpha==e->alpha))
         &&(!e->sublevelTouched||v2SublevelMatches(e,e->originalSublevel))
         &&v2EntryCurrent(e);
@@ -524,9 +543,9 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
         DW2Entry *e=v2Table[wid];
         if(retry && e->state!=DW2_RESTORING)continue;
         struct dw2_restore_result r={.id=e->who,.outcome=DW2_PENDING,.set_status=-1};
-        BOOL transformSet=NO,transformRead=NO,transformMatches=NO,alphaChecked=NO,alphaCurrent=NO,alphaSet=NO,alphaRead=NO;
-        int transformSetStatus=0,transformGetStatus=0,alphaSetStatus=0,alphaGetStatus=0,finalIdentity=-1;
-        CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;CGRect releasedBounds=CGRectZero;
+        BOOL transformSet=NO,transformRead=NO,transformMatches=NO,alphaChecked=NO,alphaCurrent=NO,alphaSet=NO,alphaRead=NO,rebased=NO;
+        int transformSetStatus=0,transformGetStatus=0,alphaSetStatus=0,alphaGetStatus=0,finalIdentity=-1,originStatus=0;
+        CGAffineTransform actual=CGAffineTransformIdentity,target=e->transform;float alpha=-1;CGRect releasedBounds=CGRectZero,originBounds=CGRectZero;
         int observed=v2RestoreIdentityWithOwners(&e->who,e->owner,owners);
         BOOL admitted=observed==DW2_INSTANCE_CURRENT&&(!e->reattaching||v2ReattachCurrent(e));
         if(e->originalSpace&&!admitted){e->restoreSpaceQuiet=0;e->restoreSpaceSample=NO;}
@@ -544,9 +563,16 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
                 ok=(transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0 && finiteMatrix(actual);
                 if(ok){e->transform=actual;transformMatches=YES;}
             } else {
-                transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,e->transform);
-                ok=r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
-                    && (transformMatches=v2SameTransform(actual,e->transform));
+                // The original is re-based on the native origin read now (v2RestoreTransform), and that origin must still be the
+                // window's when the write has been read back below; a window that moved meanwhile is pending and is done again.
+                // Without a readable origin the captured original is written as the best that can be done and the window stays
+                // pending, so a later pass writes the re-based one.
+                originStatus=getBounds(mainConnection(),e->who.wid,&originBounds);
+                rebased=!originStatus&&v2FiniteRect(originBounds);
+                if(rebased)target=v2RestoreTransform(e->transform,e->bounds.origin,originBounds.origin);
+                transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,target);
+                ok=rebased && r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
+                    && (transformMatches=v2SameTransform(actual,target));
             }
             if(e->alphaTouched) {
                 alphaChecked=YES;alphaCurrent=e->reattaching ? v2ReattachCurrent(e) : v2EntryCurrent(e);
@@ -568,13 +594,16 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
             // the possibly resized geometry from first admission.
             ok=ok && spaceRestored && (!e->originalSpace||v2WindowSpace(e->who.wid)==e->originalSpace)
                 && !getBounds(mainConnection(),e->who.wid,&releasedBounds) && v2FiniteRect(releasedBounds)
-                && (!e->reattaching || CGRectEqualToRect(releasedBounds,e->bounds));
+                && (!e->reattaching || CGRectEqualToRect(releasedBounds,e->bounds))
+                && (!rebased || CGPointEqualToPoint(releasedBounds.origin,originBounds.origin));
             ok=ok && (finalIdentity=v2RestoreIdentity(&e->who,e->owner))==DW2_INSTANCE_CURRENT;
             r.outcome=v2SpaceRestoreSettled(e,releasedBounds,ok) ? DW2_RESTORED : DW2_PENDING;
         }
         if(r.outcome==DW2_PENDING){e->state=DW2_RESTORING;pending++;}
         else {
-            if(r.outcome==DW2_RESTORED){e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;
+            // The retained record says what is now on the window: the transform written, at the bounds read after it, so a later
+            // re-base starts from a pair that belongs together. A veil-only release adopted the transform in force above.
+            if(r.outcome==DW2_RESTORED){if(rebased)e->transform=target;e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;
                 // A veil's conditional alpha was settled by this release; its mark is not an original to guard later.
                 if(e->veilAlpha)e->alphaTouched=NO;
                 e->veiled=e->veilBare=e->veilAlpha=NO;v2Released[wid]=e;}
@@ -592,6 +621,10 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
                 @"transform_set_status":transformSet ? @(transformSetStatus) : (id)NSNull.null,
                 @"transform_get_status":transformRead ? @(transformGetStatus) : (id)NSNull.null,
                 @"saved_transform":matrix(e->transform),
+                @"origin_status":rebased||originStatus ? @(originStatus) : (id)NSNull.null,
+                @"native_origin":rebased ? @[@(originBounds.origin.x),@(originBounds.origin.y)] : (id)NSNull.null,
+                @"captured_origin":@[@(e->bounds.origin.x),@(e->bounds.origin.y)],
+                @"target_transform":rebased ? matrix(target) : (id)NSNull.null,
                 @"actual_transform":transformRead && !transformGetStatus && finiteMatrix(actual) ? matrix(actual) : (id)NSNull.null,
                 @"transform_matches":transformRead && !transformGetStatus ? @(transformMatches) : (id)NSNull.null,
                 @"alpha":e->alphaTouched ? @{@"identity_current":alphaChecked ? @(alphaCurrent) : (id)NSNull.null,

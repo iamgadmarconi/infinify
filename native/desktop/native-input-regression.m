@@ -10,6 +10,8 @@ static bool physicalButtonState(CGEventSourceStateID state,CGMouseButton button)
 #define CGEventSourceButtonState physicalButtonState
 #import "native-input.m"
 #undef CGEventSourceButtonState
+#import "native-drag-takeover.h"
+#import "native-toolbar-extent.h"
 #import <objc/runtime.h>
 
 @interface PolicyTouchFrame : DWTrackpadTouchFrame
@@ -128,6 +130,50 @@ int main(void) {@autoreleasepool {
     check([input handle:kCGEventLeftMouseDown event:taggedDown]==taggedDown&&consumed==before,@"tagged down bypasses physical bookkeeping");
     take=YES;check([input handle:kCGEventMouseMoved event:move]==NULL,@"tagged down creates no native reservation");
 
+    // Which native presses count as the application's own window drag of a transformed window (native-drag-takeover.h).
+    {CGRect press=CGRectMake(0,528,800,632),drawn=CGRectMake(611,309,401,317),moved=CGRectMake(236,447,800,632);CGPoint start=CGPointMake(891,323),away=CGPointMake(841,348);
+        check(DWNativeWindowDragStarted(press,drawn,moved,start,away),@"a transformed window whose native origin moves with its extent unchanged is the application's own drag");
+        check(!DWNativeWindowDragStarted(press,press,moved,start,away),@"an identity placement (drawn where it is natively) is left to drag natively");
+        check(!DWNativeWindowDragStarted(press,drawn,press,start,away),@"no native motion is a content drag");
+        check(!DWNativeWindowDragStarted(press,drawn,CGRectMake(0.5,528.5,800,632),start,away),@"native motion of a point or less is no drag");
+        check(!DWNativeWindowDragStarted(press,drawn,CGRectMake(0,528,830,632),start,away)&&!DWNativeWindowDragStarted(press,drawn,CGRectMake(236,447,830,640),start,away),@"a changed extent is a resize, left native");
+        check(!DWNativeWindowDragStarted(press,drawn,moved,start,CGPointMake(893,325)),@"under 4 points of pointer travel is still a click");}
+    // Which part of a toolbar group is native (native-toolbar-extent.h). Safari 27.0.1's centre group, read with Accessibility in the guest:
+    // the group is 541,0 753x52; its children are the search button 547,11.5 23.5x30 and the address field 568,18 720x31.
+    {CGRect group=CGRectMake(541,0,753,52),kids[]={CGRectMake(547,11.5,23.5,30),CGRectMake(568,18,720,31)},extent;
+        check(DWToolbarGroupExtent(group,kids,2,&extent)&&CGRectEqualToRect(extent,CGRectMake(541,11.5,753,37.5)),@"a group keeps its width and the vertical extent of its children");
+        CGRect inflated=CGRectInset(extent,-1,-1);
+        check(!CGRectContainsPoint(inflated,CGPointMake(917,7))&&!CGRectContainsPoint(inflated,CGPointMake(917,50.5)),@"the strips above and below the address field are the window's, at the press point that failed at zoom 0.5 (local y 7)");
+        check(CGRectContainsPoint(inflated,CGPointMake(917,14))&&CGRectContainsPoint(inflated,CGPointMake(543,30))&&CGRectContainsPoint(inflated,CGPointMake(1292,30)),@"the field, its rounded ends and the search button stay native");
+        CGRect nested[]={CGRectMake(166,7,75,38)};group=CGRectMake(163,0,77,52);
+        check(DWToolbarGroupExtent(group,nested,1,&extent)&&CGRectEqualToRect(extent,CGRectMake(163,7,77,38)),@"a segmented control's group is trimmed the same way");
+        CGRect whole[]={CGRectMake(0,0,50,52)};group=CGRectMake(0,0,50,52);
+        check(DWToolbarGroupExtent(group,whole,1,&extent)&&CGRectEqualToRect(extent,group),@"a child that fills the group leaves it whole");
+        CGRect slightly[]={CGRectMake(95,-0.5,38,53)};group=CGRectMake(92,0,71,52);
+        check(DWToolbarGroupExtent(group,slightly,1,&extent)&&CGRectEqualToRect(extent,CGRectMake(92,0,71,52)),@"a child a point past the group is clipped to it");
+        CGRect outside[]={CGRectMake(95,7,38,60)},empty[]={CGRectMake(95,7,0,38)},bad[]={CGRectMake(NAN,7,38,38)},far[]={CGRectMake(400,7,38,38)};
+        check(!DWToolbarGroupExtent(group,outside,1,&extent)&&!DWToolbarGroupExtent(group,empty,1,&extent)&&!DWToolbarGroupExtent(group,bad,1,&extent)&&!DWToolbarGroupExtent(group,far,1,&extent),
+            @"a child outside the group, an empty or a non-finite one cannot be trusted: the group stays whole");
+        check(!DWToolbarGroupExtent(group,kids,0,&extent)&&!DWToolbarGroupExtent(group,NULL,1,&extent)&&!DWToolbarGroupExtent(CGRectMake(0,0,0,52),whole,1,&extent),@"no children, no array or an empty group: whole");}
+    // The consumer takes a held native drag over from inside the ownership callback (a transformed window that began the application's
+    // own window drag). That packet and the rest of the physical pair become the canvas's; nothing else about the pair changes.
+    __block DWNativeInput *taking=nil;__block BOOL takeNow=NO;__block NSUInteger takenConsumed=0;__block BOOL tookButton=NO;
+    taking=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;takenConsumed++;return NO;} earlyConsume:nil ignoreEvent:nil cancelled:^{}];
+    taking.nativeMouseOwnershipChanged=^(CGEventRef event,NSIndexSet *buttons){if(takeNow&&event&&CGEventGetType(event)==kCGEventLeftMouseDragged&&buttons.count==1)tookButton=[taking takeNativeButton:0];};
+    check(![taking takeNativeButton:0],@"no held native button, nothing to take");
+    check(unchanged(down,^{return [taking handle:kCGEventLeftMouseDown event:down];})&&takenConsumed==1,@"takeover scenario: a native press is first an ordinary original pair");
+    check(unchanged(drag,^{return [taking handle:kCGEventLeftMouseDragged event:drag];})&&!tookButton&&takenConsumed==1,@"a native drag the consumer does not take stays original");
+    takeNow=YES;
+    check([taking handle:kCGEventLeftMouseDragged event:drag]==NULL&&tookButton,@"the packet that shows the application's window drag is swallowed when the consumer takes the button");
+    check([taking holdsCapturedButton:0]&&![taking holdsCapturedButton:1],@"the canvas holds the taken button's physical pair until its release (the lost-input watchdog reads this)");
+    NSUInteger tails=takenConsumed;
+    check([taking handle:kCGEventLeftMouseDragged event:drag]==NULL&&takenConsumed==tails+1,@"later drags of the taken pair are swallowed and offered to the consumer");
+    check([taking handle:kCGEventLeftMouseUp event:up]==NULL&&takenConsumed==tails+2&&![taking holdsCapturedButton:0],@"the physical release of the taken pair is swallowed, offered to the consumer, and ends the canvas's hold");
+    takeNow=NO;
+    check(unchanged(down,^{return [taking handle:kCGEventLeftMouseDown event:down];})&&unchanged(drag,^{return [taking handle:kCGEventLeftMouseDragged event:drag];}),@"the next press is a fresh native pair again");
+    check(![taking takeNativeButton:1],@"another button that is not held native cannot be taken");
+    [taking handle:kCGEventLeftMouseUp event:up];[taking stop];
+
     __block NSUInteger earlyDowns=0,earlyTails=0,earlyCancels=0;
     DWNativeInput *early=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;earlyTails++;return NO;}
         earlyConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;earlyDowns++;return YES;}
@@ -211,17 +257,72 @@ int main(void) {@autoreleasepool {
     check(!global.hasNativeMousePress,@"disabled global tap retires stale native reservation");
     [global handleGlobal:kCGEventLeftMouseDown event:down];[global stop];
     check(!global.hasNativeMousePress,@"stopping global tap clears physical reservation");
-    // Dock control is owned wholesale unless another tap, the multitouch source's, holds it back by finger count.
-    __block BOOL elsewhere=NO;
+    // Dock control with no touch source delivering: this tap's own rule. Every DockSwipe whose beginning it saw while it owned the touch is its to drop.
+    __block DWDockControlVerdict verdict=DWDockControlUndecided;__block NSUInteger asked=0;
     DWGlobalTrackpadInput *shared=[[DWGlobalTrackpadInput alloc]initWithEnabled:^BOOL{return YES;} admitTouches:^BOOL(DWTrackpadTouchFrame *frame){(void)frame;return NO;}
         touches:^(DWTrackpadTouchFrame *frame){(void)frame;} magnify:^BOOL(NSEvent *event){(void)event;return NO;} ignoreEvent:nil cancelled:^{}];
-    shared.dockElsewhere=^BOOL{return elsewhere;};
-    CGEventRef dockBegan=dockPacket(kCGGesturePhaseBegan),dockEnded=dockPacket(kCGGesturePhaseEnded);
-    if(!NSEvent.pressedMouseButtons)check([shared handleGlobal:30 event:dockBegan]==NULL,@"without another tap a Dock swipe of any finger count is owned");
-    [shared handleGlobal:30 event:dockEnded];
-    elsewhere=YES;
-    check(unchanged(dockBegan,^{return [shared handleGlobal:30 event:dockBegan];}),@"a Dock swipe another tap holds back by finger count is left alone");
+    shared.dockDecision=^DWDockControlVerdict(CGEventRef event){(void)event;asked++;return verdict;};
+    CGEventRef dockBegan=dockPacket(kCGGesturePhaseBegan),dockEnded=dockPacket(kCGGesturePhaseEnded),dockChanged=dockPacket(kCGGesturePhaseChanged);
+    // The Dock-control packet of a format this decoder does not know: the shape the owner's Show Desktop and Launchpad pinches may have, unverified.
+    CGEventRef dockOther=dockPacket(kCGGesturePhaseChanged);CGEventSetIntegerValueField(dockOther,DWGestureAxis,0);
+    check(DWDockControlClassify(dockBegan,NULL,NULL)==DWDockControlBegan&&DWDockControlClassify(dockChanged,NULL,NULL)==DWDockControlChanged
+        &&DWDockControlClassify(dockEnded,NULL,NULL)==DWDockControlEnded&&DWDockControlClassify(dockOther,NULL,NULL)==DWDockControlOther,@"Dock-control packets are told by phase, and an unknown axis is `other`");
+    if(!NSEvent.pressedMouseButtons){
+        check([shared handleGlobal:30 event:dockBegan]==NULL&&asked==1,@"with no touch source a Dock swipe of any finger count is this tap's, and the decision is asked first");
+        check([shared handleGlobal:30 event:dockChanged]==NULL,@"the rest of that stream follows");
+        check([shared handleGlobal:30 event:dockEnded]==NULL,@"and its end");
+        check(unchanged(dockOther,^{return [shared handleGlobal:30 event:dockOther];}),@"a Dock-control packet of another format is not dropped while this tap owns no touch");
+        [shared handleGlobal:30 event:dockBegan];
+        check([shared handleGlobal:30 event:dockOther]==NULL,@"but is while a stream this tap owns is in progress");
+        [shared handleGlobal:30 event:dockEnded];
+    }
+    // Pass and Drop are final, for any format.
+    verdict=DWDockControlPass;
+    check(unchanged(dockBegan,^{return [shared handleGlobal:30 event:dockBegan];}),@"a Dock swipe the guard passes is left alone");
     check(unchanged(dockEnded,^{return [shared handleGlobal:30 event:dockEnded];}),@"and so is its end");
+    verdict=DWDockControlDrop;
+    check([shared handleGlobal:30 event:dockOther]==NULL&&[shared handleGlobal:30 event:dockChanged]==NULL,@"a packet the guard drops is dropped whatever its format, with no touch owned here");
+    verdict=DWDockControlUndecided;
+    // The touch this tap owns: a three-finger admission that ends leaves a tail in which the end of the system's gesture is still this tap's.
+    CGEventRef anyOther=CGEventCreate(NULL);CGEventSetType(anyOther,30);
+    check(unchanged(anyOther,^{return [shared handleGlobal:30 event:anyOther];}),@"a type-30 packet with no field at all is not dropped without a touch");
+    [shared setValue:@YES forKey:@"ownsTouches"];
+    check([shared handleGlobal:30 event:anyOther]==NULL,@"it is while this tap owns an admitted touch");
+    [shared setValue:@NO forKey:@"ownsTouches"];
+    check(unchanged(anyOther,^{return [shared handleGlobal:30 event:anyOther];}),@"and is not after it");
+    [shared setValue:@(CACurrentMediaTime()+DWDockControlTail) forKey:@"dockTail"];
+    check([shared handleGlobal:30 event:anyOther]==NULL,@"but is within the tail an ended touch leaves");
+    [shared setValue:@(CACurrentMediaTime()-.001) forKey:@"dockTail"];
+    check(unchanged(anyOther,^{return [shared handleGlobal:30 event:anyOther];}),@"and not after the tail");
+    CFRelease(anyOther);CFRelease(dockOther);CFRelease(dockChanged);
+
+    // Dock control is never handed to AppKit: +[NSEvent eventWithCGEvent:] has no type 30, and AppKit logs "unrecognized type is 30" for each packet that gets there.
+    // The conversion is counted for the length of this block, in the one tap that sees every event and the one that sees the Dock's.
+    {
+        static NSUInteger conversions;static id (*convert)(id,SEL,CGEventRef);
+        Method eventMethod=class_getClassMethod(NSEvent.class,@selector(eventWithCGEvent:));check(eventMethod!=NULL,@"the conversion entry point exists");
+        convert=(id (*)(id,SEL,CGEventRef))method_getImplementation(eventMethod);
+        id (^counted)(id,CGEventRef)=^id(id cls,CGEventRef event){conversions++;return convert(cls,@selector(eventWithCGEvent:),event);};
+        IMP counting=imp_implementationWithBlock(counted);IMP real=method_setImplementation(eventMethod,counting);
+        CGEventRef probe=CGEventCreate(NULL);CGEventSetType(probe,(CGEventType)NSEventTypeGesture);(void)[NSEvent eventWithCGEvent:probe];
+        check(conversions==1,@"the counting substitution sees a conversion");conversions=0;
+        CGEventRef decodable=dockPacket(kCGGesturePhaseChanged),undecodable=dockPacket(kCGGesturePhaseChanged);CGEventSetIntegerValueField(undecodable,DWGestureHIDType,8);
+        CGEventRef bare=CGEventCreate(NULL);CGEventSetType(bare,30);
+        __block NSUInteger seen=0;DWNativeInput *annotated=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;return NO;}
+            earlyConsume:nil ignoreEvent:nil cancelled:^{}];
+        annotated.dockControl=^(CGEventRef event){(void)event;seen++;};
+        DWGlobalTrackpadInput *fresh=[[DWGlobalTrackpadInput alloc]initWithEnabled:^BOOL{return YES;} admitTouches:^BOOL(DWTrackpadTouchFrame *frame){(void)frame;return NO;}
+            touches:^(DWTrackpadTouchFrame *frame){(void)frame;} magnify:^BOOL(NSEvent *event){(void)event;return NO;} ignoreEvent:nil cancelled:^{}];
+        for(NSValue *packet in @[[NSValue valueWithPointer:decodable],[NSValue valueWithPointer:undecodable],[NSValue valueWithPointer:bare]]){
+            CGEventRef event=packet.pointerValue;
+            check([annotated handle:30 event:event]==event,@"the annotated tap returns a Dock-control packet untouched");
+            [fresh handleGlobal:30 event:event];
+        }
+        check(seen==3,@"the annotated tap tells the shell of each packet that reached it");
+        check(conversions==0,@"no Dock-control packet, decodable or not, is converted to an NSEvent by either tap");
+        method_setImplementation(eventMethod,real);imp_removeBlock(counting);
+        CFRelease(probe);CFRelease(decodable);CFRelease(undecodable);CFRelease(bare);
+    }
     CFRelease(dockBegan);CFRelease(dockEnded);
 
     Method decode=class_getClassMethod(DWTrackpadTouchFrame.class,@selector(frameWithEvent:device:));
@@ -252,7 +353,55 @@ int main(void) {@autoreleasepool {
     } @finally {method_setImplementation(decode,original);policyFrame=nil;}
     CFRelease(contact);CFRelease(touchDown);CFRelease(touchDrag);CFRelease(touchUp);
 
+    // The volume, brightness, media and keyboard-backlight keys of a Mac arrive system-defined (NX_SYSDEFINED, type 14, subtype 8,
+    // data1 = key<<16 | state<<8); with "standard function keys" on, the top row sends F-key events instead. Every tap handler
+    // returns such a packet as it came, byte for byte, and no consumer is asked about one. What makes macOS drop these keys is
+    // an active annotated tap asking for their type, which no handler can undo, so the mask the tap subscribes to is checked too.
+    {
+        __block NSUInteger asked=0;
+        DWNativeInput *keys=[[DWNativeInput alloc]initWithConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;asked++;return YES;}
+            earlyConsume:^BOOL(CGEventType type,CGEventRef event){(void)type;(void)event;asked++;return YES;} ignoreEvent:nil cancelled:^{}];
+        DWGlobalTrackpadInput *pad=[[DWGlobalTrackpadInput alloc]initWithEnabled:^BOOL{return YES;}
+            admitTouches:^BOOL(DWTrackpadTouchFrame *frame){(void)frame;asked++;return YES;} touches:^(DWTrackpadTouchFrame *frame){(void)frame;asked++;}
+            magnify:^BOOL(NSEvent *event){(void)event;asked++;return YES;} ignoreEvent:nil cancelled:^{}];
+        // NX_KEYTYPE_SOUND_UP, SOUND_DOWN, BRIGHTNESS_UP, BRIGHTNESS_DOWN, MUTE, PLAY, NEXT, PREVIOUS, FAST, REWIND, ILLUMINATION_UP/DOWN/TOGGLE.
+        const int auxKeys[]={0,1,2,3,7,16,17,18,19,20,21,22,23};
+        NSUInteger auxPackets=0;
+        for(size_t i=0;i<sizeof(auxKeys)/sizeof(*auxKeys);i++)for(int pressed=1;pressed>=0;pressed--){
+            NSInteger state=pressed?0xa:0xb;
+            NSEvent *made=[NSEvent otherEventWithType:NSEventTypeSystemDefined location:NSZeroPoint modifierFlags:(NSEventModifierFlags)(state<<8)
+                timestamp:0 windowNumber:0 context:nil subtype:8 data1:((NSInteger)auxKeys[i]<<16)|(state<<8) data2:-1];
+            CGEventRef aux=made.CGEvent?CGEventCreateCopy(made.CGEvent):NULL;
+            check(aux!=NULL&&CGEventGetType(aux)==(CGEventType)NSEventTypeSystemDefined,@"in-memory aux control packet is system-defined");
+            CGEventType type=(CGEventType)NSEventTypeSystemDefined;auxPackets++;
+            check(unchanged(aux,^{return [keys handle:type event:aux];})&&unchanged(aux,^{return [keys handleEarly:type event:aux];})
+                &&unchanged(aux,^{return [pad handleGlobal:type event:aux];}),@"an aux control key passes every tap handler untouched");
+            CFRelease(aux);
+        }
+        // F1..F12 and the Mission Control key, with and without the Fn flag the system adds to them.
+        const int functionKeys[]={122,120,99,118,96,97,98,100,101,109,103,111,160};
+        NSUInteger keyPackets=0;
+        for(size_t i=0;i<sizeof(functionKeys)/sizeof(*functionKeys);i++)for(int fn=0;fn<2;fn++)for(int pressed=1;pressed>=0;pressed--){
+            CGEventRef key=CGEventCreateKeyboardEvent(NULL,(CGKeyCode)functionKeys[i],pressed);check(key!=NULL,@"create in-memory F-key packet");
+            if(fn)CGEventSetFlags(key,CGEventGetFlags(key)|kCGEventFlagMaskSecondaryFn);
+            CGEventType type=pressed?kCGEventKeyDown:kCGEventKeyUp;keyPackets++;
+            check(unchanged(key,^{return [keys handle:type event:key];})&&unchanged(key,^{return [keys handleEarly:type event:key];})
+                &&unchanged(key,^{return [pad handleGlobal:type event:key];}),@"a function key passes every tap handler untouched");
+            CFRelease(key);
+        }
+        check(asked==0,@"no consumer, admission or magnify callback is asked about a system key");
+        // The annotated tap subscribes to the pointer, scroll, tablet and gesture types it acts on and to nothing else: not the
+        // system-defined type 14, not the key types 10 to 12, not AppKit-defined 13 (macOS posts it while the volume moves).
+        const int wanted[]={1,2,3,4,5,6,7,22,23,24,25,26,27,29,30};
+        CGEventMask expected=0,mask=DWNativeInputAnnotatedMask();
+        for(size_t i=0;i<sizeof(wanted)/sizeof(*wanted);i++)expected|=(CGEventMask)1<<wanted[i];
+        check(mask==expected,@"the annotated tap asks for exactly the pointer, scroll, tablet and gesture types");
+        for(int type=10;type<=14;type++)check(!(mask&((CGEventMask)1<<type)),@"the annotated tap never asks for key, system-defined or AppKit-defined events");
+        printf("system keys: %lu aux control and %lu function-key packets returned untouched by the annotated, early and global handlers; annotated mask 0x%llx\n",
+            (unsigned long)auxPackets,(unsigned long)keyPackets,(unsigned long long)mask);
+    }
+
     for(NSValue *value in @[[NSValue valueWithPointer:down],[NSValue valueWithPointer:drag],[NSValue valueWithPointer:up],[NSValue valueWithPointer:move],[NSValue valueWithPointer:taggedUp],[NSValue valueWithPointer:taggedDown],[NSValue valueWithPointer:second],[NSValue valueWithPointer:secondDrag],[NSValue valueWithPointer:secondUp],[NSValue valueWithPointer:own],[NSValue valueWithPointer:dock]])CFRelease(value.pointerValue);
     [input stop];
-    puts("native input policy: original foreign pairs, tagged copies, cancellation and global drag admission passed; native drag-and-drop delivery unverified");
+    puts("native input policy: original foreign pairs, tagged copies, cancellation, global drag admission and system keys passed; native drag-and-drop delivery unverified");
 }return 0;}

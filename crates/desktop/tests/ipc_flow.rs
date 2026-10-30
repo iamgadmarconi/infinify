@@ -229,8 +229,8 @@ fn state_camera_and_zoom_speak_center_y_up_over_the_whole_output() {
             "camera":[1300.0,-1000.0],"zoom":0.5,"layout":"","layout_short":"",
             "windows":[
                 {"id":1,"app_id":"com.example.Terminal","title":"Stand-in","position":[150,-100],"size":[300,200],"is_focused":false,"is_widget":false,"suspended":true,"mode":"Normal"},
-                {"id":2,"app_id":"com.example.Editor","title":"Editor","position":[-700,1800],"size":[600,400],"is_focused":false,"is_widget":false,"suspended":false,"mode":"Normal"},
-                {"id":3,"app_id":"com.example.Terminal","title":"Shell","position":[1000,-700],"size":[601,401],"is_focused":false,"is_widget":false,"suspended":false,"mode":"Normal"}
+                {"id":2,"app_id":"com.example.Editor","title":"Editor","position":[-700,1800],"size":[600,400],"is_focused":false,"is_widget":false,"suspended":false,"mode":"Normal","pid":123},
+                {"id":3,"app_id":"com.example.Terminal","title":"Shell","position":[1000,-700],"size":[601,401],"is_focused":false,"is_widget":false,"suspended":false,"mode":"Normal","pid":123}
             ],
             "fullscreen":[],"pinned":[],"layers":[],"canvas_layers":[],
             "outputs":[
@@ -446,14 +446,17 @@ fn bookmarks_round_trip_through_actions_ipc_and_the_save_file() {
     );
     assert_eq!(h.snapshot()["bookmarks"], all);
 
-    // Upstream's tick lets an anchored zoom flight overrule a camera target set
-    // during it: the bookmark jump is dropped and the zoom lands on its anchor.
+    // v0.20: a bookmark jump sent during a zoom flight goes through the anchor
+    // at the zoom the view is heading to (src/input/actions.rs
+    // go_to_canvas_point), so it is no longer dropped by the flight's tick:
+    // the origin lands under the usable center at zoom 1, not the live 0.5.
     let zoom = h.action("zoom-reset")["navigation"].clone();
-    let dropped = h.action("go-to-bookmark home")["navigation"].clone();
-    assert_eq!(dropped["target_camera"], json!({"x":-1000.0,"y":-820.0}));
-    assert_eq!(dropped["target_zoom"], 1.0);
+    assert_eq!(zoom["target_zoom"], 1.0);
+    let jump = h.action("go-to-bookmark home")["navigation"].clone();
+    assert_eq!(jump["target_camera"], json!({"x":-500.0,"y":-410.0}));
+    assert_eq!(jump["target_zoom"], 1.0);
     settle(&mut h, &mut clock);
-    assert_eq!(pose(&mut h, 1)["camera"], zoom["target_camera"]);
+    assert_eq!(pose(&mut h, 1)["camera"], jump["target_camera"]);
     // From rest the same jump lands, and the bookmark under the usable center
     // becomes that output's active bookmark. Output 2 still shows the origin.
     let data = h.action("go-to-bookmark home");
@@ -674,23 +677,26 @@ fn move_resize_and_focus_address_logical_windows() {
     assert_eq!(order, [json!(1), json!(2), json!(3)]);
     h.ipc(json!({"Move":{"window":2,"to":[-700,1800]}}));
     h.ipc(json!({"Move":{"window":3,"to":[1000,-700]}}));
-    // A destination no later request could read is refused: a top-left below
-    // i32, or a center in range whose far edge (150 or 100 further) is not.
+    // v0.21.0 bounds a requested position at +-1,050,000,000 (upstream's
+    // check_point, before the selector is even resolved), so the i32 edge a
+    // request could once reach is out of range: nothing lands past the limit.
     for to in [
         [-2147483648i64, 0],
         [2147483647, 0],
         [0, 2147483647],
         [0, -2147483648],
+        [1_050_000_001, 0],
+        [0, -1_050_000_001],
     ] {
         assert_eq!(
             h.refused(Value::Null, json!({"Move":{"window":1,"to":to}})),
-            "window geometry exceeds integer range"
+            "coordinates must be within ±1050000000"
         );
     }
-    // The far edge may sit on i32::MAX itself, and the frame still reads back.
-    let edge = json!({"Position":{"x":2147483497,"y":0}});
+    // The limit itself is a position, and the frame still reads back.
+    let edge = json!({"Position":{"x":1050000000,"y":0}});
     assert_eq!(
-        h.ipc(json!({"Move":{"window":1,"to":[2147483497,0]}}))["reply"]["Ok"],
+        h.ipc(json!({"Move":{"window":1,"to":[1050000000,0]}}))["reply"]["Ok"],
         edge
     );
     assert_eq!(h.read(json!({"Move":{"window":1}})), edge);
@@ -786,13 +792,15 @@ fn move_resize_and_focus_address_logical_windows() {
     );
     assert_eq!(data["effects"], json!([]));
     assert_eq!(h.snapshot()["focus"]["intent"], 1);
-    // Upstream reveal_suspended: an off-screen stand-in is panned to at the
-    // zoom in effect (0.5 here), its center (-7, -9) under the usable center.
+    // Upstream reveal_element on a stand-in (v0.20; reveal_suspended before):
+    // an off-screen stand-in is panned to at the zoom the view is heading to,
+    // here 1 from the focus of window 2 above, not the live 0.5, its center
+    // (-7, -9) under the usable center.
     assert_eq!(pose(&mut h, 1)["zoom"], 0.5);
-    assert_eq!(data["navigation"]["target_zoom"], 0.5);
+    assert_eq!(data["navigation"]["target_zoom"], 1.0);
     assert_eq!(
         data["navigation"]["target_camera"],
-        json!({"x":-1007.0,"y":-829.0})
+        json!({"x":-507.0,"y":-419.0})
     );
     // With the bound source gone the same selector reaches the placeholder.
     h.ok(json!({"op":"remove_source","window":3,"identity":identity(3),"keep_placeholder":false}));
@@ -1311,9 +1319,12 @@ fn msg_client_reaches_a_controller_through_the_ipc_command() {
     assert_eq!(snapshot["focus"]["intent"], 2);
     let (status, snapshot) = run(&["camera", "0", "0"]);
     assert_eq!(status, 0);
+    // v0.20: the camera is set through the anchor, at the zoom the view is
+    // heading to: the focus above flies to window 2 at zoom 1, so the origin
+    // lands under the center at 1, not at the live 0.5.
     assert_eq!(
         snapshot["navigation"]["flights"]["1"]["camera_target"],
-        json!({"x":-1000.0,"y":-800.0})
+        json!({"x":-500.0,"y":-400.0})
     );
     assert_eq!(server.join().unwrap().len(), 9);
     std::fs::remove_file(path).unwrap();
@@ -1390,6 +1401,344 @@ fn msg_subscribe_streams_the_controllers_event_lines_until_the_server_hangs_up()
     );
     assert_eq!(msg(&["--socket", &socket, "subscribe"]), 1);
     assert_eq!(msg(&["--json", "--socket", &socket, "subscribe"]), 0);
+    assert_eq!(server.join().unwrap().len(), 2);
+    std::fs::remove_file(path).unwrap();
+}
+
+// DriftWM v0.21.0 additions (df3de27b26c7998e8a460cffd8a4925cbed3a322): the `pid`
+// of a window in `state`, `msg cursor`, the bounds on what a request may ask for
+// and the private file `screenshot -o -` is relayed through. Same boundary as
+// the scenarios above: the exported ABI and the exported `msg` client, no
+// native window, no pointer and no real socket of the app.
+
+#[test]
+fn state_names_the_process_of_a_bound_window_pinned_and_fullscreen_and_none_for_a_stand_in() {
+    let mut h = setup();
+    let state = h.read(json!("State"))["State"].clone();
+    let by_id = |state: &Value, id: u64| {
+        state["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no window {id} in {state}"))
+    };
+    // Window 1 is a stand-in: it has no source, so no process, and the member
+    // is left out rather than null, as upstream's `skip_serializing_if` does.
+    assert!(by_id(&state, 1).get("pid").is_none(), "{state}");
+    assert_eq!(by_id(&state, 2)["pid"], 123);
+    assert_eq!(by_id(&state, 3)["pid"], 123);
+    // The typed form the `msg` client re-serializes keeps the member last.
+    let json = h.read(json!("State"));
+    assert!(
+        serde_json::to_string(&json)
+            .unwrap()
+            .contains(r#""mode":"Normal","pid":123"#)
+    );
+
+    // A window pinned to the screen moves to `pinned`, still with its process.
+    let data = h.ipc(json!({"Pin":{"window":3,"value":true}}));
+    assert_eq!(data["reply"], json!({"Ok":{"Pin":true}}));
+    let state = h.read(json!("State"))["State"].clone();
+    assert_eq!(state["pinned"][0]["id"], 3);
+    assert_eq!(state["pinned"][0]["pid"], 123, "{state}");
+    assert!(
+        state["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| w["id"] != 3)
+    );
+
+    // So does a fullscreen window, which is reported under `fullscreen`.
+    h.ok(json!({"op":"native_resize_capability","enabled":true}));
+    h.ok(json!({"op":"focus","window":2}));
+    let entered = h.action("toggle-fullscreen");
+    assert!(entered["effect"].is_object(), "{entered}");
+    let state = h.read(json!("State"))["State"].clone();
+    assert_eq!(state["fullscreen"][0]["id"], 2, "{state}");
+    assert_eq!(state["fullscreen"][0]["pid"], 123, "{state}");
+    assert_eq!(state["fullscreen"][0]["output"], "view-a");
+}
+
+#[test]
+fn cursor_is_the_pointer_in_the_global_layout_and_the_output_the_request_is_for() {
+    let mut h = setup();
+    // The shell sends the pointer with every request, in the global screen
+    // space `screen_bounds` are in: output 2 starts at (1200, 50).
+    let at = |h: &mut Host, output: Value, pointer: Value| {
+        h.ok(json!({"op":"ipc","output":output,"request":"Cursor","pointer":pointer}))
+    };
+    let data = at(&mut h, json!(2), json!({"x":1500.5,"y":212.25}));
+    assert_eq!(
+        data["reply"],
+        json!({"Ok":{"Cursor":{"x":1500.5,"y":212.25,"output":"view-b"}}})
+    );
+    assert_eq!(data["effects"], json!([]));
+    assert_eq!(data["dirty"], false);
+    assert_eq!(data["navigation"], Value::Null);
+    let data = at(&mut h, json!(1), json!({"x":-30.0,"y":0.0}));
+    assert_eq!(
+        data["reply"],
+        json!({"Ok":{"Cursor":{"x":-30.0,"y":0.0,"output":"view-a"}}}),
+        "the layout's own coordinates, not output-local ones"
+    );
+    // Upstream's order of refusals: no pointer, then no output.
+    let before = h.snapshot();
+    let data = h.ok(json!({"op":"ipc","output":1,"request":"Cursor"}));
+    assert_eq!(data["reply"], json!({"Err":"no pointer"}));
+    let data = at(&mut h, Value::Null, json!({"x":1.0,"y":2.0}));
+    assert_eq!(data["reply"], json!({"Err":"no output"}));
+    let data = at(&mut h, json!(9), json!({"x":1.0,"y":2.0}));
+    assert_eq!(data["reply"], json!({"Err":"unknown output"}));
+    assert_eq!(h.snapshot(), before);
+}
+
+#[test]
+fn msg_cursor_sends_the_unit_request_and_prints_the_reply() {
+    let (listener, path) = bind();
+    let socket = path.to_str().unwrap().to_owned();
+    let (done, finished) = std::sync::mpsc::channel();
+    let server = serve(listener, 3, setup, move |h, line| {
+        let reply = match serde_json::from_str::<Value>(line) {
+            Ok(request) => h.ok(
+                json!({"op":"ipc","output":2,"request":request,"pointer":{"x":1401.0,"y":99.5}}),
+            )["reply"]
+                .clone(),
+            Err(_) => json!({"Err":"invalid request"}),
+        };
+        done.send(line.to_owned()).unwrap();
+        reply.to_string()
+    });
+    assert_eq!(msg(&["--socket", &socket, "cursor"]), 0);
+    assert_eq!(finished.recv().unwrap(), "\"Cursor\"");
+    assert_eq!(msg(&["--json", "--socket", &socket, "cursor"]), 0);
+    assert_eq!(
+        msg(&["--socket", &socket, "cursor", "extra"]),
+        2,
+        "no arguments"
+    );
+    assert_eq!(msg(&["--socket", &socket, "cursor", "--help"]), 0);
+    // The third connection answers the help-less retry below.
+    assert_eq!(msg(&["cursor", "--socket", &socket]), 0);
+    assert_eq!(server.join().unwrap().len(), 3);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn requests_are_bounded_as_v0_21_0_bounds_them() {
+    let mut h = setup();
+    // `Camera`: within +-1e9, and refused before the fullscreen exit it would
+    // otherwise cause or any state is touched.
+    for to in [[1_000_000_001.0, 0.0], [0.0, -1e12], [2e9, 2e9]] {
+        assert_eq!(
+            h.refused(json!(1), json!({"Camera":to})),
+            "camera coordinates must be within ±1e9"
+        );
+    }
+    assert_eq!(
+        h.refused(json!(1), json!({"Camera":[1e300,0.0]})),
+        "camera coordinates must be within ±1e9"
+    );
+    let at_limit = h.ipc(json!({"Camera":[1_000_000_000.0, -1_000_000_000.0]}));
+    assert_eq!(
+        at_limit["reply"],
+        json!({"Ok":{"Camera":{"x":1e9,"y":-1e9}}})
+    );
+    // Back to the origin: a bookmark is taken where the view is heading.
+    h.ipc(json!({"Camera":[0.0, 0.0]}));
+
+    // `Move`: +-1,050,000,000 whatever the selector, even one that names nothing.
+    assert_eq!(
+        h.refused(
+            json!(1),
+            json!({"Move":{"window":99,"to":[1_050_000_001,0]}})
+        ),
+        "coordinates must be within ±1050000000"
+    );
+    assert_eq!(
+        h.refused(json!(1), json!({"Move":{"window":99,"to":[0,0]}})),
+        "no window with id 99"
+    );
+
+    // `Resize`: sizes at most 32767, after the positive test and ahead of the
+    // capability gate. 32767 itself gets as far as that gate.
+    assert_eq!(
+        h.refused(json!(1), json!({"Resize":{"window":3,"to":[0,10]}})),
+        "size must be positive"
+    );
+    assert_eq!(
+        h.refused(json!(1), json!({"Resize":{"window":3,"to":[32768,10]}})),
+        "sizes must be at most 32767"
+    );
+    assert_eq!(
+        h.refused(json!(1), json!({"Resize":{"window":3,"to":[10,40000]}})),
+        "sizes must be at most 32767"
+    );
+    assert_eq!(
+        h.refused(json!(1), json!({"Resize":{"window":3,"to":[32767,32767]}})),
+        "resize is not implemented on macOS yet: native layout resize is not available"
+    );
+
+    // `Bookmark`: finite, within +-1e9, a name of at most 256 bytes, and a
+    // registry of at most 256 names, an existing one always replaceable.
+    assert_eq!(
+        h.refused(
+            json!(1),
+            json!({"Bookmark":{"name":"far","to":[1_000_000_001.0,0.0]}})
+        ),
+        "bookmark coordinates must be within ±1e9"
+    );
+    let long = "n".repeat(257);
+    assert_eq!(
+        h.refused(json!(1), json!({"Bookmark":{"name":long,"to":[0.0,0.0]}})),
+        "bookmark names are at most 256 bytes"
+    );
+    let longest = "n".repeat(256);
+    assert!(
+        h.ipc(json!({"Bookmark":{"name":longest,"to":[1e9,-1e9]}}))["reply"]
+            .get("Ok")
+            .is_some()
+    );
+    for index in 1..256 {
+        let data = h.ipc(json!({"Bookmark":{"name":format!("b{index}"),"to":[index,0]}}));
+        assert!(data["reply"].get("Ok").is_some(), "{index}: {data}");
+    }
+    assert_eq!(
+        h.refused(
+            json!(1),
+            json!({"Bookmark":{"name":"one more","to":[0.0,0.0]}})
+        ),
+        "at most 256 bookmarks can be set; delete one first"
+    );
+    // The same cap holds for the `set-bookmark` action, which logs the refusal
+    // upstream and here changes nothing; an existing name is replaced.
+    let before = h.snapshot()["bookmarks"].clone();
+    assert_eq!(before.as_object().unwrap().len(), 256);
+    h.action("set-bookmark one-more");
+    assert_eq!(h.snapshot()["bookmarks"], before);
+    h.action("set-bookmark b1");
+    assert_ne!(h.snapshot()["bookmarks"]["b1"], before["b1"]);
+    assert_eq!(h.snapshot()["bookmarks"].as_object().unwrap().len(), 256);
+    // Deleting one makes room.
+    assert_eq!(
+        h.ipc(json!({"Bookmark":{"name":"b1","delete":true}}))["reply"],
+        json!({"Ok":"Ok"})
+    );
+    assert!(
+        h.ipc(json!({"Bookmark":{"name":"one more","to":[0.0,0.0]}}))["reply"]
+            .get("Ok")
+            .is_some()
+    );
+}
+
+#[test]
+fn a_screenshot_region_is_bounded_before_a_pixel_is_drawn() {
+    let mut h = setup();
+    let region = |x: i64, y: i64, w: i64, h: i64, from_screen: bool| json!({"Screenshot":{"target":{"Region":{"x":x,"y":y,"w":w,"h":h,"from_screen":from_screen}},"scale":1.0,"path":"/nonexistent/shot.png"}});
+    for from_screen in [false, true] {
+        assert_eq!(
+            h.refused(json!(1), region(1_050_000_001, 0, 10, 10, from_screen)),
+            "coordinates must be within ±1050000000"
+        );
+        assert_eq!(
+            h.refused(json!(1), region(0, -1_050_000_001, 10, 10, from_screen)),
+            "coordinates must be within ±1050000000"
+        );
+        assert_eq!(
+            h.refused(json!(1), region(0, 0, 32768, 10, from_screen)),
+            "sizes must be at most 32767"
+        );
+    }
+    // A width in the bound that the capture limit then refuses is that limit's
+    // to refuse, with its own words.
+    let error = h.refused(json!(1), region(0, 0, 32767, 10, false));
+    assert!(error.contains("per-side limit"), "{error}");
+
+    // Zoomed far out, a screen point in range lands on the canvas far past it:
+    // 5e8 points at zoom 0.01 are 5e10 canvas points.
+    h.ok(json!({"op":"zoom","output":1,"zoom":0.01,"anchor":{"x":500.0,"y":410.0}}));
+    assert_eq!(pose(&mut h, 1)["zoom"], 0.01);
+    assert_eq!(
+        h.refused(json!(1), region(500_000_000, 0, 10, 10, true)),
+        "region lies past the canvas range"
+    );
+    // The same point in canvas coordinates is a legal one.
+    let data = h.ipc(region(500_000_000, 0, 10, 10, false));
+    assert!(data["reply"].is_null(), "{data}");
+    assert_eq!(data["effects"][0]["op"], "screenshot");
+}
+
+/// The files `screenshot -o -` reserved in `dir` that are still there.
+fn captures(dir: &std::path::Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&format!("screenshot-{}-", std::process::id()))
+                })
+        })
+        .collect()
+}
+
+#[test]
+fn screenshot_to_stdout_goes_through_a_private_file_the_client_reserved() {
+    use std::os::unix::fs::PermissionsExt;
+    let (listener, path) = bind();
+    let socket = path.to_str().unwrap().to_owned();
+    let dir = path.parent().unwrap().to_owned();
+    let (seen, requests) = std::sync::mpsc::channel();
+    let server = serve(
+        listener,
+        2,
+        || (),
+        move |_, line| {
+            let request: Value = serde_json::from_str(line).unwrap();
+            let target = request["Screenshot"]["path"].as_str().unwrap().to_owned();
+            let file = PathBuf::from(&target);
+            // Reserved by the client before it asked: new, empty, this user's
+            // alone, beside the socket, and not a path anyone else could pick.
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(&file).unwrap().len(), 0);
+            seen.send((file.clone(), line.to_owned())).unwrap();
+            if line.contains("\"scale\":2.0") {
+                return r#"{"Err":"capture refused"}"#.to_owned();
+            }
+            // The app writes beside the target and renames it into place, as
+            // screenshot-writer.m does; the client reads that, not the reply.
+            let temporary = file.with_file_name(".written.tmp");
+            std::fs::write(&temporary, b"infinify-test-png\n").unwrap();
+            std::fs::rename(&temporary, &file).unwrap();
+            // A reply naming some other file must not be believed.
+            r#"{"Ok":{"Screenshot":{"path":"/etc/hosts","width":2,"height":3}}}"#.to_owned()
+        },
+    );
+    assert!(captures(&dir).is_empty());
+    assert_eq!(
+        msg(&["--socket", &socket, "screenshot", "-o", "-"]),
+        0,
+        "the relay succeeds with the file the client reserved"
+    );
+    let (reserved, line) = requests.recv().unwrap();
+    assert_eq!(reserved.parent(), Some(dir.as_path()));
+    assert!(
+        line.contains(reserved.to_str().unwrap()),
+        "the request names the reserved file: {line}"
+    );
+    assert!(!reserved.exists(), "the file goes with its guard");
+    // A refused capture leaves nothing behind either.
+    assert_eq!(
+        msg(&["--socket", &socket, "screenshot", "--scale", "2", "-o", "-"]),
+        1
+    );
+    let (reserved, _) = requests.recv().unwrap();
+    assert!(!reserved.exists());
+    assert!(captures(&dir).is_empty());
     assert_eq!(server.join().unwrap().len(), 2);
     std::fs::remove_file(path).unwrap();
 }

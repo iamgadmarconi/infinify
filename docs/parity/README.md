@@ -5,10 +5,15 @@ tracks the gap between that requirement and Infinify's experimental app. A usefu
 prototype, a successful build, or a passing reducer scenario does not satisfy it.
 
 The comparison is pinned to DriftWM
-[`352333a8fa1b22171492d4b71a54102045c9a19d`](https://github.com/malbiruk/driftwm/tree/352333a8fa1b22171492d4b71a54102045c9a19d),
-which was also the remote HEAD when checked on 2026-10-09. The initial target
-checkpoint is `27a868e`. Later upstream changes require an explicit inventory
-refresh; they must not silently change the acceptance target.
+[`df3de27b26c7998e8a460cffd8a4925cbed3a322`](https://github.com/malbiruk/driftwm/tree/df3de27b26c7998e8a460cffd8a4925cbed3a322),
+tag `v0.21.0`, since the re-pin of 2026-10-29 (see below); the verbatim copy kept
+in this repository is `third_party/driftwm`. Until then it was pinned to
+[`352333a8fa1b22171492d4b71a54102045c9a19d`](https://github.com/malbiruk/driftwm/tree/352333a8fa1b22171492d4b71a54102045c9a19d)
+(v0.19.0 plus three commits), which was also the remote HEAD when checked on
+2026-10-09: the older dated sections below describe that state and their
+references to `352333a8` were not rewritten. The initial target checkpoint is
+`27a868e`. Later upstream changes require an explicit inventory refresh; they
+must not silently change the acceptance target.
 
 ## Inventory and acceptance
 
@@ -59,6 +64,169 @@ touchscreen-specific input. Those 67 rows are now `out_of_scope`, with their
 upstream contracts and source references retained. This supplies no acceptance
 evidence. The native green button must toggle fullscreen inside the canvas;
 Option-click toggles fit and uses `decoration_fit_snapped`.
+
+## 2026-10-29 re-pin to DriftWM v0.21.0
+
+The owner asked on 2026-10-29 for DriftWM v0.21.0 (`df3de27b`, 243 commits after
+`352333a8`). This is the explicit inventory refresh the paragraph above requires.
+The code side is [`crates/core/PORT.md`](../../crates/core/PORT.md#update-to-v0210)
+(driftwm-core moved to v0.21.0, so every default the controller reads follows it)
+and the controller changes recorded in the rows below. The re-pin changes what
+the inventory *asks for*; it supplies no acceptance evidence.
+
+**How.** `target/repin_inventory.py` (a scratch tool: `target/` is git-ignored,
+so it is not in the repository; rerun it from the repository root with
+`python3 target/repin_inventory.py --base <rev of the 352333a8 inventory>`, which
+reads that revision with `git show`, or with no argument on the old file; it
+refuses a file already pinned to `df3de27b`). It needs the two upstream trees
+(`target/upstream-352333a8`, and `third_party/driftwm` or
+`target/upstream-v0.21.0`, a `git archive` of the tag) and writes
+`json.dumps(indent=2)` as the file was. It does the mechanical part by parsing,
+and everything else from text tables in the script (re-pin paragraphs, in-place
+corrections that must match exactly once, new rows):
+
+- `upstream_revision` is `df3de27b…`, `previous_upstream_revision` (new field) is
+  `352333a8…`, `date` is 2026-10-29, `target_baseline` is unchanged. Every
+  `source_sha256` entry was recomputed from the new tree (19 of the 24 old files
+  differ; `src/input/gestures.rs`, `src/state/edge_pan.rs`,
+  `src/state/cluster_snapshot.rs`, `src/render/chrome.rs` and
+  `src/protocols/output_management.rs` are byte-identical) and 17 entries for the
+  files the new rows cite were added: 41 in all. Every row's `source.url` names
+  `df3de27b`; the line moved for 535 of the 588 old rows.
+- The enum variants of `types.rs` and `ipc/protocol.rs`, the struct fields of
+  `types.rs` and `config/mod.rs`, and the entries of `config.reference.toml` are
+  found by parsers that were first run on the *old* files and reproduced all 89
+  action and 21 ipc lines, all 166 structure lines and types, and all 271
+  reference rows (ids, lines, comment depth, assignment text, parsed value)
+  exactly, before they were run on the new files. The protocol and behavior rows
+  are file-level anchors (line 1) or were carried by a line alignment of the old
+  and new file (the protocol state lines of `src/state/init.rs` moved by one).
+- A second run from the same base produced a byte-identical file.
+
+**Counts, 352333a8 → df3de27b** (`implemented_unverified` / `missing` /
+`out_of_scope`; no row is `blocked` or `verified` before or after):
+
+| Category | impl. unverified | missing | out of scope | rows |
+|---|---|---|---|---|
+| action_or_policy_variant | 85 → 90 | 0 → 0 | 4 → 4 | 89 → 94 |
+| ipc | 21 → 23 | 0 → 0 | 0 → 0 | 21 → 23 |
+| configuration_structure | 119 → 119 | 21 → 21 | 26 → 26 | 166 → 166 |
+| protocol_family | 5 → 5 | 12 → 12 | 3 → 5 | 20 → 22 |
+| behavior | 18 → 29 | 3 → 5 | 0 → 9 | 21 → 43 |
+| reference_configuration | 196 → 203 | 36 → 36 | 39 → 39 | 271 → 278 |
+| **all** | **444 → 469** | **72 → 74** | **72 → 83** | **588 → 626** |
+
+Required rows: 516 → 543. No old row changed status and none was removed.
+Between the two commits no struct field was added, removed or retyped, so the
+166 structure rows only moved; that is the result of the parser, not of a
+review of upstream's semantics.
+
+**What upstream changed, in the inventory's terms.**
+
+- *Defaults* (v0.20.0): `window_placement` auto, `[session] restore_*` true,
+  `[zoom] reset_on_new_window` false and `interact_min` 0.5, `[snap] corners`
+  true and `outer_gap` 12, `decoration_resize_snapped` / `decoration_fit_snapped`
+  true, the decoration colours, blur 5 / 1.5, and the default bindings
+  (focus-nearest on mod+arrows, the 4-finger and mod+3-finger swipes and
+  mod+ctrl+drag; move-to-snap on mod+shift+arrows; the snapped forms of fit and
+  resize on the unshifted bindings; fill-window on mod+middle; focus-center on
+  the holds; suspend-window on mod+shift+q). 46 reference rows changed their
+  assignment or its depth; each carries a re-pin paragraph, and where a sentence
+  of its old note had become false (a value called upstream's default, a binding's
+  action) it was corrected in place. Each kept its id, status, owner and
+  dependencies.
+- *Removed from the defaults* (8 ids): `config.keybindings.mod+e`
+  (`toggle-cursor-pan`), `config.keybindings.mod+z` (`zoom-reset`; mod+0 stays),
+  `config.keybindings.mod+s` (an example, replaced by the mod+shift+q default),
+  `config.gestures.on-window.alt+2-finger-pinch-in`,
+  `…alt+shift+2-finger-pinch-in`, `…alt+shift+2-finger-pinch-out`,
+  `…alt+3-finger-pinch-in`, and `config.navigation.false`, which indexed a
+  continuation comment of `auto_navigate_on_close` that the shorter reference no
+  longer has. Each row stays with no occurrences and says it was removed in
+  v0.20.0 (v0.20.0/v0.21.0 for the last); its `source.line` is where its
+  neighbours now sit, not a line of its own. Two entries (`alt+2-finger-pinch-out`,
+  `alt+3-finger-pinch-out`) survive as examples and say so.
+- *New reference ids* (7): `config.keybindings.mod+shift+q` (default),
+  and the examples `mod+alt+shift+up`, `mod+ctrl+alt+right`, `mod+ctrl+alt+left`,
+  `mod+ctrl+shift+up`, `mod+ctrl+shift+down`, `mod+alt+shift+right`.
+- *New actions and requests*: `Action.FocusNearest`, `Action.MoveToSnap`,
+  `Action.ResizeToSnap`, `MouseAction.FocusNearest`, `ThresholdAction.FocusNearest`,
+  `ipc.Request.Cursor` and `ipc.WindowInfo.pid`: all `implemented_unverified`,
+  with the files and scenario tests named in each note.
+- *Behaviour rows* (`implemented_unverified`): `navigation.landing_view`,
+  `navigation.hover_pull`, `layout.keyboard_snap`, `navigation.step_units`,
+  `layout.fit_edge_to_edge`, `ipc.limits`, `ipc.coordinate_clamps`,
+  `session.standin_cap`, `session.owner_only_files`, `render.screenshot_atomic`,
+  `process.child_hygiene`. Text was added to the rows whose behaviour changed
+  (`Action.CycleWindows`, `Action.FocusCenter`, `Action.NudgeWindow`,
+  `Action.GrowWindow`, `Action.FitWindow`, `config.zoom.interact_min`,
+  `config.navigation.auto_navigate_on_click`, `ipc.Request.Camera`,
+  `ipc.Request.Focus`, `ipc.Request.Move`, `ipc.Request.Resize`,
+  `ipc.Request.Bookmark`, `ipc.Request.Screenshot`, `ipc.Request.State`,
+  `navigation.focus`, `native.input` and others: 123 of the old rows have new
+  prose in all, 58 of them reference rows).
+- *`interact_min`*, the row the owner cares about most: the pick mode was already
+  implemented at `352333a8`; the re-pin changes its default to 0.5 and the row
+  now states what was and was not looked at in the shell (a press, drag and
+  scroll over a pick target are taken in native desktop mode; a pen's tablet
+  packets over one are now taken as well; pointer motion over one is not taken,
+  as far as the source reads) and what was run (`crates/desktop/tests/
+  interact_min_flow.rs`, 4 scenarios on the default configuration).
+
+**Stays missing.** `layout.fit_push_restore` (closing a window fitted with a
+snapped fit puts back the neighbours the fit pushed aside: driftwm-core carries
+the record, the controller does not use it) and `platform.tiff_wallpaper_abort`
+(Infinify decodes TIFF wallpapers in its own Objective-C, which this re-pin did
+not audit). The 72 rows that were `missing` stay so; none of the v0.21 items made
+one implemented.
+
+**Out of scope, and why.** Nine behavior rows and two protocol rows are new and
+`out_of_scope` with `required: false`: `protocol.xdg_activation` (activation
+tokens), `protocol.kde_server_decoration`, `hardening.region_caps`,
+`hardening.modal_focus_scope`, `hardening.pen_over_lock`, `platform.drm_error_dump`,
+`platform.desktop_entry_limits`, `platform.gl_version_string`,
+`render.csd_shadow_clip`, `packaging.nix_home_manager` (the flake and its Home
+Manager module) and `config.xdg_autostart_note`. Items that fall under an
+existing row (the gamma and virtual-keyboard memfd checks, the wlr-screencopy
+region fix, the ext-image-copy-capture offset and stride, the monotonic capture
+clock, the layer-surface resize, the Wayland tablet routing) got a sentence in
+that row (`protocol.gamma_control`, `protocol.virtual_keyboard`,
+`protocol.screencopy`, `protocol.image_copy_capture`, `protocol.layer_shell`,
+`protocol.session_lock`, `protocol.tablet`) and kept its status. They are
+Wayland-protocol, Linux-backend or Linux-packaging items under the owner's
+decisions of 2026-10-09 (Wayland/X11 client hosting excluded) and 2026-10-11
+(features without a macOS equivalent excluded). **That classification is this
+re-pin's, not a new owner decision**; each row says so.
+
+**Evidence.** No row became `verified` and no `evidence` entry was added. Two
+rows had evidence for behaviour that changed, `Action.CycleWindows` and
+`navigation.focus`: their entries were moved into the row's note as evidence for
+`352333a8`, not for `df3de27b`, and the arrays emptied. Every other entry stays
+where it was. Run for this section, all on the controller through the exported
+ABI with expected values derived by hand from upstream's rules (no native
+window, no live app, no Screen Recording, nothing launched):
+`cargo test -p driftwm-desktop --test focus_nearest_flow` 9 passed,
+`--test snap_actions_flow` 5 passed, `--test interact_min_flow` 4 passed,
+`--test hardening_flow` 7 passed. The other tests the new notes name were
+rewritten or added by the same lane and are not counted here. Nothing about the
+shell hunks of this lane (the focus flag of the pointer press, the hover-pull
+report, the tablet guard, the IPC limits, the exec environment) was run on a live
+app. The Objective-C parts the notes call "written" were syntax-checked at most.
+
+**Test oracles.** The three executable upstream oracles were re-pinned to
+`df3de27b` separately, not through this inventory: `crates/desktop/tests/upstream`
+(navigation), `crates/desktop/tests/resize_upstream` and
+`crates/canvas/tests/upstream` (snap, cluster, policy, stage). Their READMEs say
+which methods are executed and what changed between the commits.
+
+**Limits of this refresh.** The prose of the 465 old rows left unchanged still cites
+`352333a8` where it names the commit it was adapted at, and describes the
+Infinify state of the earlier dates; the older dated sections below and the
+counts under "What is still open" are the 2026-10-12 state and were not
+recomputed. A row whose old note called a value upstream's default may do so for
+`352333a8`: its re-pin paragraph says where that changed. The inventory is a
+source index, not an oracle; a new row is a coverage obligation, not a claim that
+its edge cases are enumerated.
 
 ## 2026-10-12 whole-desktop native admission
 

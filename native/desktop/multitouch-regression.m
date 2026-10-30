@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Synthetic contact frames through the real adapter into the real DWTrackpadGestures, and the Dock-control
-// decision on synthetic states. No MultitouchSupport call, no event tap, no device, no window: the source is never
-// started and the tap never installed. Passing shows that the code reads the 96-byte records the constants in
-// multitouch-source.h describe and turns them into the recogniser's calls; it does not show that the framework
-// delivers such records, that its offsets are right on this machine, or that anything is dropped on a trackpad.
+// decision on synthetic states and on in-memory type-30 packets. No MultitouchSupport call, no event tap, no device,
+// no window: the source is never started and the tap never installed. Passing shows that the code reads the 96-byte
+// records the constants in multitouch-source.h describe and turns them into the recogniser's calls, and what the
+// guard decides about a packet given the counts it was told; it does not show that the framework delivers such
+// records, that its offsets are right on this machine, that the Dock-control packets of a Show Desktop or Launchpad
+// pinch look like the ones built here, or that anything is dropped on a trackpad.
 #import "dock-guard.m"
 #import "multitouch-source.m"
 
@@ -65,6 +67,25 @@ static void glide(Rig *rig,const Pt *start,int count,double dx,double dy,int fra
     for(int k=0;k<frames;k++){for(int i=0;i<count;i++){now[i].x+=dx;now[i].y+=dy;}[rig frame:now count:count];}
 }
 static void lift(Rig *rig) { [rig frame:NULL count:0]; }
+// A Dock-control packet as the system's DockSwipe stream makes them (axis 3 is the pinch, 1 and 2 the swipes). `stamp` makes it a packet of its own.
+static CGEventRef dockSwipe(NSInteger axis,NSInteger phase,uint64_t stamp) {
+    CGEventRef event=CGEventCreate(NULL);check(event!=NULL,@"in-memory Dock-control packet");
+    CGEventSetType(event,DWDockControlType);CGEventSetIntegerValueField(event,DWGestureRealType,30);CGEventSetIntegerValueField(event,DWGestureHIDType,23);
+    CGEventSetIntegerValueField(event,DWGestureAxis,axis);CGEventSetIntegerValueField(event,DWGesturePhase,phase);CGEventSetTimestamp(event,stamp);return event;
+}
+// A packet of a format the decoder does not know: the shape a Show Desktop or Launchpad pinch may have, which has never been seen.
+static CGEventRef dockOther(uint64_t stamp) { CGEventRef event=dockSwipe(3,kCGGesturePhaseChanged,stamp);CGEventSetIntegerValueField(event,DWGestureHIDType,8);return event; }
+// Thumb and three fingers on the pad, as a hand makes them: the three land first and the thumb a few frames later, then everything rests for 64 ms.
+static void landHand(Rig *rig,const Pt hand[4]) {
+    Pt now[4];memcpy(now,hand,sizeof now);
+    for(int k=0;k<3;k++)[rig frame:now count:3];
+    for(int k=0;k<8;k++)[rig frame:now count:4];
+}
+// The hand moves from `from` to `to` in `steps` frames, 8 ms apart.
+static void moveHand(Rig *rig,const Pt from[4],const Pt to[4],int steps) {
+    Pt now[4];
+    for(int k=1;k<=steps;k++){double f=(double)k/steps;for(int i=0;i<4;i++){now[i]=from[i];now[i].x=from[i].x+(to[i].x-from[i].x)*f;now[i].y=from[i].y+(to[i].y-from[i].y)*f;}[rig frame:now count:4];}
+}
 
 int main(void) {@autoreleasepool {
     // --- Decoding: what the callback reads from a record.
@@ -233,6 +254,15 @@ int main(void) {@autoreleasepool {
     DWDockGuardGesture(&s,0,15.4);
     check(DWDockGuardDrops(&s,15.5)&&!DWDockGuardDrops(&s,15.4+DWDockTail),@"its end starts the tail");
     DWDockGuardFingers(&s,0,15.6);
+    // Sunlight's drop time (TrackpadPan.swift 298-299): it moves on with every report of a touch that reached a bound count, whatever the count has become since,
+    // and the flag goes with the last finger.
+    DWDockGuardState t={0};DWDockGuardBound(&t,three4);DWDockGuardLive(&t,YES);
+    DWDockGuardFingers(&t,4,40);DWDockGuardFingers(&t,2,40.2);
+    check(DWDockGuardDrops(&t,40.2+DWDockTail-.001)&&!DWDockGuardDrops(&t,40.2+DWDockTail+.001),@"a touch at a bound count that fell to two fingers is dropped for the tail from the last report");
+    DWDockGuardFingers(&t,2,40.4);check(DWDockGuardDrops(&t,40.4+DWDockTail-.001),@"and the drop time moves on with each report while any finger is down");
+    DWDockGuardFingers(&t,0,40.5);check(DWDockGuardDrops(&t,40.5+DWDockTail-.001)&&!DWDockGuardDrops(&t,40.5+DWDockTail+.001)&&!t.boundTouch,@"the lift ends the flag and starts the tail from the lift");
+    DWDockGuardFingers(&t,2,41);check(!DWDockGuardDrops(&t,41),@"two fingers of the next touch are not bound");
+    DWDockGuardFingers(&t,0,41.1);
     // The shell declined a touch: the system keeps it, and only that one.
     DWDockGuardFingers(&s,3,20);uint32_t mine=s.contact;DWDockGuardRefuse(&s,mine);
     check(!DWDockGuardDrops(&s,20)&&s.refused,@"a refused touch is the system's");
@@ -274,10 +304,140 @@ int main(void) {@autoreleasepool {
     check([tap filter:(CGEventType)30 event:dock at:50]==NULL,@"three bound fingers drop a Dock-control event");
     check([tap filter:kCGEventLeftMouseDown event:other at:50]==other&&[tap filter:kCGEventScrollWheel event:other at:50]==other,@"nothing else is touched");
     check([tap filter:kCGEventTapDisabledByTimeout event:NULL at:50]==NULL,@"a disabled-tap notice carries no event and is passed as it came");
-    [guard fingers:2 at:50.1];
-    check([tap filter:(CGEventType)30 event:dock at:50.1]==dock,@"two fingers are not bound: the event goes through");
-    [guard fingers:4 at:50.2];[guard fingers:0 at:50.3];
-    check([tap filter:(CGEventType)30 event:dock at:50.4]==NULL&&[tap filter:(CGEventType)30 event:dock at:50.3+DWDockTail+.01]==dock,@"the tail drops and then ends");
+    [guard fingers:0 at:50.5];[guard fingers:2 at:51];
+    check([tap filter:(CGEventType)30 event:dock at:51]==dock,@"two fingers on a fresh touch are not bound: a packet after a pause goes through");
+    [guard fingers:4 at:51.2];[guard fingers:0 at:51.3];
+    check([tap filter:(CGEventType)30 event:dock at:51.4]==NULL,@"the tail drops");
+    check([tap filter:(CGEventType)30 event:dock at:51.9]==dock,@"and then ends");
     CFRelease(dock);CFRelease(other);
+
+    // --- Thumb and three fingers, pinching and spreading: MultitouchSupport counts the thumb, so the guard and the recogniser both see four.
+    // Pad coordinates in mm, y towards the user: three fingertips in a row above the thumb, which lies lower and to the side.
+    Pt together[4]={{1,4,70,38},{2,4,82,34},{3,4,94,37},{9,4,52,70}};
+    Pt apart[4]={{1,4,86,18},{2,4,98,14},{3,4,110,17},{9,4,34,86}};
+    // Show Desktop: the thumb and the fingers spread.
+    rig=[Rig new];[rig.guard setBound:three4];landHand(rig,together);moveHand(rig,together,apart,20);lift(rig);
+    begun=[rig ops:@"gesture_begin"].firstObject;
+    check([rig ops:@"gesture_begin"].count==1&&[begun[@"kind"]isEqual:@"pinch"]&&[begun[@"fingers"]intValue]==4,@"a thumb and three fingers spreading are one four-finger pinch");
+    check([[rig ops:@"gesture_update"].lastObject[@"scale"]doubleValue]>1.5,@"whose scale grows: the pinch-out binding's");
+    check([rig.events.lastObject[@"op"]isEqual:@"gesture_end"]&&[rig.events.lastObject[@"cancelled"]isEqual:@NO],@"and ends when the fingers lift");
+    // Launchpad: the same hand, closing.
+    rig=[Rig new];[rig.guard setBound:three4];landHand(rig,apart);moveHand(rig,apart,together,20);lift(rig);
+    begun=[rig ops:@"gesture_begin"].firstObject;
+    check([rig ops:@"gesture_begin"].count==1&&[begun[@"kind"]isEqual:@"pinch"]&&[begun[@"fingers"]intValue]==4&&[[rig ops:@"gesture_update"].lastObject[@"scale"]doubleValue]<.7,@"a thumb and three fingers closing are a four-finger pinch whose scale shrinks: the pinch-in binding's");
+    // The hand drifts while it spreads: 20 mm of thumb-to-finger separation and 12 mm of drift, up and to the left. The fingers and the thumb
+    // that move apart also move the same way, which the two-touch rules read as a swipe (nothing here is wrong with that for a plain swipe).
+    Pt drifted[4];for(int i=0;i<4;i++){double along=i<3?8:-12,ux=30/hypot(30,36),uy=-36/hypot(30,36);drifted[i]=together[i];drifted[i].x+=ux*along-9.6;drifted[i].y+=uy*along-7.2;}
+    rig=[Rig new];[rig.guard setBound:three4];landHand(rig,together);moveHand(rig,together,drifted,20);lift(rig);
+    check([rig ops:@"gesture_begin"].count==1&&[[rig ops:@"gesture_begin"].firstObject[@"kind"]isEqual:@"pinch"],@"a spread that drifts along with the hand is still a pinch: every finger's distance from their centre is read, not the two touches' directions");
+    // A four-finger swipe that fans a little stays a swipe.
+    Pt fanned[4];for(int i=0;i<4;i++){fanned[i]=together[i];fanned[i].x+=20+(i-1.5)*2;fanned[i].y+=(i<3?-1:1)*1.5;}
+    rig=[Rig new];[rig.guard setBound:three4];landHand(rig,together);moveHand(rig,together,fanned,20);lift(rig);
+    check([rig ops:@"gesture_begin"].count==1&&[[rig ops:@"gesture_begin"].firstObject[@"kind"]isEqual:@"swipe"]&&[[rig ops:@"gesture_begin"].firstObject[@"fingers"]intValue]==4,@"while four fingers that translate and fan a little stay a four-finger swipe");
+
+    // --- The guard holds from the finger count, before the recogniser has recognised anything: the system's pinch begins as soon as the hand moves.
+    rig=[Rig new];[rig.guard setBound:three4];
+    Pt cut[4];memcpy(cut,together,sizeof cut);
+    for(int k=0;k<2;k++)[rig frame:cut count:2];
+    check(![rig.guard dropsAt:rig.now]&&rig.source.delivering,@"two fingers: the source delivers and nothing is held back");
+    [rig frame:cut count:3];
+    check([rig.guard dropsAt:rig.now]&&rig.events.count==0,@"the third finger holds Dock control back before the recogniser has begun anything");
+    [rig frame:cut count:4];
+    check([rig.guard dropsAt:rig.now]&&rig.events.count==0&&[rig.guard state].fingers==4,@"and the thumb makes four, still before any gesture: the thumb counts, as it does for the system");
+    lift(rig);
+
+    // --- Dock-control streams follow their beginning, whatever the count does meanwhile, because the Dock must see all of a gesture or none.
+    // Show Desktop as the system sends it: a begin when four contacts have moved, changes, an end after the fingers have lifted one by one.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    landHand(rig,together);
+    CGEventRef began=dockSwipe(3,kCGGesturePhaseBegan,1),changed=dockSwipe(3,kCGGesturePhaseChanged,2),changedLate=dockSwipe(3,kCGGesturePhaseChanged,3),ended=dockSwipe(3,kCGGesturePhaseEnded,4);
+    check([tap filter:DWDockControlType event:began at:rig.now]==NULL,@"the beginning of the system's pinch with four contacts down is dropped");
+    Pt rest3[3]={{1,4,86,18},{2,4,98,14},{3,4,110,17}};
+    [rig frame:rest3 count:3 device:1 after:.02];
+    check([tap filter:DWDockControlType event:changed at:rig.now]==NULL,@"a change with three left is dropped");
+    [rig frame:rest3 count:2 device:1 after:.02];[rig frame:rest3 count:1 device:1 after:.02];
+    check([rig.guard state].fingers==1&&[tap filter:DWDockControlType event:changedLate at:rig.now]==NULL,@"a change with one finger left is dropped although one is no bound count: the touch was held to its end, and the stream began dropped");
+    lift(rig);rig.now+=DWDockTail+.4;
+    check(![rig.guard dropsAt:rig.now]&&[tap filter:DWDockControlType event:ended at:rig.now]==NULL,@"the end of the stream, long after the tail, is dropped with the rest: the Dock is never given an end without a beginning");
+    CGEventRef next=dockSwipe(3,kCGGesturePhaseChanged,5);rig.now+=.1;
+    check([tap filter:DWDockControlType event:next at:rig.now]==next,@"and the stream is over: a later packet is judged by the count (none)");
+    CFRelease(began);CFRelease(changed);CFRelease(changedLate);CFRelease(ended);CFRelease(next);
+
+    // A stream that began with the system keeps going to it, even when the count passes through a bound one on its way down.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    Pt five[5]={{1,4,50,30},{2,4,62,28},{3,4,74,30},{4,4,86,32},{5,4,40,70}};
+    for(int k=0;k<8;k++)[rig frame:five count:5];
+    began=dockSwipe(2,kCGGesturePhaseBegan,11);changed=dockSwipe(2,kCGGesturePhaseChanged,12);ended=dockSwipe(2,kCGGesturePhaseEnded,13);
+    check([tap filter:DWDockControlType event:began at:rig.now]==began,@"five contacts are no bound count: the system's gesture begins with the system");
+    [rig frame:five count:4 device:1 after:.02];
+    check([rig.guard dropsAt:rig.now]&&[tap filter:DWDockControlType event:changed at:rig.now]==changed,@"a finger lifting brings a bound count, which would drop a stream beginning now, but this one began with the system and goes on with it");
+    lift(rig);
+    check([tap filter:DWDockControlType event:ended at:rig.now+.05]==ended,@"and its end");
+    CFRelease(began);CFRelease(changed);CFRelease(ended);
+
+    // A packet of a format nobody has decoded: judged by the count at its first packet, then as a run while the packets keep coming.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    landHand(rig,together);
+    CGEventRef a1=dockOther(21),a2=dockOther(22),a3=dockOther(23),a4=dockOther(24);
+    check([tap filter:DWDockControlType event:a1 at:rig.now]==NULL,@"an undecoded packet with four contacts down is dropped");
+    [rig frame:rest3 count:2 device:1 after:.1];
+    check([tap filter:DWDockControlType event:a2 at:rig.now]==NULL,@"the next, a tenth of a second later with two left, belongs to the same run");
+    [rig frame:rest3 count:1 device:1 after:.1];lift(rig);
+    check([tap filter:DWDockControlType event:a3 at:rig.now+.1]==NULL,@"and one after the fingers have all lifted, within the tail a touch at a bound count owes whatever the count did on the way down");
+    check([tap filter:DWDockControlType event:a4 at:rig.now+.1+DWDockTail+.2]==a4,@"but not after a pause longer than the tail");
+    CFRelease(a1);CFRelease(a2);CFRelease(a3);CFRelease(a4);
+    // The tail is owed to a touch that was at a bound count however the count fell: fingers lift one by one, so the last count before none is rarely a bound one.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    landHand(rig,together);[rig frame:rest3 count:3 device:1 after:.02];[rig frame:rest3 count:2 device:1 after:.02];[rig frame:rest3 count:1 device:1 after:.02];lift(rig);
+    CGEventRef b1=dockOther(26),b2=dockOther(27);
+    check([tap filter:DWDockControlType event:b1 at:rig.now+.1]==NULL&&[tap filter:DWDockControlType event:b2 at:rig.now+.1+DWDockTail+.2]==b2,@"four fingers lifting one by one owe the tail, which then ends");
+    CFRelease(b1);CFRelease(b2);
+    // A touch that grew past every bound count was the system's, and owes it nothing.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    for(int k=0;k<2;k++)[rig frame:five count:3];for(int k=0;k<2;k++)[rig frame:five count:4];for(int k=0;k<6;k++)[rig frame:five count:5];
+    [rig frame:five count:3 device:1 after:.02];[rig frame:five count:1 device:1 after:.02];lift(rig);
+    b1=dockOther(28);
+    check([tap filter:DWDockControlType event:b1 at:rig.now+.1]==NULL,@"a hand that went from five fingers down to none through the bound counts is held for its tail, as a staggered lift of any hand is");
+    CFRelease(b1);
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    for(int k=0;k<2;k++)[rig frame:five count:3];for(int k=0;k<2;k++)[rig frame:five count:4];for(int k=0;k<6;k++)[rig frame:five count:5];lift(rig);
+    b1=dockOther(29);
+    check([tap filter:DWDockControlType event:b1 at:rig.now+.1]==b1,@"but one lifted from five at once owes none");
+    CFRelease(b1);
+    // The stream of a touch the shell declined is the system's.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    DWMultitouchFrame *refusedFrame=[rig frame:together count:4 device:1 after:.01];[rig.guard refuseContact:refusedFrame.contact];
+    began=dockSwipe(3,kCGGesturePhaseBegan,31);
+    check([tap filter:DWDockControlType event:began at:rig.now]==began,@"a touch the shell declined keeps its Dock-control stream");
+    CFRelease(began);
+    // A beginning always starts afresh, and a stream that never ended is forgotten after a second.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    landHand(rig,together);
+    began=dockSwipe(3,kCGGesturePhaseBegan,41);changed=dockSwipe(3,kCGGesturePhaseChanged,42);CGEventRef again=dockSwipe(3,kCGGesturePhaseBegan,43);
+    [tap filter:DWDockControlType event:began at:rig.now];lift(rig);rig.now+=2;
+    check([tap filter:DWDockControlType event:changed at:rig.now]==changed,@"a stream that went a second without a packet is over: a change is judged by the count");
+    [rig frame:together count:4 device:1 after:.5];[rig.guard fingers:4 at:rig.now];
+    check([tap filter:DWDockControlType event:again at:rig.now]==NULL,@"and a new beginning is judged afresh");
+    CFRelease(began);CFRelease(changed);CFRelease(again);
+
+    // The guard in two taps: the packet the first tap decided is not decided again by the second, which gets the same answer.
+    rig=[Rig new];[rig.guard setBound:three4];landHand(rig,together);
+    CGEventRef both=dockSwipe(3,kCGGesturePhaseBegan,51);
+    check([rig.guard decide:both via:"dock-tap" at:rig.now]==DWDockControlDrop&&[rig.guard decide:both via:"global-tap" at:rig.now+.001]==DWDockControlDrop,@"the second tap that sees a packet gets the first tap's verdict");
+    lift(rig);rig.now+=DWDockTail+.1;
+    check([rig.guard decide:both via:"dock-tap" at:rig.now]==DWDockControlPass,@"and the same packet judged again by the same tap is judged afresh");
+    CFRelease(both);
+    DWDockGuard *idle=[DWDockGuard new];[idle setBound:three4];[idle fingers:4 at:1];CGEventRef notLive=dockSwipe(3,kCGGesturePhaseBegan,61);
+    check([idle decide:notLive via:"dock-tap" at:1]==DWDockControlUndecided,@"with no touch source delivering the guard leaves the packet to the tap's own rules");
+    CFRelease(notLive);
+    // The reasons the log gives.
+    DWDockGuardState r={0};DWDockGuardBound(&r,three4);DWDockReason why;
+    DWDockGuardDecide(&r,DWDockControlBegan,1,&why);check(why==DWDockReasonNotLive,@"reason: not delivering");
+    DWDockGuardLive(&r,YES);DWDockGuardDecide(&r,DWDockControlBegan,2,&why);check(why==DWDockReasonUnbound,@"reason: no fingers");
+    DWDockGuardFingers(&r,4,2.2);check(!strcmp(DWDockReasonName(why),"count-not-bound")&&!DWDockGuardDecide(&r,DWDockControlChanged,2.4,&why)&&why==DWDockReasonRunPassed,@"reason: the stream began with the system");
+    DWDockGuardDecide(&r,DWDockControlBegan,3.1,&why);check(why==DWDockReasonFingers,@"reason: bound fingers");
+    DWDockGuardFingers(&r,2,3.2);DWDockGuardDecide(&r,DWDockControlChanged,3.2,&why);check(why==DWDockReasonRunDropped,@"reason: the stream began dropped");
+    DWDockGuardDecide(&r,DWDockControlEnded,3.3,&why);DWDockGuardGesture(&r,3,3.4);DWDockGuardDecide(&r,DWDockControlBegan,3.5,&why);check(why==DWDockReasonGesture,@"reason: a bound gesture");
+    DWDockGuardGesture(&r,0,3.6);DWDockGuardDecide(&r,DWDockControlBegan,3.7,&why);check(why==DWDockReasonTail,@"reason: tail");
     puts("multitouch: contact decoding, adapter, recogniser events and the Dock-control decision passed on synthetic input; no MultitouchSupport, tap, device or trackpad was involved");
 }return 0;}

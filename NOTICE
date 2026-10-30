@@ -2,7 +2,7 @@ Infinify — DriftWM macOS development port
 SPDX-License-Identifier: GPL-3.0-or-later
 
 Upstream: DriftWM, https://github.com/malbiruk/driftwm
-Source baseline: 352333a8fa1b22171492d4b71a54102045c9a19d
+Source baseline: df3de27b26c7998e8a460cffd8a4925cbed3a322 (DriftWM v0.21.0; first ported from 352333a8fa1b22171492d4b71a54102045c9a19d)
 Upstream primary maintainer: Maksim Kononenko (malbiruk), with contributors.
 The GPL version 3 license text in LICENSE is copied unchanged from that baseline.
 Upstream README declares GPL-3.0-or-later.
@@ -32,13 +32,29 @@ native/desktop/multitouch-source.m and native/desktop/dock-guard.m adapt
 techniques from Sunlight, https://github.com/spacefarm-digital/sunlight, at
 commit afeea74b18e70ca49bf462d6fe462cf65deb2b32 (Sources/Canvas/TrackpadPan.swift:
 reading trackpad contacts through MultitouchSupport, and a session event tap
-that holds back Dock-control events), and the arrival veil of
+that holds back Dock-control events), native/desktop/system-takeover.m
+translates from the same commit, function by function, Sources/Canvas/Takeover/
+SystemPrefs.swift and TakeoverMode.swift (vendored under third_party/sunlight/:
+snapshot the user's own preferences before the first write, an absent key
+restored as absent, restore on every end and from a leftover record at the next
+launch; the header of the file lists each function and its lines), and the
+arrival veil of
 native/privileged/payload-v2.m adapts from the same commit
 Sources/Canvas/RealWindows/WindowServerEvents.swift (SkyLight's window-created
 event and its payload) and the aim of LiveWindows/osax/sunbeam.h that a new
 window is never seen before it is placed, MIT, Copyright (c) 2026 spacefarm. Its
 license text is retained in native/desktop/SUNLIGHT-NOTICE.txt, which the app
 bundle carries beside this file, and each adapted file names what it took.
+The same commit's launch daemon and Dock reload are taken for compositor mode at
+login: native/privileged/loadd.m copies LiveWindows/helper.m (the daemon, its XPC
+listener and caller requirement, with the edits its header lists),
+native/desktop/loader-service.m and native/desktop/dock-reload.m translate
+Sources/Canvas/Setup/LiveWindowsService.swift and
+Sources/Canvas/RealWindows/AdditionReloader.swift (including DockCrashGuard) and
+their tests, and native/privileged/com.marengox.infinify.loader.plist adapts
+Resources/LaunchDaemons/com.spacefarm.sunlight.live-windows.plist, all MIT,
+Copyright (c) 2026 spacefarm. Paths are those of the vendored copy,
+third_party/sunlight/.
 crates/core carries DriftWM's pure modules (canvas, config, layout, session,
 stage and the touch gesture recogniser) from the source baseline with their
 tests; each file records its upstream path, and crates/core/PORT.md lists every
@@ -47,5 +63,10 @@ Smithay 0.7.0 (MIT, Copyright (c) 2017 Victor Berger and Victoria Brekenfeld),
 and its key-name lookup reimplements libxkbcommon's rules (MIT/X11).
 All project source is distributed under GPL-3.0-or-later. Third-party Cargo
 packages retain their respective licenses; Cargo.lock pins their versions.
+third_party/driftwm is a verbatim, unmodified copy of DriftWM v0.21.0
+(GPL-3.0-or-later). third_party/sunlight is a verbatim, unmodified copy of
+Sunlight afeea74 (MIT, Copyright (c) 2026 spacefarm; licence text in
+third_party/sunlight/LICENSE). Both are read-only references; see each
+directory's VENDORED.md and SHA256SUMS.
 
 No upstream endorsement or compatibility guarantee is implied.

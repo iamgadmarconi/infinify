@@ -2,7 +2,7 @@
 //
 // Ported verbatim from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/layout/auto_placement.rs
 //   sha-256:    d99fa9d5ca4a5e9d84e6ef6d6672e6ea531186f40187d88082b63285e8999806 (upstream file)
 // Changes from upstream: this header only; everything below is unmodified.

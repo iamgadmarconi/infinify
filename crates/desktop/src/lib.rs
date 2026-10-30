@@ -12,6 +12,7 @@ mod gestures;
 mod ipc;
 mod ipc_client;
 mod keyboard_layout;
+mod keyboard_snap;
 mod lifecycle;
 mod motion;
 mod navigation;
@@ -200,6 +201,21 @@ struct FocusRuntime {
     /// made at. See `pointer_policy`.
     #[serde(skip)]
     hover: Vec<(FocusEffect, Option<u64>)>,
+    /// Upstream's `hover_follows_camera`, inverted so that a fresh controller
+    /// follows: a focus-setting navigation (an Alt-Tab, an activation, a
+    /// `center-nearest`, a `focus-center`, a `focus` request) parks the pull
+    /// where it sets focus, so neither its own pan nor a flight still under way
+    /// hands the keyboard to whatever slides under the resting cursor. Any
+    /// camera move the user drives brings it back. Ephemeral.
+    #[serde(skip)]
+    hover_parked: bool,
+    /// Upstream's `hover_viewport`: the output sloppy focus was last evaluated
+    /// on and the `(camera, zoom)` it answered for there, on every path through
+    /// `hover` (a decline is an answer too). The pull reads it to tell a view
+    /// that has moved under a resting pointer from a scene change that left it
+    /// alone. Ephemeral.
+    #[serde(skip)]
+    hover_stamp: Option<(OutputId, Point, f64)>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Controller {
@@ -547,14 +563,17 @@ pub enum Command {
         window: WindowId,
         output: OutputId,
     },
-    /// A press bound to `center-nearest`, dragged from the global point
-    /// `start` to `screen`. `held` is as `action` takes it.
+    /// A press bound to `center-nearest`, or with `focus` to `focus-nearest`,
+    /// dragged from the global point `start` to `screen`. `held` is as `action`
+    /// takes it.
     PointerNearest {
         output: OutputId,
         screen: Point,
         start: Point,
         #[serde(default)]
         held: bool,
+        #[serde(default)]
+        focus: bool,
     },
     RegisterOutput {
         stable_id: String,
@@ -1174,7 +1193,8 @@ impl Controller {
                 screen,
                 start,
                 held,
-            } => return self.pointer_nearest(output, screen, start, held),
+                focus,
+            } => return self.pointer_nearest(output, screen, start, held, focus),
             Command::RegisterOutput {
                 stable_id,
                 screen_bounds,
@@ -1545,6 +1565,7 @@ impl Controller {
                 time_ms: None,
                 ..
             } => {
+                self.user_moved_camera();
                 self.cancel_animations(output);
                 self.overview_returns.remove(&output);
                 self.scene.pan(output, screen_delta)?;
@@ -1564,6 +1585,7 @@ impl Controller {
                 zoom,
                 anchor,
             } => {
+                self.user_moved_camera();
                 self.cancel_animations(output);
                 self.overview_returns.remove(&output);
                 self.scene.zoom_at(output, zoom, anchor)?;
@@ -1572,6 +1594,7 @@ impl Controller {
             Command::Focus { window } => {
                 self.finish_cycle();
                 self.scene.focus(window)?;
+                self.hover_parked();
                 return self.request_focus(window);
             }
             Command::CycleFocus { backward, held } => {
@@ -2133,7 +2156,7 @@ impl Controller {
             let (widget, pinned, rule) = self.policy_json(w.id);
             describe(json!({"window": w.id, "world_rect": w.world_rect, "metadata": self.metadata.get(&w.id), "source": self.sources.get(&w.id), "widget": widget, "pinned": pinned, "rule": rule, "mode": self.mode_name(w.id)}), w.id)
         }).collect();
-        let mut navigation = json!({"flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks});
+        let mut navigation = json!({"hover_pull": {"needs_pointer": self.hover_pull_due()}, "flights": self.flights, "clock_ns": self.navigation_clock, "contexts": self.navigation_contexts, "home_returns": self.home_returns, "overview_returns": self.overview_returns, "active_bookmarks": self.active_bookmarks});
         for (key, value) in self.motion.snapshot() {
             navigation[key] = value;
         }

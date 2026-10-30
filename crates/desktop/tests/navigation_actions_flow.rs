@@ -556,12 +556,14 @@ fn cycle_windows_holds_commits_and_yields_to_other_actions() {
         h.focus(window);
     }
     assert_eq!(h.history(), json!([4, 2, 1]));
-    h.look(0.0, 0.0, 0.5);
+    // Far from every window, so that each step has to bring its target in.
+    h.look(8000.0, 8000.0, 0.5);
 
     // Held: each step selects, focuses and flies at the current zoom, and the
     // history stays frozen until the release.
     let data = h.held("cycle-windows forward");
     let first = effect(&mut h, &data, 2);
+    let flight = data["navigation"].clone();
     assert_eq!(data["navigation"]["target_zoom"], 0.5);
     assert_eq!(data["navigation"]["target_camera"], centered(B, 0.5));
     assert_eq!(h.focused(), 2);
@@ -569,13 +571,16 @@ fn cycle_windows_holds_commits_and_yields_to_other_actions() {
     assert_eq!(h.focus_state()["release_pending"], false);
     h.confirm(&first);
     assert_eq!(h.history(), json!([4, 2, 1]));
+    // v0.20: where the first step's flight lands, A is shown whole, so the
+    // second step only selects and focuses it and the flight carries on.
     let data = h.held("cycle-windows forward");
     let second = effect(&mut h, &data, 1);
+    assert_eq!(data["navigation"], Value::Null);
     assert_eq!(h.focus_state()["cycle"], 2);
     h.confirm(&second);
     assert_eq!(h.history(), json!([4, 2, 1]));
-    h.lands(&data["navigation"]);
-    assert_eq!(h.pose(1)["camera"], centered(A, 0.5));
+    h.lands(&flight);
+    assert_eq!(h.pose(1)["camera"], centered(B, 0.5));
     h.ok(json!({"op":"end_focus_cycle"}));
     assert_eq!(h.history(), json!([1, 4, 2]));
     assert_eq!(h.focus_state()["cycle"], Value::Null);
@@ -725,8 +730,11 @@ fn focus_center_takes_the_window_under_the_pointer() {
     h.ok(json!({"op":"cancel_navigation","output":1}));
 
     // Empty canvas under the pointer, a pointer off the output, and no pointer
-    // at all: nothing happens, and it is no error.
-    let before = h.snapshot();
+    // at all: since v0.20 the action is `center-window` (upstream's
+    // `self.center_window()` fallback), the focused window (1) here.
+    let reference = h.action("center-window");
+    effect(&mut h, &reference, 1);
+    h.ok(json!({"op":"cancel_navigation","output":1}));
     for pointer in [
         pointer(&mut h, 700.0, 500.0),
         point(100.0, 100.0),
@@ -734,10 +742,23 @@ fn focus_center_takes_the_window_under_the_pointer() {
     ] {
         let data =
             h.ok(json!({"op":"action","output":1,"action":"focus-center","pointer":pointer}));
-        assert_eq!(data, nothing());
+        assert_eq!(data["effects"][0]["window"], 1);
+        assert_eq!(
+            data["navigation"]["target_camera"],
+            reference["navigation"]["target_camera"]
+        );
+        assert_eq!(
+            data["navigation"]["target_zoom"],
+            reference["navigation"]["target_zoom"]
+        );
+        h.ok(json!({"op":"cancel_navigation","output":1}));
     }
-    assert_eq!(h.action("focus-center"), nothing());
-    assert_eq!(h.snapshot(), before);
+    let data = h.action("focus-center");
+    assert_eq!(
+        data["navigation"]["target_camera"],
+        reference["navigation"]["target_camera"]
+    );
+    h.ok(json!({"op":"cancel_navigation","output":1}));
     // A point no screen could hold is the shell's mistake.
     for (op, key, value) in [
         ("action", "action", json!("focus-center")),
@@ -844,9 +865,14 @@ fn a_click_focuses_at_the_press_and_navigates_at_the_release_when_configured() {
     assert_eq!(h.focus_state()["pending_effect"], press["effect"]);
     assert_eq!(data["navigation"]["output"], 1);
     assert_eq!(data["navigation"]["target_zoom"], 0.5);
-    assert_eq!(data["navigation"]["target_camera"], centered(F, 0.5));
+    // v0.20: the click scrolls the window just far enough to show it whole,
+    // `snap.outer_gap` (12 world points) in from the usable edge, instead of
+    // centering it, so that it stays near the pointer. F (x 0..100) lies 40
+    // world points outside the usable area (x from 40), so the camera moves
+    // 40 + 12 left and not at all vertically.
+    assert_eq!(data["navigation"]["target_camera"], point(-52.0, 0.0));
     h.lands(&data["navigation"]);
-    assert_eq!(h.pose(1)["camera"], point(-950.0, -170.0));
+    assert_eq!(h.pose(1)["camera"], point(-52.0, 0.0));
     h.confirm(&press["effect"]);
     // Now wholly in view: a second click moves nothing.
     assert_eq!(click(&mut h, 6, json!(1))["navigation"], Value::Null);
@@ -855,7 +881,8 @@ fn a_click_focuses_at_the_press_and_navigates_at_the_release_when_configured() {
     assert_eq!(click(&mut h, 4, json!(1))["navigation"], Value::Null);
     let data = released(&mut h, 4, json!(1));
     assert_eq!(data["navigation"]["target_zoom"], 0.5);
-    assert_eq!(data["navigation"]["target_camera"], centered(D, 0.5));
+    // D (y -400..-300) is above the usable area (y from 80): 80 + 400 + 12 up.
+    assert_eq!(data["navigation"]["target_camera"], point(0.0, -492.0));
     // Focus went elsewhere before the button came up: the user is not pulled back.
     h.look(0.0, 0.0, 0.5);
     click(&mut h, 4, json!(1));
@@ -869,7 +896,7 @@ fn a_click_focuses_at_the_press_and_navigates_at_the_release_when_configured() {
     );
     let data = released(&mut h, 3, json!(1));
     assert_eq!(data.get("effect"), None);
-    assert_eq!(data["navigation"]["target_camera"], centered(C, 0.5));
+    assert_eq!(data["navigation"]["target_camera"], point(-352.0, 0.0));
     // With no active output there is nowhere to navigate.
     h.look(0.0, 0.0, 0.5);
     let data = click(&mut h, 4, Value::Null);
@@ -1228,7 +1255,8 @@ fn clear_focus_and_the_reported_cycle_hold() {
         ("alt+shift+Tab", "cycle-windows backward"),
         ("mod+c", "center-window"),
         ("mod+x", "focus-center"),
-        ("mod+Left", "center-nearest left"),
+        // v0.20: every default center-nearest binding runs focus-nearest.
+        ("mod+Left", "focus-nearest left"),
     ] {
         let key = keys["keys"]
             .as_array()
@@ -1278,11 +1306,13 @@ fn a_hot_corner_runs_window_navigation_with_the_pointer_and_modifiers_it_fires_u
     };
 
     // focus-center reads the pointer the corner fired under, exactly as the
-    // action does; a corner sent without one finds nothing.
-    assert_eq!(
-        h.ok(json!({"op":"hot_corner","output":1,"corner":"top_left"})),
-        nothing()
-    );
+    // action does; a corner sent without one is, since v0.20, `center-window`:
+    // the focused window (4) is centered at zoom 1.
+    let data = h.ok(json!({"op":"hot_corner","output":1,"corner":"top_left"}));
+    effect(&mut h, &data, 4);
+    assert_eq!(data["navigation"]["target_zoom"], 1.0);
+    assert_eq!(data["navigation"]["target_camera"], centered(D, 1.0));
+    h.ok(json!({"op":"cancel_navigation","output":1}));
     let over = pointer(&mut h, 950.0, 200.0);
     let data = corner(&mut h, "top_left", over.clone(), false);
     let wanted = effect(&mut h, &data, 2);

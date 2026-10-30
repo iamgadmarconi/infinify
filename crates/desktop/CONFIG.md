@@ -3,9 +3,11 @@
 The controller is configured by one TOML file in DriftWM's own grammar. The
 parser, portable defaults, action grammar and binding tables are upstream's
 code, carried in `driftwm-core` (malbiruk/driftwm at
-`352333a8fa1b22171492d4b71a54102045c9a19d`, `src/config/`); nothing here
-re-implements their grammar. The Mac adapter defaults an omitted
-`window_placement` to `auto`; explicit values use upstream parsing. It also adds
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`, v0.21.0, `src/config/`; the first
+port was `352333a8`, see [PORT.md](../core/PORT.md#update-to-v0210)); nothing
+here re-implements their grammar. `window_placement` is `auto` when omitted,
+which is upstream's own default since v0.20.0 (the adapter had set it before);
+explicit values use upstream parsing. The macOS adapter also adds
 wallpaper policy and Super+Tab, F3 and Super+scroll defaults, while honoring
 explicit bindings and disabled defaults. What is new is the map from upstream's
 modifiers and keysyms to a Mac keyboard, and six additive ABI 1 commands.
@@ -107,7 +109,7 @@ constants they replaced.
 | `[mouse.on-window]`, `[mouse.on-canvas]`, `[mouse.anywhere]`, `disable_defaults = ["mouse"]` | the `mouse_binding` reply |
 | `[input.keyboard] repeat_delay`, `repeat_rate`, `layout_independent` | reported by `bindings` for the shell's key repeat and key lookup |
 | `[navigation] pan_step` | `pan-viewport`, `pan_viewport` |
-| `[navigation] nudge_step` | `nudge-window` |
+| `[navigation] nudge_step` | `nudge-window`, and `move-to-snap` with no stop that way; in **screen pixels** since v0.21.0 (`canvas_step`: [SIZES.md](SIZES.md#grow-window-dir-shrink-window-dir)) |
 | `[navigation] camera_speed` | every `tick_navigation` |
 | `[navigation] anchors` | `zoom-to-fit` fits them with the windows, as upstream's `ZoomToFit` does; `center-nearest` lands on them |
 | `[navigation] auto_navigate_on_click` | `activate` with cause `click_release` flies to a still-focused window that is not wholly in view |
@@ -123,13 +125,13 @@ constants they replaced.
 | `[gestures] swipe_threshold`, `pinch_in_threshold`, `pinch_out_threshold` | when a threshold gesture fires |
 | `[input.trackpad] enable` | whether gestures are dispatched, until `set-trackpad` overrides it |
 | `[zoom] fit_padding` | `zoom-to-fit`, `zoom-to-fit-snapped`, and the dynamic minimum zoom |
-| `[navigation] resize_step` | the step of `grow-window` and `shrink-window`, which run once the shell has sent `native_resize_capability`, as every normal run does: [SIZES.md](SIZES.md#the-gate) |
+| `[navigation] resize_step` | the step of `grow-window`, `shrink-window` and `resize-to-snap` (a shrink with no stop inside the window), in screen pixels since v0.21.0, which run once the shell has sent `native_resize_capability`, as every normal run does: [SIZES.md](SIZES.md#the-gate) |
 | `[snap] enabled`, `gap`, `distance`, `break_force`, `corners`, `centers` | `begin_drag`, `begin_resize`, `gesture_to` and the native resize transaction's snap intent |
-| `[snap] outer_gap` | the inset of a placed window in window navigation; with the capability, also the inset of `fit-window` and `fill-window` |
+| `[snap] outer_gap` (default 12 since v0.20.0) | the inset of a placed window in window navigation, of `focus-nearest`'s reveal and `move-to-snap`'s edge scroll, of `fill-window` and of `resize-to-snap`'s fence. **Not `fit-window`** since v0.20.0: a fit is edge to edge |
 | `focus_placement`, `[[outputs]] focus_placement` | where window navigation and `send-to-output` park the window, and with it where `window_placement = "center"` spawns one |
 | `[[outputs]] name`, `[outputs.hot_corners]` | which output an entry governs and its [hot corners](#hot-corners) |
 | `autostart` | `exec` effects of the launch load, see [Autostart](#autostart) |
-| `window_placement` | where a window that appears by itself is placed: macOS defaults to `auto` when omitted; explicit `center`, `cursor` or `auto` use upstream parsing, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
+| `window_placement` | where a window that appears by itself is placed: `auto` when omitted (upstream's default since v0.20.0); explicit `center`, `cursor` or `auto` use upstream parsing, see [LIFECYCLE.md](LIFECYCLE.md#2-placement) |
 | `[decorations] title_bar_height` | the diagonal step of the placement cascade; also part of `render.chrome` below |
 | `[background] type`, `path`, `texture`, `mirror_tile`, `transparent_shader`, `animate_fps`, `cache_shader`, `cache_budget_mb`, `parallax` | reported as the snapshot's `render.background` for the shell's compositor, including the derived `inherit_macos` policy; see [macOS wallpaper](#macos-wallpaper) and [RENDER.md](RENDER.md#render). What the compositor does with each is described in `native/desktop/BACKGROUND-NOTES.md` |
 | `[decorations] bg_color`, `fg_color`, `corner_radius`, `title_bar_height`, `font`, `font_size`, `font_weight`, `title_align` | reported as `render.chrome`: what stand-ins and compositor title bars are rasterised from |
@@ -139,7 +141,7 @@ constants they replaced.
 | `[effects] blur_radius`, `blur_strength`, `animate_blur_fps`, `animation_speed`, `animation_scale` | reported as `render.effects` for the shell's compositor: the frost, and the open, close and stand-in animations, see [EFFECTS.md](EFFECTS.md#rendereffects) |
 | `[zoom] fit_padding` | also the margin around a `screenshot all` |
 | `[snap] gap` | also the spacing of an `auto` placement, the cluster test for who takes the focus after a close, the cluster `zoom-to-fit-snapped` frames and, with the capability, the cluster `fit-window-snapped` shifts and the clearance `fill-window` keeps |
-| `[zoom] reset_on_new_window` | whether the navigation to a new window lands at zoom 1 |
+| `[zoom] reset_on_new_window` | whether the navigation to a new window lands at zoom 1 (default off since v0.20.0) |
 | `[navigation] auto_navigate_on_close` | whether the camera flies to the window that takes the focus after a close, when that window is in the closed one's snap cluster or overlaps it and is not wholly in view |
 | `[session] suspend_on_close`; `[[window_rules]] suspend_on_close` | whether a window that closes by itself leaves a stand-in; the rule's `app_id` is matched against the bundle identifier |
 | `[session] restore_windows`; `[[window_rules]] restore_windows` | whether a saved slot whose window is gone stays as a stand-in at `adoption_complete`; not decided while the launch config file is refused |
@@ -350,11 +352,11 @@ to be on `PATH`. The table lists registered Mac-key defaults.
 | `mod+2` | ⌘2 | 19 | `go-to-bookmark 2` |  | yes |
 | `mod+3` | ⌘3 | 20 | `go-to-bookmark 3` |  | yes |
 | `mod+4` | ⌘4 | 21 | `go-to-bookmark 4` |  | yes |
-| `mod+Down` | ⌘Down | 125 | `center-nearest down` |  | yes |
-| `mod+Left` | ⌘Left | 123 | `center-nearest left` |  | yes |
+| `mod+Down` | ⌘Down | 125 | `focus-nearest down` |  | yes |
+| `mod+Left` | ⌘Left | 123 | `focus-nearest left` |  | yes |
 | `mod+Return` | ⌘Return | 36 | `exec-terminal` |  | yes |
-| `mod+Right` | ⌘Right | 124 | `center-nearest right` |  | yes |
-| `mod+Up` | ⌘Up | 126 | `center-nearest up` |  | yes |
+| `mod+Right` | ⌘Right | 124 | `focus-nearest right` |  | yes |
+| `mod+Up` | ⌘Up | 126 | `focus-nearest up` |  | yes |
 | `mod+a` | ⌘A | 0 | `home-toggle` |  | yes |
 | `mod+alt+Down` | ⌥⌘Down | 125 | `send-to-output down` |  | yes |
 | `mod+alt+Left` | ⌥⌘Left | 123 | `send-to-output left` |  | yes |
@@ -367,28 +369,37 @@ to be on `PATH`. The table lists registered Mac-key defaults.
 | `mod+ctrl+Up` | ⌃⌘Up | 126 | `pan-viewport up` | yes | yes |
 | `mod+ctrl+shift+q` | ⌃⇧⌘Q | 12 | `quit` |  | yes |
 | `mod+d` | ⌘D | 2 | `exec-launcher` |  | yes |
-| `mod+e` | ⌘E | 14 | `toggle-cursor-pan` |  | yes |
 | `mod+equal` | ⌘= | 24 | `zoom-in` | yes | yes |
 | `mod+f` | ⌘F | 3 | `toggle-fullscreen` |  | with the capability |
-| `mod+m` | ⌘M | 46 | `fit-window` |  | with the capability |
+| `mod+m` | ⌘M | 46 | `fit-window-snapped` |  | with the capability |
 | `mod+minus` | ⌘- | 27 | `zoom-out` | yes | yes |
 | `mod+q` | ⌘Q | 12 | `close-window` |  | yes |
 | `mod+shift+1` | ⇧⌘1 | 18 | `set-bookmark 1` |  | yes |
 | `mod+shift+2` | ⇧⌘2 | 19 | `set-bookmark 2` |  | yes |
 | `mod+shift+3` | ⇧⌘3 | 20 | `set-bookmark 3` |  | yes |
 | `mod+shift+4` | ⇧⌘4 | 21 | `set-bookmark 4` |  | yes |
-| `mod+shift+Down` | ⇧⌘Down | 125 | `nudge-window down` | yes | yes |
-| `mod+shift+Left` | ⇧⌘Left | 123 | `nudge-window left` | yes | yes |
-| `mod+shift+Right` | ⇧⌘Right | 124 | `nudge-window right` | yes | yes |
-| `mod+shift+Up` | ⇧⌘Up | 126 | `nudge-window up` | yes | yes |
-| `mod+shift+m` | ⇧⌘M | 46 | `fit-window-snapped` |  | with the capability |
+| `mod+shift+Down` | ⇧⌘Down | 125 | `move-to-snap down` | yes | yes |
+| `mod+shift+Left` | ⇧⌘Left | 123 | `move-to-snap left` | yes | yes |
+| `mod+shift+Right` | ⇧⌘Right | 124 | `move-to-snap right` | yes | yes |
+| `mod+shift+Up` | ⇧⌘Up | 126 | `move-to-snap up` | yes | yes |
+| `mod+shift+m` | ⇧⌘M | 46 | `fit-window` |  | with the capability |
+| `mod+shift+q` | ⇧⌘Q | 12 | `suspend-window` |  | yes |
 | `mod+shift+w` | ⇧⌘W | 13 | `zoom-to-fit-snapped` |  | yes |
 | `mod+t` | ⌘T | 17 | `toggle-pin-to-screen` |  | yes |
 | `mod+w` | ⌘W | 13 | `zoom-to-fit` |  | yes |
 | `mod+x` | ⌘X | 7 | `focus-center` |  | yes |
-| `mod+z` | ⌘Z | 6 | `zoom-reset` |  | yes |
 | `mod+Tab` | ⌘Tab | 48 | `zoom-to-fit` | | yes |
 | `F3` | F3 | 99 | `zoom-to-fit` | | yes |
+
+Changed against the v0.19 table by DriftWM v0.20.0: the four `center-nearest`
+arrows run `focus-nearest`; `mod+shift+arrows` run `move-to-snap` (`nudge-window`
+stays available to bind); `mod+m` fits and `mod+shift+m` fits the single window
+(snapped is the default form, Shift the single-window one); `mod+shift+q`
+suspends the focused window; `mod+e` (`toggle-cursor-pan`) and `mod+z`
+(`zoom-reset`, `mod+0` still resets) are no longer bound. `mod+middle` is
+`fill-window`, see [Mouse bindings](#mouse-bindings). The table is the
+`driftwm-core` default table read through the key map; `config_flow`'s
+`default_bindings_map_to_macos_chords` reads it back for every row.
 
 The two added overview keys preserve the previous view on the first press and return to it on the second. The shell filters Command-Tab and F3 before system shortcut dispatch (including the top-row Mission Control key alias). The filter exists only while desktop shortcuts are enabled. A failed filter is reported; no system preferences are changed.
 
@@ -542,7 +553,10 @@ The reply is `{"binding":null}` or
 ```
 
 `kind` is `move_window`, `move_snapped_windows`, `resize_window`,
-`resize_window_snapped`, `pan_viewport`, `zoom`, `center_nearest` or `action`.
+`resize_window_snapped`, `pan_viewport`, `zoom`, `center_nearest` or `action`. A
+press bound to upstream's `focus-nearest` (the default `mod+ctrl+left` since
+v0.20.0) is kind `center_nearest` with `"focus":true`, see
+[POINTER.md](POINTER.md#focus-nearest-on-a-press).
 For `action`, `action` is the canonical action string and `implemented` says
 whether the `action` command runs it; otherwise both are null.
 
@@ -572,13 +586,13 @@ unbindings and `disable_defaults = ["mouse"]` take precedence:
 | left drag | the app's | `pan_viewport` |
 | ⌥ left | `move_window` | none |
 | ⌥⇧ left | `move_snapped_windows` | none |
-| ⌥ right | `resize_window` | none |
-| ⌥⇧ right | `resize_window_snapped` | none |
-| ⌥ middle | `action` `fit-window` (refused without the capability) | none |
-| ⌥⇧ middle | `action` `fit-window-snapped` (the same) | none |
-| ⌘ middle | `action` `toggle-fullscreen` (refused without the capability) | none |
+| ⌥ right | `resize_window_snapped` (v0.20.0: it was `resize_window`) | none |
+| ⌥⇧ right | `resize_window` (the window alone) | none |
+| ⌥ middle | `action` `fit-window-snapped` (refused without the capability) | none |
+| ⌥⇧ middle | `action` `fit-window` (the same) | none |
+| ⌘ middle | `action` `fill-window` (refused without the capability; v0.20.0: it was `toggle-fullscreen`) | none |
 | ⌘ left | `pan_viewport` | `pan_viewport` |
-| ⌃⌘ left (`mod+ctrl`) | `center_nearest` | `center_nearest` |
+| ⌃⌘ left (`mod+ctrl`) | `center_nearest` with `"focus":true` (`focus-nearest`) | the same |
 | finger scroll | the app's | `pan_viewport` |
 | wheel scroll | the app's | `zoom` |
 | ⌘ finger scroll | `zoom` | `zoom` |
@@ -590,8 +604,12 @@ unbindings and `disable_defaults = ["mouse"]` take precedence:
 `cycle-windows backward` and `focus-center` are upstream's window navigation:
 see [NAVIGATION.md](NAVIGATION.md#window-navigation-actions).
 
-`nudge-window <dir>` moves the focused window by `navigation.nudge_step` world
-points along the unit vector, each axis rounded as upstream rounds it. It is a
+`focus-nearest <dir>` is [`center-nearest`](NAVIGATION.md#driftwm-v0200--v0210)
+that reveals instead of parking, `move-to-snap <dir>` and `resize-to-snap <dir>`
+are [keyboard snapping](SIZES.md#keyboard-snapping-move-to-snap-resize-to-snap-v0200-v0210).
+
+`nudge-window <dir>` moves the focused window by `navigation.nudge_step` screen
+pixels (v0.21.0; world points at zoom 1) along the unit vector, each axis rounded as upstream rounds it. It is a
 logical world move, refused during a gesture or a live native resize and for a
 destination outside the integer range, exactly as the IPC `Move` is. With no
 focused window nothing happens and nothing is dirty, as upstream.

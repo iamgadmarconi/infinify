@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from malbiruk/driftwm src/config/parse_helpers.rs at
-// 352333a8fa1b22171492d4b71a54102045c9a19d (GPL-3.0-or-later).
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
 // Changes from upstream: `smithay::` paths read `crate::platform::`.
 // Nothing else.
 //! TOML → config-type conversion helpers.
@@ -517,9 +517,9 @@ pub(super) fn parse_effects_config(raw: EffectsFileConfig, errors: &mut Warnings
         );
     }
     EffectsConfig {
-        blur_radius: raw.blur_radius.unwrap_or(2),
+        blur_radius: raw.blur_radius.unwrap_or(5),
         blur_strength: non_negative(
-            raw.blur_strength.unwrap_or(1.1),
+            raw.blur_strength.unwrap_or(1.5),
             "effects.blur_strength",
             errors,
         ),

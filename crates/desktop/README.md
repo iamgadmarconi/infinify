@@ -55,7 +55,7 @@ Preserve them as integers in native code.
 | `forget` | `window` | `{}`; removes source and world placeholder; a placeholder it removes is logged as a `standin_dismiss` ([EFFECTS.md](EFFECTS.md#lifecycle-events)) |
 | `pan` | `output`, `screen_delta` point, optional `time_ms` and `source` | `{}`; positive X reveals world to right; with `time_ms` it feeds momentum |
 | `pan_end` | `output`, optional `time_ms` | `{needs_frames}`; launches momentum |
-| `pointer` | `output` or null, global `screen` point | `{needs_pointer, needs_frames}`; for cursor edge pan |
+| `pointer` | `output` or null, global `screen` point | `{needs_pointer, needs_frames}`, and `dirty` with `effect` when sloppy focus followed a moved view (v0.20.0); for cursor edge pan and that pull |
 | `zoom_by` | `output`, global `anchor` point, `delta`, `source`, optional `phase` | `{navigation, needs_frames}`; wheel or pinch zoom at the config's speeds |
 | `zoom` | `output`, `zoom` in `[0.001,1]`, global `anchor` point | `{}`; anchor world point stays fixed |
 | `focus` | `window` | `effect` or null; raises logical world z-order |
@@ -65,7 +65,7 @@ Preserve them as integers in native code.
 | `input` | `output`, global `screen` point, expected `identity` | same hit object; rejects absent/unbound/stale target, and a pick target (never a widget or a pinned window) |
 | `hover` | `output`, global `screen` point, optional `time_ms` | `{dirty, pick, hit, forward}`, and `effect` when sloppy focus moved the focus; see [POINTER.md](POINTER.md#hover) |
 | `pick` | `window`, `output` | `{effect, navigation, dirty}`; a left click in pick mode |
-| `pointer_nearest` | `output`, global `screen` and `start` points, optional `held` | `{navigation, effects, dirty}`; a press bound to the mouse action `center-nearest` |
+| `pointer_nearest` | `output`, global `screen` and `start` points, optional `held`, optional `focus` boolean | `{navigation, effects, dirty}`; a press bound to the mouse action `center-nearest`, or with `focus` (v0.20.0) to `focus-nearest` |
 | `begin_drag` | `window`, `output`, optional `group` boolean (default false) | `{effect}`: the window is raised and focused ahead of the grab, as upstream's move press does, and `effect` is the focus request `activate` returns, or null for a window without a source; a screen-pinned window is dragged in screen space ([RULES.md](RULES.md#dragging-a-pinned-window)) |
 | `begin_resize` | `window`, `output`, `edges`, optional `group` boolean | `{effect}`, as `begin_drag`: raised and focused first |
 | `gesture_to` | total `screen_delta` from gesture start, optional global `pointer` point | `{needs_frames}`; a drag's `pointer` arms edge pan |
@@ -285,3 +285,33 @@ passed (179 scenarios: the eight above with `lifecycle_flow` at 32, and
 paths, with a config holding an `alt+shift` tap, read the same output,
 captures, camera and exits; what was read in the shell at the join and not
 run is in the same shell notes.
+
+## DriftWM v0.21.0
+
+The desktop controller follows DriftWM v0.21.0
+(`df3de27b26c7998e8a460cffd8a4925cbed3a322`, `third_party/driftwm`). Its parser,
+defaults and snapping stops come from `driftwm-core`, which was brought to that
+commit verbatim ([PORT.md](../core/PORT.md#update-to-v0210)); the controller
+adaptations are named in each source file's header, and a doc here that still
+cites `352333a8fa1b22171492d4b71a54102045c9a19d` names the commit that part was
+adapted at, which this update re-read only where the v0.20/v0.21 changes touch it.
+
+| Release note | Where it lives here | Status |
+| --- | --- | --- |
+| Changed defaults (v0.20.0): `window_placement` auto; `[session] restore_*` on; `reset_on_new_window` off; `interact_min` 0.5; `[snap] corners` on, `outer_gap` 12; `decoration_resize_snapped` / `decoration_fit_snapped` on; decoration colours; blur 5 / 1.5 | `driftwm-core` defaults ([CONFIG.md](CONFIG.md)); the macOS `window_placement = auto` adapter default is now upstream's | in force; tests of the existing flows were updated to them |
+| Default bindings (v0.20.0): `focus-nearest` on mod+arrows, 4-finger and mod+3-finger swipes and mod+ctrl+drag; mod+shift+arrows `move-to-snap`; snapped resize and fit, Shift for the single window; mod+middle `fill-window`; holds `focus-center`; mod+shift+q `suspend-window`; mod+e, mod+z and the alt pinches removed | `driftwm-core` tables; [CONFIG.md](CONFIG.md#key-bindings), [GESTURES.md](GESTURES.md#driftwm-v0200--v0210), [POINTER.md](POINTER.md) | in force |
+| `focus-nearest`, `move-to-snap`, `resize-to-snap` | `window_actions.rs`, `keyboard_snap.rs`, `sizes.rs`; [NAVIGATION.md](NAVIGATION.md#driftwm-v0200--v0210), [SIZES.md](SIZES.md#keyboard-snapping-move-to-snap-resize-to-snap-v0200-v0210) | scenario tests; no native run |
+| Alt-Tab leaves a window already whole alone; `auto_navigate_on_click` scrolls minimally; `focus-center` fallback; sloppy focus after pans | `window_actions.rs`, `pointer_policy.rs`; [NAVIGATION.md](NAVIGATION.md#driftwm-v0200--v0210), [POINTER.md](POINTER.md) | scenario tests; the shell half of the pull is built, not run |
+| `nudge_step` / `resize_step` in screen pixels; `fit-window` edge to edge | `keyboard_snap.rs` (`canvas_step`), `sizes.rs` | scenario tests |
+| `interact_min` default 0.5 | the pick mode of v0.19, now on by default; [POINTER.md](POINTER.md#pick-mode) | scenario tests (`tests/interact_min_flow.rs`); the shell paths were read, a pen's dedicated packets are now taken over a pick target; no Mac run |
+| IPC `pid`, `msg cursor`; request, connection, position, size, stand-in caps; owner-only files; screenshots through a temp file; spawned apps' environment | [IPC.md](IPC.md#v0210-hardening) | scenario tests and `tests/e2e/ipc-limits.sh`; see there for what was not run |
+| Closing a window fitted with a snapped fit puts back the neighbours (v0.20.0) | not done: `driftwm-core`'s stage carries `FitPush`, the controller does not record it | missing |
+
+Left out because they exist only for the Wayland or Linux stack: the KDE
+server-decoration protocol (GTK header bars under `[decorations] default_mode`),
+activation-token expiry, gamma tables and virtual keymaps from memfds, the
+wlr-screencopy region fix, ext-image-copy-capture offsets, the monotonic capture
+clock, pen-over-lock-screen cursor, the DRM error dump, layer-surface resize
+(a Wayland layer shell), desktop-entry limits, the flake and its Home Manager
+module, and the XDG autostart note. `docs/parity/README.md` lists each with its
+status.

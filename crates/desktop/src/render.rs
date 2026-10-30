@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d, with
+// the v0.21.0 region bounds of df3de27b26c7998e8a460cffd8a4925cbed3a322
+// (third_party/driftwm/src/ipc/mod.rs: the check_point, check_size and
+// within_window_range tests of cmd_screenshot):
 // src/ipc/mod.rs (cmd_screenshot, resolve_screenshot_region,
 // window_visual_rect, snap_rect_to_rect, union_rect, element_by_selector),
 // src/render/screenshot.rs (capture_region_to_png's checks: the scale, the
@@ -20,8 +23,11 @@
 // frame is its content and it is decorated as upstream decorates a
 // client-side-decorated window unless the config says otherwise.
 use super::actions::Outcome;
-use super::ipc::{Reply, Response, ScreenshotTarget, frame, rule_to_internal};
+use super::ipc::{
+    Reply, Response, ScreenshotTarget, check_point, check_size, frame, rule_to_internal,
+};
 use super::rules::decoration_name;
+use super::storage::within_window_range;
 use super::view_actions::pixel_size;
 use super::*;
 use driftwm_core::config::{
@@ -347,6 +353,9 @@ impl Controller {
                 if *w <= 0 || *h <= 0 {
                     return Err("region width and height must be positive".to_string());
                 }
+                // Upstream cmd_screenshot's check_point and check_size.
+                check_point(*x, *y)?;
+                check_size(*w, *h)?;
                 if !*from_screen {
                     let size = [i64::from(*w), i64::from(*h)];
                     let loc = rule_to_internal(*x, *y, size);
@@ -369,6 +378,11 @@ impl Controller {
                     .ok_or_else(|| "no output for the screen region".to_string())?;
                 let local = corner - viewport.screen_bounds.origin;
                 let (camera, zoom) = (viewport.camera, viewport.zoom);
+                // Zoomed out, a screen point in range can land on the canvas
+                // far past it (upstream within_window_range).
+                if !within_window_range(camera.x + local.x / zoom, camera.y + local.y / zoom) {
+                    return Err("region lies past the canvas range".to_string());
+                }
                 let region = Region {
                     x: whole((camera.x + local.x / zoom).round(), VIEW_RANGE)?,
                     y: whole((camera.y + local.y / zoom).round(), VIEW_RANGE)?,

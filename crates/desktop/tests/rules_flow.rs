@@ -490,7 +490,7 @@ decoration = "none"
     // below the window that was already there.
     assert_eq!(
         appear(&mut h, 2, "app.widget", "W", (200.0, 100.0)),
-        json!({"window":2,"adopted":false,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":2,"adopted":false,"background":false,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(h.world(2), rect(600.0, 350.0, 200.0, 100.0));
     assert_eq!(h.focused(), 1);
@@ -597,7 +597,7 @@ decoration = "none"
         .clone();
     assert_eq!(
         listed,
-        json!({"id":2,"app_id":"app.widget","title":"W","position":[0,0],"size":[200,100],"is_focused":true,"is_widget":true,"suspended":false,"mode":"Normal"})
+        json!({"id":2,"app_id":"app.widget","title":"W","position":[0,0],"size":[200,100],"is_focused":true,"is_widget":true,"suspended":false,"mode":"Normal","pid":4242})
     );
     assert_eq!(state["pinned"], json!([]));
 
@@ -795,9 +795,9 @@ output = "nowhere"
     assert_eq!(
         state["pinned"],
         json!([
-            {"id":2,"output":"main","app_id":"app.video","title":"Picture-in-Picture","position":[300,-200],"size":[400,200]},
-            {"id":4,"output":"main","app_id":"app.far","title":"F","position":[300,300],"size":[400,200]},
-            {"id":3,"output":"side","app_id":"app.side","title":"S","position":[0,0],"size":[300,200]}
+            {"id":2,"output":"main","app_id":"app.video","title":"Picture-in-Picture","position":[300,-200],"size":[400,200],"pid":4242},
+            {"id":4,"output":"main","app_id":"app.far","title":"F","position":[300,300],"size":[400,200],"pid":4242},
+            {"id":3,"output":"side","app_id":"app.side","title":"S","position":[0,0],"size":[300,200],"pid":4242}
         ])
     );
     let listed: Vec<_> = state["windows"]
@@ -818,7 +818,7 @@ output = "nowhere"
             (400.0, 200.0),
             Value::Null
         ),
-        json!({"window":5,"adopted":false,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":5,"adopted":false,"background":false,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(h.pinned(5), Value::Null);
     assert_eq!(h.world(5), rect(100.0, 100.0, 400.0, 200.0));
@@ -2283,9 +2283,12 @@ fn a_save_keeps_pins_with_their_slots_and_never_holds_a_widget() {
     // No rule, no opacity and no snapping state is saved.
     let mut keys: Vec<_> = saved.as_object().unwrap().keys().collect();
     keys.sort();
+    // The bookmark registry is part of the file since v0.20 turned
+    // `session.restore_bookmarks` on.
     assert_eq!(
         keys,
         [
+            "bookmarks",
             "metadata",
             "next_output",
             "next_window",
@@ -2340,7 +2343,7 @@ fn a_save_keeps_pins_with_their_slots_and_never_holds_a_widget() {
     // pinned where it was, on a slot that is not in the focus history.
     assert_eq!(
         appear(&mut h, 31, "app.p", "P", (200.0, 200.0)),
-        json!({"window":3,"adopted":true,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":3,"adopted":true,"background":false,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(
         h.placement(1, 3)["screen_rect"],
@@ -2351,7 +2354,7 @@ fn a_save_keeps_pins_with_their_slots_and_never_holds_a_widget() {
     // position or pinning, and still carries the rule's other fields.
     assert_eq!(
         appear(&mut h, 32, "app.a", "A", (400.0, 300.0)),
-        json!({"window":1,"adopted":true,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":1,"adopted":true,"background":false,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(h.world(1), rect(300.0, 275.0, 400.0, 300.0));
     assert_eq!(h.pinned(1), Value::Null);
@@ -2361,20 +2364,22 @@ fn a_save_keeps_pins_with_their_slots_and_never_holds_a_widget() {
     // position it was moved to by IPC lasted only for the session.
     assert_eq!(
         appear(&mut h, 33, "app.widget", "W", (200.0, 100.0)),
-        json!({"window":5,"adopted":false,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":5,"adopted":false,"background":false,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(h.world(5), rect(-100.0, 550.0, 200.0, 100.0));
     assert_eq!(h.window(5)["widget"], true);
     assert_eq!(h.stack(), vec![5, 1, 3, 4]);
     // Q closed while nobody was looking. `restore_windows` keeps its slot as
     // a stand-in, and a stand-in is never pinned: it is back on the canvas
-    // where its pin showed it. Side's camera was not restored: (0, 0).
+    // where its pin showed it. Side's camera was restored (v0.20 turned
+    // `session.restore_camera` on): (10000, 0), so its pin's screen point
+    // shows world (10100, 100).
     assert_eq!(
         h.ok(json!({"op":"adoption_complete"})),
         json!({"dropped":[],"standins":[4],"dirty":true})
     );
     assert_eq!(h.pinned(4), Value::Null);
-    assert_eq!(h.world(4), rect(100.0, 100.0, 300.0, 200.0));
+    assert_eq!(h.world(4), rect(10100.0, 100.0, 300.0, 200.0));
     assert_eq!(h.placement(2, 4)["pinned"], false);
     assert_eq!(
         h.placement(2, 4)["screen_rect"],
@@ -2393,7 +2398,7 @@ fn a_save_keeps_pins_with_their_slots_and_never_holds_a_widget() {
     load_config(&mut h, &scratch, SAVED_RULES);
     assert_eq!(
         appear(&mut h, 41, "app.q", "Q", (300.0, 200.0)),
-        json!({"window":4,"adopted":true,"effect":null,"navigation":null,"dirty":true})
+        json!({"window":4,"adopted":true,"background":false,"effect":null,"navigation":null,"dirty":true})
     );
     assert_eq!(h.pinned(4), json!({"output":2,"screen_rect":null}));
     assert_eq!(
@@ -2405,7 +2410,9 @@ fn a_save_keeps_pins_with_their_slots_and_never_holds_a_widget() {
         json!({"output":1,"screen_rect":rect(300.0,200.0,300.0,200.0)})
     );
     assert_eq!(h.pinned(3), Value::Null);
-    assert_eq!(h.world(3), rect(400.0, 300.0, 200.0, 200.0));
+    // Main's camera is restored (v0.20 default), so the stand-in is back on the
+    // canvas at the world rectangle the save recorded for it.
+    assert_eq!(h.world(3), rect(450.0, 300.0, 200.0, 200.0));
 
     // A pin that names a stand-in or an output the file does not hold is not
     // a save this build wrote: the load is refused.
@@ -2723,7 +2730,11 @@ fn window_navigation_and_activation_take_canvas_windows_only() {
     assert_eq!(h.focused(), 1);
     // center-nearest does not anchor on a focused pinned window: the search
     // starts at the viewport center, which A holds. Anchored on the pinned
-    // window it would have found B.
+    // window it would have found B. The search is made from where the view
+    // lands (v0.20), so the flight the center-window above armed is dropped
+    // first: landing, it would put A's own center on the viewport center,
+    // where a window has no direction.
+    h.ok(json!({"op":"cancel_navigation","output":1}));
     h.observe_focus(4);
     let reply = h.action("center-nearest right");
     assert_eq!(focus_of(&reply), 1, "{reply}");
@@ -2739,19 +2750,23 @@ fn window_navigation_and_activation_take_canvas_windows_only() {
     h.settle_focus();
     assert_eq!(h.history(), json!([2, 1]));
 
-    // focus-center passes over a pinned window to the canvas window it
-    // covers, and takes no widget.
+    // focus-center over a pinned window focuses the pin and leaves the view
+    // where it is (v0.20, "Navigation"; upstream passed over the pin to the
+    // canvas window it covers). It takes no widget: with no canvas window
+    // under the pointer it is center-window, which flies to A.
     assert_eq!(h.hit(1, ON_PIN.0, ON_PIN.1)["window"], 4);
     let centre = |h: &mut Host, at: (f64, f64)| {
         h.ok(json!({"op":"action","output":1,"action":"focus-center","pointer":point(at.0, at.1)}))
     };
     let reply = centre(&mut h, ON_PIN);
-    assert_eq!(focus_of(&reply), 1, "{reply}");
-    assert_eq!(h.focused(), 1);
+    assert_eq!(focus_of(&reply), 4, "{reply}");
+    assert_eq!(reply["navigation"], Value::Null, "{reply}");
+    assert_eq!(h.focused(), 4);
     assert_eq!(h.hit(1, ON_WIDGET.0, ON_WIDGET.1)["window"], 3);
-    let before = h.snapshot();
-    assert_eq!(centre(&mut h, ON_WIDGET), IDLE());
-    assert_eq!(h.snapshot(), before);
+    let reply = centre(&mut h, ON_WIDGET);
+    assert_eq!(focus_of(&reply), 1, "{reply}");
+    assert_eq!(reply["navigation"]["animating"], true, "{reply}");
+    assert_eq!(h.focused(), 1);
 
     // A press focuses a widget or a pinned window and asks for native focus;
     // the answer puts neither in the history.

@@ -213,7 +213,9 @@ transaction, effect and binding generation counters.
 
 `tests/native_resize_flow.rs` crosses the exported C ABI. Its hash-verified
 original upstream request/clamp and ordinary settlement blocks come from
-malbiruk/driftwm `352333a8fa1b22171492d4b71a54102045c9a19d` (GPL-3.0-or-later).
+malbiruk/driftwm `df3de27b26c7998e8a460cffd8a4925cbed3a322` (v0.21.0,
+GPL-3.0-or-later; they were byte-identical at the earlier pin
+`352333a8fa1b22171492d4b71a54102045c9a19d`).
 See `tests/resize_upstream/README.md` for the exact mechanical extraction scope.
 The original Wayland release/configure/commit machinery does not execute here.
 The existing snap oracle remains separate. The native transaction cuts the

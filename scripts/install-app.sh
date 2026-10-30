@@ -4,6 +4,8 @@
 # For the owner to run; no agent or test runs it. It starts nothing, registers nothing
 # and changes no setting. The login item is the owner's next step:
 #   ~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on
+# or, for compositor mode as the login default:
+#   ~/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop enable
 #
 # macOS ties the Screen Recording and Accessibility grants to the bundle's signature.
 # INFINIFY_SIGN_IDENTITY names the code-signing identity used during the build
@@ -59,6 +61,8 @@ fi
 rm -rf "$replaced"
 printf '%s\n' "Installed $dest with the build signature preserved. Nothing was started and nothing was registered."
 printf '%s\n' "Start it at login, and again after a crash:  $dest/Contents/MacOS/Infinify login-item on"
+printf '%s\n' "Or make compositor mode (the Dock helper) the login default, reloaded after Dock restarts, with one approval in Login Items:"
+printf '%s\n' "  $dest/Contents/MacOS/Infinify native-desktop enable     # and  disable  /  status"
 printf '%s\n' "An instance that is already running keeps the previous build until it ends:"
 printf '%s\n' "  $dest/Contents/MacOS/Infinify msg action quit"
 printf '%s\n' "  launchctl kickstart gui/$(id -u)/com.marengox.infinify.agent   # when it runs as the login item"

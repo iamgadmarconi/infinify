@@ -1,29 +1,51 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Bundled, checkout-independent owner-run launcher for the full desktop helper.
-# No Dock restart, settings change, automatic injection retry or runtime cleanup.
+# Bundled, checkout-independent launcher for the full desktop helper: run by the owner in a terminal, by the login item
+# when the owner enabled compositor mode (--login), and by the running app after a Dock restart (--reload).
+# No Dock restart, settings change, automatic retry of an uncertain injection or runtime cleanup.
 set +x
 set -eu
 umask 077
 
 native_mode=launch
+native_usage='usage: Infinify.app/Contents/Resources/NativeDesktop/launch.sh [--check]'
 if [ $# -gt 1 ]; then
-  printf '%s\n' 'usage: Infinify.app/Contents/Resources/NativeDesktop/launch.sh [--check]' >&2
+  printf '%s\n' "$native_usage" >&2
   exit 64
 fi
 if [ $# -eq 1 ]; then
   case "$1" in
     --check) native_mode=check ;;
+    --login) native_mode=login ;;
+    --reload) native_mode=reload ;;
     --help)
-      printf '%s\n' 'usage: Infinify.app/Contents/Resources/NativeDesktop/launch.sh [--check]'
+      printf '%s\n' "$native_usage"
       printf '%s\n' '--check: verify the signed bundle and read-only policy report; no sudo, runtime creation or app launch.'
+      printf '%s\n' '--login: the login item of an enabled compositor mode (Infinify native-desktop enable): no terminal; the launch daemon loads.'
+      printf '%s\n' '--reload: for the running app after a Dock restart: the same recovery-aware load through the launch daemon; prints the new endpoint.'
       exit 0
       ;;
-    *) printf '%s\n' 'usage: Infinify.app/Contents/Resources/NativeDesktop/launch.sh [--check]' >&2; exit 64 ;;
+    *) printf '%s\n' "$native_usage" >&2; exit 64 ;;
   esac
 fi
 
-fail() { printf 'Infinify native desktop: %s\n' "$*" >&2; exit 1; }
+# A refusal ends a login start quietly (status 0): launchd restarts a failed login item, and a refusal here is a decision
+# the owner has to look at (the log, `Infinify native-desktop status`), not something a restart fixes.
+native_fail_status=1
+[ "$native_mode" != login ] || native_fail_status=0
+fail() { printf 'Infinify native desktop: %s\n' "$*" >&2; exit "$native_fail_status"; }
+# The reload's stdout is the app's to read: the one endpoint line goes to descriptor 3, everything else to stderr.
+if [ "$native_mode" = reload ]; then exec 3>&1 1>&2; fi
+native_state_dir="$HOME/Library/Application Support/Infinify/native-desktop"
+if [ "$native_mode" = login ]; then
+  # No terminal: what the launcher says goes to a log in the state directory, which `status` points to.
+  [ ! -L "$native_state_dir" ] || fail 'the launch-state directory must not be a symlink.'
+  /bin/mkdir -p "$native_state_dir" && /bin/chmod 700 "$native_state_dir" || fail 'could not prepare the launch-state directory.'
+  native_log="$native_state_dir/login.log"
+  if [ -f "$native_log" ] && [ "$(/usr/bin/stat -f '%z' "$native_log")" -gt 262144 ]; then /bin/mv -f "$native_log" "$native_log.1"; fi
+  exec >> "$native_log" 2>&1
+  printf '%s login start\n' "$(/bin/date '+%Y-%m-%d %H:%M:%S')"
+fi
 native_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P) || fail 'could not resolve the bundled native helper directory.'
 native_bundle=$(CDPATH= cd -P "$native_dir/../../.." && pwd -P) || fail 'could not resolve the containing app bundle.'
 native_name=${native_bundle##*/}
@@ -36,6 +58,7 @@ native_manifest="$native_dir/manifest.plist"
 native_launcher="$native_dir/launch.sh"
 native_doctor="$native_dir/doctor"
 native_loader="$native_dir/loader-arm64e"
+native_daemon="$native_dir/loadd"
 native_payload="$native_dir/payload-arm64e.dylib"
 native_app="$native_bundle/Contents/MacOS/Infinify"
 native_info="$native_bundle/Contents/Info.plist"
@@ -60,10 +83,24 @@ native_valid_boot_uuid() {
   return 0
 }
 
+# The payload a recorded runtime's Dock opened, and the directory beside which its sidecar was written. Prints "DIRECTORY SHA256".
+# Loaded with sudo, it is the runtime's own private copy. Loaded through the launch daemon, it is the daemon's copy: root's file in
+# root's directory below directories only root writes, which the app (native/privileged/loadd-request.m) checks again, read-only,
+# against the same rule the loader enforced before it injected. No runtime of the login user is the Dock's payload path then.
+native_loaded_payload() {
+  if [ -e "$1/payload-arm64e.dylib" ] || [ -L "$1/payload-arm64e.dylib" ]; then
+    private_file "$1/payload-arm64e.dylib" || return 1
+    printf '%s %s\n' "$1" "$(native_digest "$1/payload-arm64e.dylib")"
+  else
+    "$native_app" native-desktop daemon staged "$1"
+  fi
+}
+
 native_regular_file "$native_launcher" || fail 'bundled launcher is missing or is a symlink.'
 native_regular_file "$native_manifest" || fail 'native helper manifest is missing or is a symlink.'
 native_regular_file "$native_doctor" || fail 'bundled doctor is missing or is a symlink.'
 native_regular_file "$native_loader" || fail 'bundled loader is missing or is a symlink.'
+native_regular_file "$native_daemon" || fail 'bundled launch daemon is missing or is a symlink.'
 native_regular_file "$native_payload" || fail 'bundled payload is missing or is a symlink.'
 native_regular_file "$native_app" || fail 'standard app executable is missing or is a symlink.'
 native_regular_file "$native_info" || fail 'app Info.plist is missing or is a symlink.'
@@ -91,10 +128,12 @@ native_check_artifact() {
 native_check_artifact launcher "$native_launcher" Contents/Resources/NativeDesktop/launch.sh yes
 native_check_artifact doctor "$native_doctor" Contents/Resources/NativeDesktop/doctor yes
 native_check_artifact loader "$native_loader" Contents/Resources/NativeDesktop/loader-arm64e yes
+native_check_artifact daemon "$native_daemon" Contents/Resources/NativeDesktop/loadd yes
 native_check_artifact payload "$native_payload" Contents/Resources/NativeDesktop/payload-arm64e.dylib yes
 native_payload_sha256=$(native_manifest_value artifacts.payload.sha256 string) || fail 'native helper manifest has no payload digest.'
 /usr/bin/codesign --verify --strict "$native_doctor" || fail 'doctor signature verification failed.'
 /usr/bin/codesign --verify --strict "$native_loader" || fail 'loader signature verification failed.'
+/usr/bin/codesign --verify --strict "$native_daemon" || fail 'launch daemon signature verification failed.'
 /usr/bin/codesign --verify --strict "$native_payload" || fail 'payload signature verification failed.'
 /usr/bin/codesign --verify --deep --strict "$native_bundle" || fail 'app bundle signature verification failed.'
 
@@ -111,19 +150,53 @@ native_report=$("$native_doctor") || fail 'doctor failed; no helper was loaded.'
 printf '%s\n' "$native_report"
 native_preflight=$(printf '%s\n' "$native_report" | /usr/bin/plutil -extract injection_preflight_passed raw -expect bool -o - -) || fail 'doctor returned an invalid policy report.'
 [ "$native_preflight" = true ] || fail 'current SIP/arm64e boot policy does not pass preflight; nothing was loaded and no settings were changed.'
-[ "$native_mode" != check ] || exit 0
+# The launch daemon is how the loader runs without a password once the owner approved it (Infinify native-desktop enable).
+# Its answer is read here, by the signed app, and decides how the loader step below runs; it changes nothing.
+native_daemon_enabled() { "$native_app" native-desktop daemon status >/dev/null 2>&1; }
+if [ "$native_mode" = check ]; then
+  printf 'launch daemon: %s\n' "$("$native_app" native-desktop daemon status 2>/dev/null || :)"
+  exit 0
+fi
 
 native_uid=$(/usr/bin/id -u)
-if /usr/bin/pgrep -u "$native_uid" -x Infinify >/dev/null; then
-  fail 'an Infinify instance is already running; quit it normally before starting native desktop mode.'
+if [ "$native_mode" = reload ]; then
+  # Only the running app asks for a reload, and it is the one instance: this launcher's parent.
+  # pgrep leaves out its own ancestors unless asked (-a), and the app is one.
+  native_instances=$(/usr/bin/pgrep -a -u "$native_uid" -x Infinify) || fail 'a reload is for the running Infinify, and none is running.'
+  [ "$native_instances" = "$PPID" ] || fail 'a reload is for the one running Infinify to ask, as its child.'
 else
-  native_lookup_status=$?
-  [ "$native_lookup_status" -eq 1 ] || fail 'could not determine whether Infinify is already running.'
+  if /usr/bin/pgrep -u "$native_uid" -x Infinify >/dev/null; then
+    [ "$native_mode" != login ] || { printf '%s\n' 'Infinify is already running; nothing to start.'; exit 0; }
+    fail 'an Infinify instance is already running; quit it normally before starting native desktop mode.'
+  else
+    native_lookup_status=$?
+    [ "$native_lookup_status" -eq 1 ] || fail 'could not determine whether Infinify is already running.'
+  fi
 fi
 
 # The loader's read-only identity query and its later expected-Dock check use the
 # same exact libproc process birth fields. A PID alone must never authorize reuse.
-native_dock=$("$native_loader" --dock-identity) || fail 'could not resolve the current Dock process identity.'
+# A login start waits for the Dock of a session that is still starting, and a reload for one that was just restarted: the
+# identity must read the same twice, three seconds apart (one second for a reload, whose app has already let the new Dock
+# settle), before it is trusted (Sunlight lets a new Dock settle too). The load itself is pinned to that identity.
+native_dock_wait=1
+native_dock_confirm=3
+case "$native_mode" in login) native_dock_wait=60 ;; reload) native_dock_wait=15; native_dock_confirm=1 ;; esac
+native_dock=
+native_dock_stable=false
+native_attempt=0
+while :; do
+  native_attempt=$((native_attempt + 1))
+  if native_dock=$("$native_loader" --dock-identity 2>/dev/null); then
+    if [ "$native_mode" = launch ]; then native_dock_stable=true; break; fi
+    native_dock_again=$(/bin/sleep "$native_dock_confirm"; "$native_loader" --dock-identity 2>/dev/null) || native_dock_again=
+    if [ "$native_dock" = "$native_dock_again" ]; then native_dock_stable=true; break; fi
+  fi
+  [ "$native_attempt" -lt "$native_dock_wait" ] || break
+  [ "$native_mode" = launch ] || /bin/sleep 2
+done
+[ -n "$native_dock" ] || fail 'could not resolve the current Dock process identity.'
+[ "$native_dock_stable" = true ] || fail 'the Dock process identity did not settle.'
 dock_value() { printf '%s\n' "$native_dock" | /usr/bin/plutil -extract "$1" raw -expect "$2" -o - -; }
 native_dock_pid=$(dock_value pid integer) || fail 'invalid Dock PID report.'
 native_dock_sec=$(dock_value birth_sec integer) || fail 'invalid Dock birth report.'
@@ -133,7 +206,6 @@ native_boot_uuid=$(dock_value boot_uuid string) || fail 'invalid boot identity r
 native_valid_boot_uuid "$native_boot_uuid" || fail 'invalid boot session UUID report.'
 [ "$native_dock_uid" = "$native_uid" ] || fail 'Dock belongs to another login user.'
 
-native_state_dir="$HOME/Library/Application Support/Infinify/native-desktop"
 native_record="$native_state_dir/launch.plist"
 native_pending_record="$native_state_dir/launch.pending.plist"
 native_lock="$native_state_dir/launch.lock"
@@ -152,6 +224,25 @@ record_value() { /usr/bin/plutil -extract "$1" raw -expect "$2" -o - "$native_re
 private_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$1")" = "$native_uid:600" ]; }
 native_decimal() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
 native_pid_valid() { native_decimal "$1" && [ "$1" -ge 1 ] && [ "$1" -le 2147483647 ]; }
+# Three Dock restarts in a row around loads of this payload stopped automatic loading (the app wrote this file). A manual start
+# by the owner is the way out; the login start and a reload keep to it.
+native_pause_file="$native_state_dir/auto-reload-paused.plist"
+native_paused() {
+  [ -e "$native_pause_file" ] || [ -L "$native_pause_file" ] || return 1
+  private_file "$native_pause_file" || return 0
+  native_paused_sha=$(/usr/bin/plutil -extract payload_sha256 raw -expect string -o - "$native_pause_file" 2>/dev/null) || return 0
+  [ "$native_paused_sha" = "$native_payload_sha256" ]
+}
+if [ "$native_mode" = launch ]; then
+  if [ -e "$native_pause_file" ] || [ -L "$native_pause_file" ]; then
+    /bin/rm -f "$native_pause_file" && printf '%s\n' 'Automatic loading had been paused after Dock restarts around loads; this start by hand lifts the pause.'
+  fi
+elif native_paused; then
+  case "$native_mode" in
+    login) printf '%s\n' 'Automatic loading is paused for this payload (three Dock restarts in a row around loads): compositor mode was not started. Run Infinify native-desktop by hand to try again.'; exit 0 ;;
+    *) fail 'automatic loading is paused for this payload; run Infinify native-desktop by hand to lift the pause.' ;;
+  esac
+fi
 if [ -e "$native_pending_record" ] || [ -L "$native_pending_record" ]; then
   private_file "$native_pending_record" || fail 'an interrupted launch or recovery marker is not private; preserve it and inspect before retrying.'
   fail 'an interrupted launch or recovery remains pending; preserve its runtime and inspect it before retrying.'
@@ -214,7 +305,7 @@ native_validate_retired_journal() {
   native_journal_restore_type=$(/usr/bin/plutil -type last_restore "$native_journal") || fail 'the retired helper journal has no valid restoration receipt.'
   case "$native_journal_restore_type" in '(any)'|dictionary) ;; *) fail 'the retired helper journal has an unknown restoration receipt; preserve it and inspect it.' ;; esac
   native_import_source="$native_runtime/recovery-source.json"
-  native_sidecar="$native_runtime/payload-arm64e.dylib.json"
+  native_sidecar="$native_loaded_dir/payload-arm64e.dylib.json"
   private_file "$native_sidecar" || fail 'the retired helper sidecar is missing or not private; preserve the runtime and inspect it.'
   if [ -e "$native_import_source" ] || [ -L "$native_import_source" ]; then
     private_file "$native_import_source" || fail 'the retained historical recovery source is not private; preserve it and inspect it.'
@@ -280,10 +371,10 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
   else
     [ -d "$native_runtime" ] && [ ! -L "$native_runtime" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_runtime")" = "$native_uid:700" ] || fail 'recorded runtime is missing or no longer private in this boot session; do not inject again.'
     private_file "$native_nonce_file" || fail 'recorded nonce file is missing or no longer private; do not inject again.'
-    native_runtime_payload="$native_runtime/payload-arm64e.dylib"
-    private_file "$native_runtime_payload" || fail 'recorded runtime payload is missing or no longer private; do not inject again.'
-    [ "$(native_digest "$native_runtime_payload")" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper.'
-    /usr/bin/codesign --verify --strict "$native_runtime_payload" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper.'
+    native_loaded=$(native_loaded_payload "$native_runtime") || fail 'recorded runtime payload is missing, no longer private, or no longer the launch daemon'"'"'s root-owned copy; do not inject again.'
+    native_loaded_dir=${native_loaded% *}
+    [ "${native_loaded##* }" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper.'
+    /usr/bin/codesign --verify --strict "$native_loaded_dir/payload-arm64e.dylib" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper.'
     if [ "$native_old_dock_pid" = "$native_dock_pid" ] && [ "$native_old_dock_sec" = "$native_dock_sec" ] && [ "$native_old_dock_usec" = "$native_dock_usec" ]; then
       [ "$native_record_payload_sha256" = "$native_payload_sha256" ] || fail 'the recorded helper payload differs from this bundle; inspect the old session and do not reuse it.'
       native_reuse=true
@@ -307,16 +398,40 @@ else
   if [ "$native_recovery" != true ]; then
     [ ! -e "$native_record" ] && [ ! -L "$native_record" ] || fail 'launch record remains after the retired record check; preserve it and inspect it.'
   fi
-  [ -t 0 ] || fail 'start this owner-run launcher in a terminal for the explicit sudo loader step.'
+  # Without the launch daemon the loader needs the owner's sudo password, at a terminal. With it, nothing is asked: the daemon
+  # accepts only the signed app as its caller and runs only this loader with these arguments (native/privileged/README.md).
+  native_load_via=sudo
+  if native_daemon_enabled; then native_load_via=daemon; fi
+  case "$native_mode" in
+    login|reload)
+      [ "$native_load_via" = daemon ] || fail 'the launch daemon is not enabled, so nothing can be loaded without a password; run Infinify native-desktop enable in a terminal.'
+      # The daemon is started by launchd on the first request. An answer proves the caller check and the bundle before anything is
+      # written or pending; a login start gives it a little while, since nothing has been written yet.
+      native_ping=0
+      while ! "$native_app" native-desktop daemon ping >/dev/null 2>&1; do
+        native_ping=$((native_ping + 1))
+        [ "$native_mode" = login ] && [ "$native_ping" -lt 6 ] || fail 'the launch daemon does not answer this app; nothing was loaded.'
+        /bin/sleep 5
+      done
+      ;;
+    *) [ "$native_load_via" = daemon ] || [ -t 0 ] || fail 'start this owner-run launcher in a terminal for the explicit sudo loader step.' ;;
+  esac
   native_runtime=$(/usr/bin/mktemp -d /tmp/if-native.XXXXXX)
   native_nonce_file="$native_runtime/nonce"
   /usr/bin/openssl rand -hex 32 > "$native_nonce_file"
   private_file "$native_nonce_file" || fail 'could not create a private nonce file.'
-  /bin/cp "$native_payload" "$native_runtime/payload-arm64e.dylib"
-  /bin/chmod 600 "$native_runtime/payload-arm64e.dylib"
-  private_file "$native_runtime/payload-arm64e.dylib" || fail 'could not create a private runtime payload.'
-  [ "$(native_digest "$native_runtime/payload-arm64e.dylib")" = "$native_payload_sha256" ] || fail 'copied runtime payload bytes differ from the bundle.'
-  /usr/bin/codesign --verify --strict "$native_runtime/payload-arm64e.dylib" || fail 'copied payload signature verification failed.'
+  # With sudo the Dock opens a private copy in this runtime, as it always did: the owner sits at the terminal that asks for the
+  # password. Through the launch daemon it does not: the daemon (root) copies the bundled payload to a root-owned place the login user
+  # cannot write, checks the copy against the digest built into it, and the loader injects that copy, so no file of this user's is on
+  # the path the Dock opens and nothing here can be swapped between the check and the load. This runtime then holds only the nonce,
+  # socket and journal.
+  if [ "$native_load_via" = sudo ]; then
+    /bin/cp "$native_payload" "$native_runtime/payload-arm64e.dylib"
+    /bin/chmod 600 "$native_runtime/payload-arm64e.dylib"
+    private_file "$native_runtime/payload-arm64e.dylib" || fail 'could not create a private runtime payload.'
+    [ "$(native_digest "$native_runtime/payload-arm64e.dylib")" = "$native_payload_sha256" ] || fail 'copied runtime payload bytes differ from the bundle.'
+    /usr/bin/codesign --verify --strict "$native_runtime/payload-arm64e.dylib" || fail 'copied payload signature verification failed.'
+  fi
   write_record() {
     native_record_target=$1
     native_record_outcome=$2
@@ -346,16 +461,30 @@ PLIST
   else
     write_record "$native_record" pending
   fi
-  printf '%s\n' 'Starting the explicitly selected full-desktop SAME_USER helper, including newly opened applications. Only the loader runs with sudo.'
+  if [ "$native_load_via" = daemon ]; then
+    printf '%s\n' 'Starting the explicitly selected full-desktop SAME_USER helper, including newly opened applications. Only the loader runs as root, through the launch daemon.'
+  else
+    printf '%s\n' 'Starting the explicitly selected full-desktop SAME_USER helper, including newly opened applications. Only the loader runs with sudo.'
+  fi
+  # Arguments: RUNTIME --nonce-file NONCE --desktop --expected-dock PID SEC USEC [--recover-journal J --expected-retired-dock P S U].
+  # The daemon names the payload itself; the sudo loader is given this runtime's private copy.
+  native_run_loader() {
+    if [ "$native_load_via" = daemon ]; then
+      "$native_app" native-desktop daemon load "$@"
+    else
+      /usr/bin/sudo "$native_loader" --inject-dock "$native_runtime/payload-arm64e.dylib" "$@"
+    fi
+  }
+  native_loaded_at=$(/bin/date +%s)
   if [ "$native_recovery" = true ]; then
-    if ! /usr/bin/sudo "$native_loader" --inject-dock "$native_runtime/payload-arm64e.dylib" "$native_runtime" --nonce-file "$native_nonce_file" --desktop --expected-dock "$native_dock_pid" "$native_dock_sec" "$native_dock_usec" --recover-journal "$native_recovery_source" --expected-retired-dock "$native_old_dock_pid" "$native_old_dock_sec" "$native_old_dock_usec"; then
+    if ! native_run_loader "$native_runtime" --nonce-file "$native_nonce_file" --desktop --expected-dock "$native_dock_pid" "$native_dock_sec" "$native_dock_usec" --recover-journal "$native_recovery_source" --expected-retired-dock "$native_old_dock_pid" "$native_old_dock_sec" "$native_old_dock_usec"; then
       fail "recovery loader did not establish readiness; retained old ready record at $native_record, pending marker at $native_pending_record and runtime at $native_runtime. Inspect before any retry."
     fi
     native_archive_retired_record
     write_record "$native_pending_record" ready
     /bin/mv "$native_pending_record" "$native_record" || fail 'helper recovered, but the ready record could not be promoted; preserve the pending marker and inspect it.'
   else
-    if ! /usr/bin/sudo "$native_loader" --inject-dock "$native_runtime/payload-arm64e.dylib" "$native_runtime" --nonce-file "$native_nonce_file" --desktop --expected-dock "$native_dock_pid" "$native_dock_sec" "$native_dock_usec"; then
+    if ! native_run_loader "$native_runtime" --nonce-file "$native_nonce_file" --desktop --expected-dock "$native_dock_pid" "$native_dock_sec" "$native_dock_usec"; then
       fail "loader did not establish readiness; retained pending record at $native_record and runtime at $native_runtime. Inspect before any retry."
     fi
     write_record "$native_record" ready
@@ -364,4 +493,14 @@ fi
 [ "$(/usr/bin/id -u)" = "$native_uid" ] && [ "$native_uid" != 0 ] || fail 'refusing to run the app as root or another user.'
 release_lock
 trap - EXIT INT HUP TERM
+if [ "$native_mode" = reload ]; then
+  # The running app takes this endpoint to its presenter, which authenticates the helper (scope, capabilities, empty restore table).
+  printf 'INFINIFY-NATIVE-ENDPOINT %s %s\n' "$native_runtime" "$native_nonce_file" >&3
+  exit 0
+fi
+# With the launch daemon on, the app watches the Dock and has this launcher reload the payload into a Dock that replaced the one
+# it is in. When this run loaded, the app counts that load for its crash guard; when it reused a helper, it was not a load.
+if native_daemon_enabled; then
+  export INFINIFY_DOCK_RELOAD=1 INFINIFY_NATIVE_PAYLOAD_SHA256="$native_payload_sha256" INFINIFY_NATIVE_LOADED_AT="${native_loaded_at:-0}"
+fi
 exec "$native_app" --native-desktop-helper "$native_runtime" "$native_nonce_file"

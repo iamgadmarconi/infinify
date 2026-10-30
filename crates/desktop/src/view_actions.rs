@@ -177,6 +177,7 @@ impl Controller {
         direction: ViewDirection,
     ) -> Result<Value, Error> {
         let (viewport, _) = self.view(output)?;
+        self.user_moved_camera();
         self.overview_returns.remove(&output);
         let step = self.config().pan_step / viewport.zoom;
         let (ux, uy) = policy::Direction::from(direction).to_unit_vec();
@@ -198,6 +199,7 @@ impl Controller {
     }
     pub(crate) fn home_toggle(&mut self, output: OutputId) -> Result<Value, Error> {
         let (viewport, usable) = self.view(output)?;
+        self.user_moved_camera();
         let center = usable.center();
         if self.at_home(&viewport)? {
             return match self.home_returns.remove(&output) {
@@ -227,6 +229,7 @@ impl Controller {
         center: Point,
         target: f64,
     ) -> Result<Value, Error> {
+        self.user_moved_camera();
         self.overview_returns.remove(&output);
         let anchor = Anchor {
             canvas: viewport.camera + center / viewport.zoom,
@@ -273,6 +276,7 @@ impl Controller {
     /// and remember the pose being left.
     pub(crate) fn zoom_to_fit(&mut self, output: OutputId) -> Result<Value, Error> {
         let (viewport, usable) = self.view(output)?;
+        self.user_moved_camera();
         let center = usable.center();
         if let Some(ret) = self.overview_returns.remove(&output) {
             return self.restore_view(output, ret, center);
@@ -298,54 +302,20 @@ impl Controller {
         );
         self.arm_view(output, anchor.canvas - center / fit, fit, Some(anchor))
     }
-    /// Upstream set_camera_target: only the camera destination changes. A
-    /// pending zoom target and its anchor stay armed, and an anchored zoom tick
-    /// then drops this target, exactly as upstream's tick does.
-    pub(crate) fn set_camera_target(
-        &mut self,
-        output: OutputId,
-        target: Point,
-    ) -> Result<Value, Error> {
-        let viewport = self
-            .scene
-            .output(output)
-            .ok_or(Error::Invalid("unknown output"))?;
-        let (size, zoom) = (viewport.screen_bounds.size, viewport.zoom);
-        // As arm_view: a destination no tick could apply is never armed.
-        if !point_valid(target) || !point_valid(target + Point::new(size.width, size.height) / zoom)
-        {
-            return Err(Error::Invalid("navigation target out of bounds"));
-        }
-        if self.fullscreen_on(output).is_some() {
-            return idle();
-        }
-        self.next_navigation = self
-            .next_navigation
-            .checked_add(1)
-            .ok_or(Error::Invalid("navigation generations exhausted"))?;
-        let generation = self.next_navigation;
-        self.stop_momentum(output);
-        let flight = self.flights.entry(output).or_insert(ViewFlight {
-            camera_target: None,
-            zoom_target: None,
-            zoom_animation_anchor: None,
-            generation,
-        });
-        flight.camera_target = Some(target);
-        flight.generation = generation;
-        let target_zoom = flight.zoom_target.unwrap_or(zoom);
-        Ok(
-            json!({"navigation":{"output":output,"generation":generation,"target_camera":target,"target_zoom":target_zoom,"animating":true}}),
-        )
-    }
     /// Fly the camera until the usable center shows the Y-up canvas point
-    /// `(x, y)`. Zoom is untouched, and a zoom-to-fit return is disarmed.
+    /// `(x, y)`, at the zoom the view is heading to, and disarm a zoom-to-fit
+    /// return. Through the anchor, not a bare camera target (v0.20): the anchor
+    /// of a flight still under way would steer the camera back every tick, so
+    /// `zoom 0.5` then `go-to-bookmark` lands, zoom and all.
     fn go_to_canvas_point(&mut self, output: OutputId, x: f64, y: f64) -> Result<Value, Error> {
-        let (viewport, usable) = self.view(output)?;
-        let center = usable.center();
-        let target = Point::new(x - center.x / viewport.zoom, -y - center.y / viewport.zoom);
-        self.overview_returns.remove(&output);
-        self.set_camera_target(output, target)
+        let (_, usable) = self.view(output)?;
+        self.user_moved_camera();
+        let zoom = self.landing_view(output)?.1;
+        let anchor = Anchor {
+            canvas: Point::new(x, -y),
+            screen: usable.center(),
+        };
+        Ok(json!({"navigation":self.arm_anchor(output, anchor, zoom)?}))
     }
     /// A missing bookmark is not an error upstream: nothing is armed.
     pub(crate) fn go_to_bookmark(&mut self, output: OutputId, name: &str) -> Result<Value, Error> {
@@ -362,20 +332,14 @@ impl Controller {
     /// anchored zoom tick drops it, here as upstream, and the frame is captured.
     pub(crate) fn set_bookmark(&mut self, output: OutputId, name: &str) -> Result<Value, Error> {
         let center = self.navigation_context(output)?.usable_rect_local.center();
-        let viewport = self
-            .scene
-            .output(output)
-            .ok_or(Error::Invalid("unknown output"))?;
-        let camera = self
-            .flights
-            .get(&output)
-            .and_then(|flight| flight.camera_target)
-            .unwrap_or(viewport.camera);
-        let point = [
-            camera.x + center.x / viewport.zoom,
-            -(camera.y + center.y / viewport.zoom),
-        ];
-        self.bookmarks.insert(name.to_owned(), point);
+        // v0.20: where the flight under way lands, camera and zoom, not the
+        // spot it passes through.
+        let (camera, zoom) = self.landing_view(output)?;
+        let point = [camera.x + center.x / zoom, -(camera.y + center.y / zoom)];
+        // Upstream's set-bookmark logs a refusal (an overlong name, a registry
+        // at its cap, a view past the camera's range) and changes nothing; this
+        // controller has no log to write it to.
+        let _ = self.store_bookmark(name.to_owned(), point);
         idle()
     }
     /// Upstream refreshes each output's active bookmark once per rendered

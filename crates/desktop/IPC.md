@@ -277,18 +277,19 @@ into `i32` or its far edge would pass `i32::MAX`.
 | Request | Needs `output` | Behavior |
 | --- | --- | --- |
 | `"State"` | no | The snapshot below. |
+| `"Cursor"` | yes, and a `pointer` | `Cursor{x,y,output}` (v0.21.0): the pointer in the global output layout, the space `screen_bounds` and a `from_screen` screenshot region are in (logical points, Y down), and the stable id of the request's output. The controller keeps no pointer: the shell sends the point with every `ipc` command, and without one the reply is `Err("no pointer")`; then `Err("no output")` without an active output and `Err("unknown output")` for an id that is not registered, upstream's order. Never `dirty`, never an effect. |
 | `{"Camera":null}` | yes | `Camera{x,y}`: the output's viewport center. |
-| `{"Camera":[x,y]}` | yes | Flies the viewport center to the point at the current zoom and echoes the request. Refuses non-finite numbers. Like `go-to-bookmark` it writes only the camera target; unlike it, a zoom-to-fit return stays armed, as upstream leaves it. |
+| `{"Camera":[x,y]}` | yes | Flies the viewport center to the point at the current zoom and echoes the request. Refuses non-finite numbers, and (v0.21.0) a coordinate past ±1e9: `camera coordinates must be within ±1e9`, before a fullscreen is ended or anything touched. Like `go-to-bookmark` it writes only the camera target; unlike it, a zoom-to-fit return stays armed, as upstream leaves it. |
 | `{"Zoom":null}` | yes | `Zoom(z)`: the current zoom. |
 | `{"Zoom":z}` | yes | Clamps to `[dynamic minimum, 1]` (the minimum `zoom_out` uses), flies there anchored on the usable center and replies with the clamped value. Refuses non-positive numbers. No snap to 1 and no "never zoom in" rule: the value is explicit. |
 | `{"Focus":null}` | no | `Focused({id,app_id})` for the logical focus, or `Focused(null)`. |
 | `{"Focus":<selector>}` | yes | Logical focus and raise, plus upstream's camera rule: a frame already wholly inside the usable area is only focused; a window with a bound source is navigated to at zoom 1, or at the current zoom when `zoom.reset_on_activation` is off, exactly as `navigate_window` does; a detached placeholder is panned to at the current zoom, as upstream's `reveal_suspended` does for a stand-in. `effects` holds the focus effect when the window has a bound source; `dirty` is true because focus and stacking are saved. A pinned window is raised and focused without a navigation; a widget is refused, `window #N is a widget and cannot be focused`. |
-| `{"Move":{window?,to?}}` | no | Without `to`: `Position{x,y}`, the frame's center. With `to`: a logical world move that puts the frame's top-left on whole points and keeps its size; `dirty` is true. A bound source is raised even if its position is unchanged, without changing focus or any camera; a detached placeholder keeps its stacking. A widget is raised within the widget stack and stays below ordinary windows. Refused while a drag or resize gesture is installed, while a native resize transaction on that window is live, and when the destination frame would leave the `i32` range (`window geometry exceeds integer range`). A pinned window and a fullscreen one read and refuse the write: `this window has no canvas position to move: it is pinned, fullscreen, or not on screen yet`. A widget is moved by nothing else. |
-| `{"Resize":{window?,to?}}` | no | Without `to`: `Size{width,height}`. With `to`: a non-positive size gets upstream's `size must be positive`, then a pinned window, a widget and a fullscreen window get upstream's `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`, with or without the capability, and are not raised: upstream's `cmd_resize` refuses them ahead of its grab test and its raise. For a canvas window, until the shell has sent `native_resize_capability`: `Err`, `resize is not implemented on macOS yet: native layout resize is not available`. With the capability: upstream's center-preserving resize, `Size` echoing the size asked for, and a reply that may carry `transaction` and `effect`; the window is raised, as upstream raises a client, and is handed no focus, with `dirty` when that changed the stacking, and a request identical to the one last asked changes nothing; see [SIZES.md](SIZES.md#ipc-resizewindowto). |
+| `{"Move":{window?,to?}}` | no | Without `to`: `Position{x,y}`, the frame's center. With `to` (v0.21.0: a coordinate past ±1,050,000,000 is refused first, `coordinates must be within ±1050000000`, before the selector is resolved): a logical world move that puts the frame's top-left on whole points and keeps its size; `dirty` is true. A bound source is raised even if its position is unchanged, without changing focus or any camera; a detached placeholder keeps its stacking. A widget is raised within the widget stack and stays below ordinary windows. Refused while a drag or resize gesture is installed, while a native resize transaction on that window is live, and when the destination frame would leave the `i32` range (`window geometry exceeds integer range`). A pinned window and a fullscreen one read and refuse the write: `this window has no canvas position to move: it is pinned, fullscreen, or not on screen yet`. A widget is moved by nothing else. |
+| `{"Resize":{window?,to?}}` | no | Without `to`: `Size{width,height}`. With `to`: a non-positive size gets upstream's `size must be positive`, then (v0.21.0) a side past 32767 gets `sizes must be at most 32767`, then a pinned window, a widget and a fullscreen window get upstream's `this window has no canvas size to set: it is pinned, fullscreen, a widget, or not on screen yet`, with or without the capability, and are not raised: upstream's `cmd_resize` refuses them ahead of its grab test and its raise. For a canvas window, until the shell has sent `native_resize_capability`: `Err`, `resize is not implemented on macOS yet: native layout resize is not available`. With the capability: upstream's center-preserving resize, `Size` echoing the size asked for, and a reply that may carry `transaction` and `effect`; the window is raised, as upstream raises a client, and is handed no focus, with `dirty` when that changed the stacking, and a request identical to the one last asked changes nothing; see [SIZES.md](SIZES.md#ipc-resizewindowto). |
 | `{"Opacity":{window?,value?}}` | no | Without `value`: `Opacity(n)`, what the window is drawn at. With one in `[0, 1]`: pins it until the window is gone, never `dirty`. Live windows only. [RULES.md](RULES.md#ipc). |
 | `{"Pin":{window?,value?}}` | for a pin, when no output shows the window | Without `value`: `Pin(bool)`. With one: `toggle-pin-to-screen` as a bool, for any live window; `dirty` when it changed. [RULES.md](RULES.md#ipc). |
 | `{"Action":"…"}` | per action | Runs the `action` command's handler. `Ok` whenever it runs, even with no effect; every refusal above is an `Err` reply. |
-| `{"Bookmark":{name?,to?,delete?}}` | no | Upstream's four forms: list (`Bookmarks{…}`, sorted by name), get and set (`Bookmark{x,y}`), delete (`Ok`). Set and delete report `dirty`. Errors are upstream's: `no bookmark named '…'`, `bookmark delete requires a name`, `bookmark delete does not take coordinates`, `bookmark coordinates require a name`, `bookmark coordinates must be finite`. |
+| `{"Bookmark":{name?,to?,delete?}}` | no | Upstream's four forms: list (`Bookmarks{…}`, sorted by name), get and set (`Bookmark{x,y}`), delete (`Ok`). Set and delete report `dirty`. Errors are upstream's: `no bookmark named '…'`, `bookmark delete requires a name`, `bookmark delete does not take coordinates`, `bookmark coordinates require a name`, `bookmark coordinates must be finite`, and (v0.21.0) `bookmark names are at most 256 bytes`, `bookmark coordinates must be within ±1e9` and, for a new name once 256 are held, `at most 256 bookmarks can be set; delete one first`. The `set-bookmark` action takes the same bounds and, as upstream's, drops a refusal without a word. |
 | `"DebugCounters"` | no | Sizes of the controller's own collections, keyed by field name. Unstable. |
 | `{"Close":<selector or null>}` | no | Upstream's `cmd_close`. A live window: `Ok`, `effects` is one `close_window`, and the close is marked real so `session.suspend_on_close` leaves no stand-in. Else a detached placeholder: dismissed, `Ok`, `dirty`. Else the selector's `Err`. |
 | `{"Suspend":<selector or null>}` | no | Upstream's `cmd_suspend`. A live window is focused first if it is not (a focus effect, `dirty`, no camera move), then the `suspend-window` action runs: `Ok`, `effects` ends with one `close_window`. A detached placeholder: `Err("window is already suspended")`. |
@@ -319,14 +320,21 @@ by focus alike. [LIFECYCLE.md](LIFECYCLE.md) has what each then does.
 the active output's; with no active output they read `[0.0, 0.0]` and `1.0` and
 no output is marked active. `layout` and `layout_short` are what the `Layout`
 request answers, long and short.
-`fullscreen` lists one `{id, output, app_id, title}` per fullscreen output,
+`fullscreen` lists one `{id, output, app_id, title, pid}` per fullscreen output,
 and such a window is left out of `windows`: [FULLSCREEN.md](FULLSCREEN.md).
 `layers` and `canvas_layers` are always empty: neither exists here.
 
 - `pinned`: the screen-pinned windows of the connected outputs, as upstream
-  lists them: `id`, `output` (the stable id), `app_id`, `title`, and the
-  `position` and `size` a `pinned_to_screen` rule takes, sorted by output and
-  position.
+  lists them: `id`, `output` (the stable id), `app_id`, `title`, the
+  `position` and `size` a `pinned_to_screen` rule takes, and `pid`, sorted by
+  output and position.
+- `pid` (v0.21.0), on a `windows`, `pinned` and `fullscreen` entry alike: the
+  process that owns the window's bound native source, from the identity the
+  shell attached it with (upstream reads the Wayland socket's credentials). It
+  belongs to the process, not the window: every window of one app reports the
+  same. A detached placeholder has no source and the member is left out, as
+  upstream leaves it out for a stand-in and for a window whose client has just
+  gone. It is last in an entry, after `mode`.
 - `windows`: every Scene window that is not pinned, the focused one first and
   the rest in stage order (bottom to top, so widgets come first). `id` is the logical window id, `app_id` the bundle id,
   `title` the last attached title, `position` and `size` the frame as above.
@@ -414,9 +422,10 @@ Commands and arguments are upstream's (`docs/cli.md`): `state`, `subscribe`,
 `resize [WIDTH] [HEIGHT] [--id ID]`, `close`, `suspend` and `relaunch`
 `[APP_ID] [--id ID]`, `opacity [VALUE] [--id ID]`, `pin [on|off] [--id ID]`,
 `camera [X] [Y]`, `zoom [LEVEL]`, `bookmark [NAME] [X] [Y] [--delete]`,
-`layout [--short]`, `action <SPEC>...`,
+`layout [--short]`, `cursor`, `action <SPEC>...`,
 `screenshot [--scale S] [-o PATH] [window [APP_ID] [--id ID] | all | region X Y W H [--from-screen]]`
-and `debug-counters`. Negative numbers are values where upstream allows them
+and `debug-counters`. `cursor` prints `X Y OUTPUT`, the pointer in the global
+output layout and the stable id of the output it is on. Negative numbers are values where upstream allows them
 (`move`, `camera`, `bookmark`, `screenshot region`). Everything after `action`
 is its spec, joined by single spaces. Parsing is by hand; there is no clap.
 
@@ -446,10 +455,15 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
   the line itself with `--json`, else upstream's `print_state` block and a
   blank line. Without `--json` a line that is not an event ends the client with
   status 1. An `Err` ack is reported like any other `Err` reply.
-- `screenshot` builds upstream's request (an absolute path, a temporary file
-  for `-o -`) and prints the path of the reply, or relays and deletes the file
-  it names for `-o -`, as upstream's client does. A refusal is printed like
-  any other `Err` reply.
+- `screenshot` builds upstream's request (an absolute path) and prints the path
+  of the reply. For `-o -` (v0.21.0) the client first reserves a file of its own,
+  created new with mode 0600 in the directory of the socket (which the app only
+  serves from when it is yours and not writable by group or others), puts that
+  path in the request, relays the file's bytes to stdout whatever path the reply
+  names, and deletes it when it is done, even on failure. Upstream reserves it
+  under `$XDG_RUNTIME_DIR/driftwm`, which macOS has no equivalent of, and no
+  longer reads a path from the reply either. A refusal is printed like any other
+  `Err` reply.
 
 ## Differences from upstream
 
@@ -482,6 +496,67 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
   accepted, where upstream's decoder, and this controller given those bytes,
   refuse it. A line that round trip cannot carry, such as one holding `1e999`,
   answers `{"Err":"invalid request"}` without reaching the controller.
+
+## v0.21.0 hardening
+
+DriftWM v0.21.0 (`df3de27b26c7998e8a460cffd8a4925cbed3a322`, `third_party/driftwm`
+in this repository) "hardens driftwm against misbehaving clients". What applies
+to a Mac app is here; what does not is listed after the table. Upstream's tests
+are compositor integration tests over Wayland clients and are not run; each row
+names the Infinify test that covers it, and says plainly what ran.
+
+| v0.21.0 item | Upstream source | Here | Covered by |
+| --- | --- | --- | --- |
+| A request is at most 1 MiB, was 4 KiB upstream and 64 KiB here | `src/ipc/mod.rs` `MAX_COMMAND_SIZE` | `DWIPCMaxLine = 1 MiB` in `native/desktop/ipc-server.m`; the C ABI's `MAX_REQUEST_BYTES` was already 1 MiB | `tests/e2e/ipc-limits.sh`: a 200 KiB and a 900 KiB line are answered, one past 1 MiB is hung up on without a reply |
+| At most 1024 connections; one past it is told why in one line and closed | `MAX_CONNECTIONS`, `refuse_connection` | `DWIPCMaxConnections = 1024` (was 16), `refuse()`: `{"Err":"1024 IPC connections are already open"}`. The listen backlog is 128 (what std's `UnixListener::bind` ends up with on macOS: it passes -1 and the system caps it at 128; it was 16), so a burst is not refused while it is accepted. A connection takes a descriptor, so the app raises its soft open-file limit at launch (`raiseOpenFileLimit` in `main.m`: to `kern.maxfilesperproc`; macOS starts a process at 256) | `tests/e2e/ipc-limits.sh`: 1024 held connections, the next one reads the refusal line and EOF, a freed slot is reused |
+| Only the bytes just read can complete a request, so a long partial line is not rescanned | `serve_connection` | `-[DWIPCServer read:]` returns at once on a read with no newline | `tests/e2e/ipc-limits.sh`: a 256 KiB line written in 4 KiB pieces completes |
+| The writes of one reply share one deadline, from when the reply is ready; a reader that stalls is dropped | `write_line`, `wait_writable`, `WRITE_TIMEOUT` | already so: `writeBytes` in `ipc-server.m` polls to one monotonic one-second deadline for the owed events and the reply together | not newly covered; the stalled-reader drop was never run (see below) |
+| One read per wakeup | `serve_connection` | already so: one 4096-byte read per dispatch event, and a connection is read again only after its reply | by construction |
+| Window positions within +-1,050,000,000, `msg camera` and bookmarks within +-1e9, sizes at most 32767 | `src/ipc/mod.rs` `check_point`, `check_size`, `cmd_camera`; `src/state/session_store.rs` `POSITION_LIMIT`, `CAMERA_LIMIT`, `valid_canvas_point`, `within_window_range`, `bookmark_problem` | `ipc.rs` (`check_point`, `check_size`, `cmd_camera`, `cmd_bookmark`), `storage.rs` (the constants and predicates), `render.rs` (a screenshot region, and a `from_screen` one that lands past the window range zoomed out: `region lies past the canvas range`) | `tests/ipc_flow.rs` `requests_are_bounded_as_v0_21_0_bounds_them`, `a_screenshot_region_is_bounded_before_a_pixel_is_drawn`, the Move arm of `move_resize_and_focus_address_logical_windows` |
+| The bookmark registry holds at most 256 names of at most 256 bytes | `MAX_BOOKMARKS`, `MAX_BOOKMARK_NAME`, `DriftWm::set_bookmark` | `Controller::store_bookmark` (`storage.rs`), used by `Bookmark` and by `set-bookmark`, which drops a refusal as upstream logs it | `tests/ipc_flow.rs` as above |
+| A saved bookmark registry is cut to what `set` would accept, a saved camera past the window range is not restored | `bounded_bookmarks`, `valid_camera_seed` | `Controller::load`: out-of-bounds bookmarks are dropped one by one (it refused the whole file for a non-finite one before, which JSON cannot carry); such a camera is replaced by the origin at zoom 1 | `tests/hardening_flow.rs` `restoring_a_scene_keeps_only_the_bookmarks_a_set_would_have_accepted`, `restoring_a_scene_keeps_at_most_256_bookmarks`, `a_saved_camera_past_the_window_range_is_not_restored` |
+| A stand-in is capped at 16384 px (`MAX_BUFFER_EXTENT`); a larger saved one is dropped on restore | `SizeConstraints::for_suspended`, `standin_body_rect`, `valid_entry_geometry`, `suspended_entry` | a window that becomes a stand-in is cut to 16384 on each side keeping its top-left (`cap_standin`, `lifecycle.rs`); a saved slot of any window whose side is past 16384 or whose top-left is past the position limit is dropped with its metadata, stand-in mark and pin, and the focus is left empty if it was the focused one (`Controller::load`) | `tests/hardening_flow.rs` `a_stand_in_is_cut_to_the_largest_chrome_buffer_and_keeps_its_top_left`, `restoring_a_scene_drops_the_slots_a_stand_in_could_not_be_or_that_lie_past_the_window_range` |
+| Session and state files are owner-only | `src/session.rs` | the scene file was already written through a new 0600 file and renamed (`Controller::save`); the sockets and `.infinify-lock` files are 0600 and the support directory 0700 when the app creates it | `tests/hardening_flow.rs` `the_scene_file_is_owner_only_and_leaves_no_temporary_behind`; the sockets and locks by `tests/e2e/screenshot-write.sh` (unchanged) |
+| A screenshot is written to a temporary file beside its target and renamed into place | `src/render/screenshot.rs` `write_png` | `DWWriteScreenshotPixels` (`screenshot-writer.m`): `.NAME.PID-N.tmp`, `O_EXCL`, written, `rename`; removed on any failure | `tests/e2e/ipc-limits.sh` (a symbolic link at the path is replaced, its target untouched; a directory at the path leaves no temporary) and the existing `tests/e2e/screenshot-write.sh` |
+| `screenshot -o -` goes through a private file the client reserves; nothing is written under `/tmp` | `src/ipc/client.rs` `StdoutCapture`, `edd108f` | see the `msg` client above | `tests/ipc_flow.rs` `screenshot_to_stdout_goes_through_a_private_file_the_client_reserved`; `tests/e2e/screenshot-write.sh` (stdout equals the file capture, nothing left behind) |
+| A spawned app inherits no descriptor, neither `DRIFTWM_CONFIG` nor `RUST_LOG`, and gets the normal open-file limit back | `prepare_child`, `raise_nofile_limit`, `1a1bcf3`, `764abd6` | already no descriptor (`POSIX_SPAWN_CLOEXEC_DEFAULT`, `POSIX_SPAWN_SETSID`); `execCommand` now also drops `DRIFTWM_CONFIG`, `RUST_LOG` and every `INFINIFY_` variable from the environment it passes on (`INFINIFY_SOCKET` is put back, and an `[env]` entry still wins); after a raise, `sh` restores the original soft limit first (`ulimit -Sn`, because `posix_spawn` has no hook between fork and exec) | the wrapper's behaviour was run in isolation only (a child of `sh -c 'ulimit -Sn "$0"; exec sh -c "$1"' 256 …` reads 256 and its exit status 126 comes through); `main.m` itself compiles clean (`clang -fsyntax-only -Wall -Wextra -Werror`) and has not been run |
+| `exec-terminal` and `exec-launcher` read `$TERMINAL` and `$LAUNCHER` from the config's `[env]` before the process environment | `detect_terminal`, `detect_launcher`, `child_var` | `from_environment` (`actions.rs`) | `tests/hardening_flow.rs` `exec_terminal_and_exec_launcher_read_the_config_env_before_the_process_env` |
+
+Out of scope, with the reason (none of these has a Mac counterpart in this app):
+
+- Activation tokens that expire after 10 seconds, are capped and spent on use
+  (`xdg-activation`): a Wayland protocol; macOS has no such token.
+- Gamma tables and virtual keymaps read only from regular files or memfds
+  (`wlr-gamma-control`, `zwp_virtual_keyboard`): Wayland client protocols; the
+  Mac's display gamma and keyboard stay macOS's (the parity README's host-owned
+  decisions).
+- A pen resting over a window cannot change the cursor drawn over the lock
+  screen: the session-lock protocol; macOS draws its own lock screen.
+- A dialog's modal hint only moves focus within its own app (`xdg-dialog`):
+  there are no Wayland dialogs here; macOS sheets belong to their app.
+- An oversized blur region or overcomplicated opaque region is ignored
+  (`wl_surface` regions): no client sends regions here.
+- GTK apps drop their title bar under `default_mode = "minimal"` and `"none"`
+  (KDE server decorations): a Wayland protocol.
+- The DRM error dump to `/tmp` is gone, the DRM, udev and winit backends,
+  wlr-screencopy and ext-image-copy-capture fixes, the Wayland fractional scale,
+  the TIFF wallpaper decoder abort and desktop entry reading: no such code path
+  exists here (the wallpaper is `background-tiff.m`'s, and the app reads no
+  desktop entries).
+- Layer names written to the state file are sanitized: there are no layer
+  surfaces and no state file of layer names.
+- The flake and Home Manager module: Nix packaging of the Linux compositor.
+
+Not done or not run: the shell's side was compiled and, for the socket server
+and the screenshot writer, run headless (`tests/e2e/ipc-limits.sh`, 2026-10-29,
+macOS 27.2, Apple Silicon); the stalled-reader drop was not exercised, the
+raised open-file limit and the environment scrub were not run in the built app,
+and `msg cursor` with a real pointer was not run: the app was not launched.
+`/tmp` is still used by the owner-run native launcher
+(`scripts/native-desktop-launcher.sh`: `mktemp -d /tmp/if-native.XXXXXX`, a new
+mode-0700 directory holding the loader nonce and payload copy, which
+`native/privileged/loader.m` validates by name); it is part of the privileged
+loader's contract, which this change does not touch.
 
 ## Evidence and limits
 

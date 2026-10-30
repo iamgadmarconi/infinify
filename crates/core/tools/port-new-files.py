@@ -27,7 +27,7 @@ if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--writ
 UP = Path(sys.argv[1])
 OUT = Path(__file__).resolve().parent.parent
 WRITE = len(sys.argv) == 3
-COMMIT = "352333a8fa1b22171492d4b71a54102045c9a19d"
+COMMIT = "df3de27b26c7998e8a460cffd8a4925cbed3a322"
 STALE = []
 
 
@@ -294,14 +294,15 @@ port(
 
 # --- window_ext -------------------------------------------------------------
 def window_ext(t):
-    # `impl WindowExt for Window` (upstream lines 70-189, blank line 69 before).
-    t = cut_lines(t, 69, 189, "", "}")
-    # `set_tiled_states`, `unset_tiled_states`, `decoration_mode_to_wire`
-    # (upstream lines 6-43 with their doc comments, and the blank line 44).
+    # `impl WindowExt for Window` (upstream lines 92-211, blank line 91 before).
+    t = cut_lines(t, 91, 211, "", "}")
+    # `set_tiled_states`, `unset_tiled_states`, `decoration_mode_to_wire` and,
+    # new in v0.21.0, `decoration_mode_to_kde_manager`, `decoration_mode_to_kde`
+    # (upstream lines 6-65 with their doc comments, and the blank line 66).
     t = cut_lines(
         t,
         6,
-        44,
+        66,
         "/// Set all four Tiled states. GTK et al. read Tiled as \"drop your shadow +",
         "",
     )
@@ -327,10 +328,11 @@ port(
     "src/window_ext.rs",
     [
         "Changes from upstream: this header; only the `WindowExt` trait is kept",
-        "(upstream lines 45-68, unmodified). Left out, because each needs the",
-        "Wayland stack: `set_tiled_states`, `unset_tiled_states` and",
-        "`decoration_mode_to_wire` (lines 6-43), `impl WindowExt for Window`",
-        "(lines 70-189), and the imports only they used",
+        "(upstream lines 67-90, unmodified). Left out, because each needs the",
+        "Wayland stack: `set_tiled_states`, `unset_tiled_states`,",
+        "`decoration_mode_to_wire`, `decoration_mode_to_kde_manager` and",
+        "`decoration_mode_to_kde` (lines 6-65), `impl WindowExt for Window`",
+        "(lines 92-211), and the imports only they used",
         "(`smithay::desktop::Window`, `smithay::wayland::shell::xdg::ToplevelSurface`).",
         "The two remaining imports read `crate::platform::`.",
     ],

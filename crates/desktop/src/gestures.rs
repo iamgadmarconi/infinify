@@ -170,6 +170,10 @@ impl Found {
                 "center-nearest".to_owned(),
                 controller.runs(&Action::CenterNearest(Direction::Up)),
             ),
+            GestureConfigEntry::Threshold(ThresholdAction::FocusNearest) => (
+                "focus-nearest".to_owned(),
+                controller.runs(&Action::FocusNearest(Direction::Up)),
+            ),
             GestureConfigEntry::Threshold(ThresholdAction::Fixed(action)) => {
                 (action_string(action), controller.runs(action))
             }
@@ -788,10 +792,14 @@ impl Controller {
                         } else {
                             right
                         };
-                        // center-nearest keeps pan orientation instead: fingers
-                        // left look right, so the vector is negated.
+                        // center-nearest and focus-nearest keep pan orientation
+                        // instead: fingers left look right, so the vector is
+                        // negated.
                         let action = match named.clone().or(directional.clone()) {
                             Some(ThresholdAction::CenterNearest) => Some(Action::CenterNearest(
+                                direction_from_vector((-cumulative.x, -cumulative.y).into()),
+                            )),
+                            Some(ThresholdAction::FocusNearest) => Some(Action::FocusNearest(
                                 direction_from_vector((-cumulative.x, -cumulative.y).into()),
                             )),
                             Some(ThresholdAction::Fixed(action)) => Some(action),

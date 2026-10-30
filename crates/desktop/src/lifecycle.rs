@@ -24,6 +24,7 @@ use super::actions::Outcome;
 use super::ipc::{WindowSelector, readable};
 use super::rules::Pin;
 use super::view_actions::pixel_size;
+use super::window_actions::IN_VIEW_NOISE;
 use super::*;
 use driftwm_canvas::policy::{self, PixelPoint, PixelSize};
 use driftwm_core::config::{AppliedWindowRule, WindowPlacement};
@@ -506,10 +507,10 @@ impl Controller {
     pub(crate) fn fully_on(&self, window: WindowId, output: OutputId) -> bool {
         self.on_screen(window, output)
             .is_some_and(|(low, high, usable)| {
-                low.x >= usable.origin.x
-                    && low.y >= usable.origin.y
-                    && high.x <= usable.right()
-                    && high.y <= usable.bottom()
+                low.x >= usable.origin.x - IN_VIEW_NOISE
+                    && low.y >= usable.origin.y - IN_VIEW_NOISE
+                    && high.x <= usable.right() + IN_VIEW_NOISE
+                    && high.y <= usable.bottom() + IN_VIEW_NOISE
             })
     }
     /// Upstream window_intersects_viewport_on: any part of it counts.
@@ -733,10 +734,31 @@ impl Controller {
             self.invalidate_focus(window);
             self.sources.remove(&window);
             self.lifecycle.standins.insert(window);
+            self.cap_standin(window);
         } else {
             (effect, navigation) = self.depart(window, output)?;
         }
         Ok(json!({"standin":standin,"effect":effect,"navigation":navigation,"dirty":true}))
+    }
+    /// Upstream standin_body_rect (v0.21.0, third_party/driftwm/src/state/
+    /// suspended.rs): a body past the stand-in ceiling is cut to it, keeping
+    /// its top-left. A window's native frame has no such limit, and a stand-in
+    /// is drawn and saved at one that does: a larger one would be dropped by the
+    /// next restore.
+    fn cap_standin(&mut self, window: WindowId) {
+        let Some(rect) = self.scene.window(window).map(|w| w.world_rect) else {
+            return;
+        };
+        let ceiling = f64::from(super::storage::MAX_STANDIN_EXTENT);
+        if rect.size.width <= ceiling && rect.size.height <= ceiling {
+            return;
+        }
+        let capped = Rect {
+            origin: rect.origin,
+            size: Size::new(rect.size.width.min(ceiling), rect.size.height.min(ceiling)),
+        };
+        // A smaller frame at the same origin cannot leave the world.
+        let _ = self.scene.set_window_rect(window, capped);
     }
     /// The window's title changed. Titles are saved: a slot is matched to its
     /// window by title at the next launch.

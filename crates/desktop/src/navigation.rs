@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
-// src/state/{navigation,viewport,viewport_animation}.rs. Native frame geometry
-// includes the titlebar; there is no additional compositor border.
+// Adapted from malbiruk/driftwm df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0),
+// third_party/driftwm/src/state/{navigation,viewport,viewport_animation}.rs
+// (landing_view, landing_view_on, set_camera_anchor, navigation_target_zoom).
+// Native frame geometry includes the titlebar; there is no additional compositor border.
 // `set_usable_area` follows src/state/viewport.rs (usable_area_on) and what
 // src/handlers/layer_shell.rs (layer_destroyed) and src/handlers/compositor.rs
 // (handle_layer_commit) do when a panel's exclusive zone changes: the layers
@@ -274,12 +275,10 @@ impl Controller {
         policy: ZoomPolicy,
     ) -> Result<(Point, f64, Anchor), Error> {
         let context = self.navigation_context(output)?;
-        let viewport = self
-            .scene
-            .output(output)
-            .ok_or(Error::Invalid("unknown output"))?;
+        // Upstream navigation_target_zoom: the zoom the view is heading to, as
+        // the live one would stop a zoom animation where this frame caught it.
         let zoom = match policy {
-            ZoomPolicy::Keep => viewport.zoom,
+            ZoomPolicy::Keep => self.landing_view(output)?.1,
             ZoomPolicy::Reset => 1.0,
         };
         let frame = NavigationFrame::from_window(
@@ -310,6 +309,28 @@ impl Controller {
             flight.zoom_target == Some(zoom) && flight.zoom_animation_anchor == Some(anchor)
         })
     }
+    /// Upstream landing_view_on: `output`'s camera and zoom once its flight
+    /// lands, the live view when nothing is in the air. Momentum is no flight:
+    /// it has no destination. The zoom tick steers by the anchor and clears the
+    /// camera target, so while an anchor is armed it alone says where the camera
+    /// lands.
+    pub(crate) fn landing_view(&self, output: OutputId) -> Result<(Point, f64), Error> {
+        let viewport = self
+            .scene
+            .output(output)
+            .ok_or(Error::Invalid("unknown output"))?;
+        let flight = self.flights.get(&output);
+        let zoom = flight
+            .and_then(|flight| flight.zoom_target)
+            .unwrap_or(viewport.zoom);
+        let camera = match flight.and_then(|flight| flight.zoom_animation_anchor) {
+            Some(anchor) => anchor.canvas - anchor.screen / zoom,
+            None => flight
+                .and_then(|flight| flight.camera_target)
+                .unwrap_or(viewport.camera),
+        };
+        Ok((camera, zoom))
+    }
     pub(crate) fn arm_navigation(
         &mut self,
         window: WindowId,
@@ -319,7 +340,25 @@ impl Controller {
         if self.gesture.is_some() || self.native_resize_grab_output().is_some() {
             return Err(Error::Invalid("navigation during active gesture"));
         }
-        let (target, zoom, anchor) = self.navigation_target(window, output, policy)?;
+        let (_, zoom, anchor) = self.navigation_target(window, output, policy)?;
+        self.arm_anchor(output, anchor, zoom)
+    }
+    /// Upstream set_camera_anchor: fly `output` until `anchor.canvas` sits at
+    /// `anchor.screen` at `zoom`. The zoom tick lands the camera at
+    /// `anchor.canvas - anchor.screen / zoom`, so the anchor is what arrives.
+    pub(crate) fn arm_anchor(
+        &mut self,
+        output: OutputId,
+        anchor: Anchor,
+        zoom: f64,
+    ) -> Result<Value, Error> {
+        if self.gesture.is_some() || self.native_resize_grab_output().is_some() {
+            return Err(Error::Invalid("navigation during active gesture"));
+        }
+        let target = anchor.canvas - anchor.screen / zoom;
+        if !point_valid(target) {
+            return Err(Error::Invalid("navigation target out of bounds"));
+        }
         // Upstream set_camera_on: a fullscreen output's camera does not move.
         if self.fullscreen_on(output).is_some() {
             return Ok(Value::Null);

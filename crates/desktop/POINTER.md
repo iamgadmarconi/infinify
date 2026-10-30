@@ -66,7 +66,12 @@ would have without it.
 - `hit` is exactly the `hit` member of the [`hit`](README.md) reply for that
   point, or `null`: over empty canvas, outside the output, and where `hit`
   refuses, which is a stand-in (`unbound source`) and a source whose
-  presentation is unsettled.
+  presentation is unsettled. Also over a window whose visibility change is
+  pending, which a renderer still draws (`source_presentable`) and `hit` skips
+  (`source_interactive`). The JSON null reaches an Objective-C shell as
+  `NSNull`, not as a dictionary: the native shell reads it as no hit
+  (`DWControllerHit`, `native/desktop/controller-hit.h`), including on the
+  renderer-ordered path, where an `NSNull` once raised in the event tap.
 - `forward` says the motion is the window's. It is true when `hit` is not
   null, the hit is not a pick target, and nothing
   [holds the pointer](#what-holds-the-pointer). Upstream delivers
@@ -230,6 +235,13 @@ first, as NAVIGATION.md asks, does not reach it for an echo.
 ### Pick mode
 
 `[zoom] interact_min` is the zoom below which a window is too small to touch.
+**Since DriftWM v0.20.0 it defaults to 0.5** (it was 0): with no config file, or
+a file that does not set it, every output is in pick mode below 50% zoom, and
+`interact_min = 0.0` turns it off. Nothing in this section changed for that
+default except that it is now on: the logic is the v0.19 pick mode, and the
+scenarios that run the three event classes under the default configuration are
+[`tests/interact_min_flow.rs`](tests/interact_min_flow.rs).
+
 An output is in pick mode when the threshold is above 0 and its live zoom,
 mid-flight frames included, is strictly below it (upstream `pick_mode`, per
 output here). `snapshot.outputs[].pick` says so.
@@ -310,6 +322,68 @@ stand-in's `pinned` and `widget` from its placement.
   focuses, raises and moves it, and a swipe or pinch pans or zooms. This is
   read from upstream's code; upstream's `interact_min.rs` scenarios drive no
   gesture, and none is driven here below the threshold either.
+
+#### What the shell does with these answers
+
+The controller answers per event; the shell decides what reaches an
+application. Read from `native/desktop/main.m` and `native-input.m` for this
+update. Not run: neither on the owner's Mac nor in the UTM guest (the guest lock
+was held by other lanes for the whole session, so the planned check, a click, a
+drag and a scroll at zoom 0.4 over a Calculator window with `msg state` and
+screenshots as evidence, was not made). The built bundle only proves that the
+Objective-C compiles:
+
+| Event below `interact_min` | Capture mode (an overlay with copies of windows) | Compositor mode (the real windows are drawn by the window server) |
+| --- | --- | --- |
+| **Press** | `hit` says `pick`, `input` is refused, so the press is never forwarded; the view's pick press (`pickPress:`) raises and focuses the target and arms the pick | the annotated tap's consumer (`consume`) claims the press (`claimed=pick`) and delivers it to the view's pick press, so the original packet never reaches the application. The early chrome tap refuses a pick (`DWNativeTitleRefused ... "pick"`) and leaves it to the late one |
+| **Drag past the 5 point slop** | `pressDragged:` sends `begin_drag`: the window moves on the canvas | the captured button pair keeps owning the drag and release (`nativeGestureView`), so the drag is the same move and no drag tail reaches the application |
+| **Click released within the slop** | `pick`: one navigation to the window at zoom 1 | the same, from the pair's release |
+| **Scroll** | `mouse_binding` with `pick:true` is retried on empty canvas: a bare scroll pans or zooms; nothing is forwarded | claimed (`claimed=pick`) and delivered to the view, which pans or zooms through the same binding; the scroll never reaches the application |
+| **Pen (tablet packets)** | not forwarded: the same `forward` check | **changed in this update**: dedicated tablet pointer and proximity packets over a pick target are taken by the tap (`main.m`, "Below [zoom] interact_min ... a pen's dedicated packets included"). Before, only the pen's mouse-subtype packets were the pick's |
+| **Motion** | `hover` answers `forward: false`; the overlay does not deliver it | **not taken**: a mouse-moved packet is never offered to `consume`, so the window server still delivers motion to the window under the pointer (hover effects, tooltips). The controller's hover focus does not move focus onto it either. Not changed here; whether a tap that returned NULL for mouse-moved packets would hide them without freezing the cursor was not tried |
+
+A press that arrives with the Command/Control/Option chord of a held-modifier
+binding is that binding's, as upstream's `try_pick_button` lets it be. A
+screen-pinned window and a widget are no pick target and keep their pointer
+(the table below).
+
+##### focus-nearest on a press
+
+`mod+ctrl+drag` is bound to `focus-nearest` since v0.20.0 (it was
+`center-nearest`). `mouse_binding` answers kind `center_nearest` with
+`"focus":true` for it, so the shell's NavigateGrab press is unchanged except
+that it forwards the flag in `pointer_nearest` (`"focus": true`): the one action
+the drag fires is then `focus-nearest <octant>`, upstream's
+`MouseAction::FocusNearest`. `focus` defaults to false, and false is
+`center-nearest` as before.
+
+##### Sloppy focus after a pan, zoom or fling
+
+DriftWM v0.20.0: with `focus_follows_mouse`, a pan, zoom or fling under a still
+pointer moves focus to the window that lands under it; navigations keep the
+focus they set. Upstream's `refresh_pointer_focus` pull is a per-frame check of
+`hover_viewport` against the camera and zoom, gated by `hover_follows_camera`
+(`user_moved_camera` raises it, a focus-setting navigation drops it). Here:
+
+- `hover` stamps the view it answered for (the output, camera and zoom), on
+  every path through it.
+- A camera move the user drives (`pan`, `zoom`, `zoom_by`, an edge pan, the
+  view actions, `msg camera` and `msg zoom`) un-parks the pull; a navigation
+  that sets focus (`center-nearest`, `focus-nearest`, `focus-center`,
+  Alt-Tab, `msg focus`, a fit, a bookmark's) parks it.
+- `snapshot.navigation.hover_pull.needs_pointer` is true while
+  `focus_follows_mouse` is on and the stamped view differs from the output's
+  view, parked or not. The shell then reports the pointer each frame with
+  `pointer` (it already does for cursor edge pan) and applies a reply with
+  `dirty:true` and an `effect` exactly as a hover's (`main.m`, `-pointerFrame:`).
+- `pointer` with a moved view and the pull un-parked is `hover` at that point:
+  a window that landed under it takes the focus, without a raise. Parked, the
+  new view is only stamped, so a later un-parking owes nothing for the
+  navigation's own move.
+
+Covered by `tests/focus_nearest_flow.rs`
+(`a_pan_under_a_resting_pointer_moves_sloppy_focus_and_a_navigation_parks_it`).
+No Mac run: the shell half is three lines in `main.m` and was only built.
 
 ### Screen-pinned windows and widgets
 

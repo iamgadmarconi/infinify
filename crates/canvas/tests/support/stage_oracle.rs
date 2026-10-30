@@ -12,6 +12,8 @@ impl<T: Default, S> Default for utils::Point<T, S> {
 }
 mod layout {
     pub mod snap {
+        // As upstream's: v0.21's `FitPush` derives Clone, Copy and Debug over it.
+        #[derive(Clone, Copy, Debug)]
         pub struct SnapRect {
             pub x_low: f64,
             pub x_high: f64,

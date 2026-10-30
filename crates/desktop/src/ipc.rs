@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d:
+// Adapted from malbiruk/driftwm 352333a8fa1b22171492d4b71a54102045c9a19d, with
+// the v0.21.0 additions from df3de27b26c7998e8a460cffd8a4925cbed3a322
+// (third_party/driftwm/src/ipc/{protocol,mod}.rs: Request::Cursor and cmd_cursor,
+// the `pid` of WindowInfo, OutputFullscreen and OutputPinned, check_point,
+// check_size, the camera and bookmark bounds of cmd_camera and cmd_bookmark):
 // src/ipc/protocol.rs (every wire type: names, serde shapes and field order),
 // src/ipc/mod.rs (dispatch, cmd_camera, cmd_zoom, cmd_layout, state_info, the
 // selector rules, cmd_focus, cmd_action, cmd_bookmark, cmd_move, cmd_resize,
@@ -10,6 +14,7 @@
 // render.rs. The transport lives in the shell. Native frames already include
 // their title bar, so chrome is zero.
 use super::actions::Outcome;
+use super::storage::{CAMERA_LIMIT, POSITION_LIMIT, valid_canvas_point};
 use super::view_actions::pixel_size;
 use super::*;
 use driftwm_canvas::policy;
@@ -34,6 +39,9 @@ pub(crate) enum Request {
     Layout {
         short: bool,
     },
+    /// The pointer in the global output layout (screen space, not canvas), plus
+    /// the output it is on.
+    Cursor,
     State,
     DebugCounters,
     Subscribe,
@@ -116,6 +124,11 @@ pub(crate) enum Response {
     },
     Zoom(f64),
     Layout(String),
+    Cursor {
+        x: f64,
+        y: f64,
+        output: String,
+    },
     State(Box<StateInfo>),
     DebugCounters(BTreeMap<String, usize>),
     Focused(Option<FocusedWindow>),
@@ -231,6 +244,10 @@ pub(crate) struct WindowInfo {
     pub suspended: bool,
     #[serde(default)]
     pub mode: WindowMode,
+    /// The process that owns the window's native source, from its bound
+    /// identity. Absent with no source: a stand-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -239,6 +256,9 @@ pub(crate) struct OutputFullscreen {
     pub output: String,
     pub app_id: String,
     pub title: String,
+    /// As [`WindowInfo::pid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,6 +269,9 @@ pub(crate) struct OutputPinned {
     pub title: String,
     pub position: [i32; 2],
     pub size: [i32; 2],
+    /// As [`WindowInfo::pid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -302,6 +325,28 @@ pub(crate) fn readable(rect: Rect) -> Result<(), String> {
         return Err("window geometry exceeds integer range".to_string());
     }
     Ok(())
+}
+/// Upstream `SIZE_LIMIT`: the largest size a request may ask for, a looser
+/// outer gate than the stand-in ceiling, which clamps a suspended window
+/// afterward.
+const SIZE_LIMIT: i32 = 32767;
+/// Upstream `check_point`: coordinates share the position limit of a restored
+/// session.
+pub(crate) fn check_point(x: i32, y: i32) -> Result<(), String> {
+    let range = -POSITION_LIMIT..=POSITION_LIMIT;
+    if range.contains(&x) && range.contains(&y) {
+        Ok(())
+    } else {
+        Err(format!("coordinates must be within ±{POSITION_LIMIT}"))
+    }
+}
+/// Upstream `check_size`.
+pub(crate) fn check_size(w: i32, h: i32) -> Result<(), String> {
+    if w <= SIZE_LIMIT && h <= SIZE_LIMIT {
+        Ok(())
+    } else {
+        Err(format!("sizes must be at most {SIZE_LIMIT}"))
+    }
 }
 fn text(error: Error) -> String {
     error.to_string()
@@ -365,6 +410,7 @@ impl Controller {
                     .map(|()| Answer::Pending);
             }
             Request::Camera(arg) => self.cmd_camera(active()?, arg, outcome),
+            Request::Cursor => self.cmd_cursor(output, pointer),
             Request::Zoom(arg) => self.cmd_zoom(active()?, arg, outcome),
             Request::State => Ok(Response::State(Box::new(self.state_info(output)?))),
             Request::DebugCounters => Ok(Response::DebugCounters(self.debug_counters())),
@@ -466,17 +512,56 @@ impl Controller {
         if !x.is_finite() || !y.is_finite() {
             return Err("camera coordinates must be finite numbers".to_string());
         }
+        // Upstream cmd_camera: a point past the camera's range is refused before
+        // anything is touched, a fullscreen exit included.
+        if !valid_canvas_point(x, y) {
+            return Err(format!(
+                "camera coordinates must be within ±{CAMERA_LIMIT:e}"
+            ));
+        }
         // Upstream: a fullscreen output refuses camera moves and is parked at
         // zoom 1, so it ends first, after the request is known to be sound.
         outcome.dirty |= self.exit_fullscreen_on(output).is_some();
-        // The target derives from the current zoom, and only the camera target
-        // is written: a pending zoom flight and a zoom-to-fit return survive.
+        // v0.20: through the anchor, at the zoom the view is heading to. A
+        // flight still under way steers by its anchor every tick, which would
+        // drop a bare camera target, so `msg zoom 0.5` then `msg camera X Y`
+        // lands at both. (x, y) is the output's center, Y up.
         let (viewport, _) = self.view(output).map_err(text)?;
         let size = pixel_size(viewport.screen_bounds.size).map_err(text)?;
-        let target = policy::camera_for_center(x, y, viewport.zoom, size);
-        outcome.navigation =
-            self.set_camera_target(output, target).map_err(text)?["navigation"].take();
+        let zoom = self.landing_view(output).map_err(text)?.1;
+        self.user_moved_camera();
+        let anchor = crate::navigation::Anchor {
+            canvas: Point::new(x, -y),
+            screen: Point::new(f64::from(size.w) / 2.0, f64::from(size.h) / 2.0),
+        };
+        outcome.navigation = self.arm_anchor(output, anchor, zoom).map_err(text)?;
         Ok(Response::Camera { x, y })
+    }
+    /// Upstream cmd_cursor: the pointer in the global output layout (the space
+    /// `screen_bounds` and a `from_screen` screenshot region are given in) and
+    /// the output the request is for, which is the one under the pointer. The
+    /// controller keeps no pointer of its own: the shell sends the point with
+    /// the request, as it does for `focus-center`.
+    fn cmd_cursor(&self, output: Option<OutputId>, pointer: Option<Point>) -> Reply {
+        let pointer = pointer.ok_or("no pointer")?;
+        let output = output.ok_or("no output")?;
+        self.viewport(output)?;
+        Ok(Response::Cursor {
+            x: pointer.x,
+            y: pointer.y,
+            output: self
+                .outputs
+                .get(&output)
+                .map(|o| o.stable_id.clone())
+                .unwrap_or_default(),
+        })
+    }
+    /// The `pid` of the window's bound source, which upstream reads from the
+    /// socket credentials of the client connection. A stand-in has none.
+    pub(crate) fn window_pid(&self, window: WindowId) -> Option<u32> {
+        self.sources
+            .get(&window)
+            .and_then(|source| u32::try_from(source.identity.pid).ok())
     }
     fn cmd_zoom(&mut self, output: OutputId, arg: Option<f64>, outcome: &mut Outcome) -> Reply {
         let Some(zoom) = arg else {
@@ -549,6 +634,7 @@ impl Controller {
                 // A detached placeholder is Infinify's stand-in.
                 suspended: !self.sources.contains_key(&window.id),
                 mode: self.sizes.mode(window.id),
+                pid: self.window_pid(window.id),
             };
             // Focused window first, the rest in stage order.
             if info.is_focused {
@@ -665,7 +751,14 @@ impl Controller {
         // own output only. From any other it is no target at all: nothing is
         // focused and no camera moves. On its own it is focused where it is.
         let fullscreen = self.fullscreen_output_of(window);
-        let visible = self.is_pinned(window) || self.fully_in_viewport(window, output)?;
+        // v0.20: judged where the view lands, so a window that a flight under way
+        // is about to leave behind is panned to, and one it will show whole
+        // lets it land (upstream reveal_element).
+        let (camera, zoom) = self.landing_view(output).map_err(text)?;
+        let visible = self.is_pinned(window)
+            || self
+                .window_fully_in_view_at(window, output, camera, zoom)
+                .map_err(text)?;
         if !visible && fullscreen.is_some_and(|own| own != output) {
             return Ok(Response::Focused(Some(info)));
         }
@@ -681,6 +774,10 @@ impl Controller {
         }
         self.finish_cycle();
         self.scene.focus(window).map_err(|e| e.to_string())?;
+        // As in navigate_to_window_on: this navigation's own pan, or a flight
+        // still under way when it makes none, must not hand the focus just set
+        // to whatever slides under a resting pointer.
+        self.hover_parked();
         let effect = self.request_focus(window).map_err(text)?["effect"].take();
         if !effect.is_null() {
             outcome.effects.push(effect);
@@ -720,10 +817,7 @@ impl Controller {
                 Ok(Response::Bookmark { x, y })
             }
             (Some(name), Some((x, y))) => {
-                if !x.is_finite() || !y.is_finite() {
-                    return Err("bookmark coordinates must be finite".to_string());
-                }
-                self.bookmarks.insert(name, [x, y]);
+                self.store_bookmark(name, [x, y])?;
                 outcome.dirty = true;
                 Ok(Response::Bookmark { x, y })
             }
@@ -740,6 +834,11 @@ impl Controller {
         to: Option<(i32, i32)>,
         outcome: &mut Outcome,
     ) -> Reply {
+        // Upstream cmd_move: a destination past the position range is refused
+        // before the selector is resolved.
+        if let Some((x, y)) = to {
+            check_point(x, y)?;
+        }
         let window = self.select(selector)?;
         let rect = self
             .scene
@@ -825,6 +924,7 @@ impl Controller {
         if width <= 0 || height <= 0 {
             return Err("size must be positive".to_string());
         }
+        check_size(width, height)?;
         // Upstream refuses these whatever else it can resize, and before it
         // asks whether a grab holds the window.
         if !self.on_canvas(window) {

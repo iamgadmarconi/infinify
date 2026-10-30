@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from malbiruk/driftwm src/config/mod.rs at
-// 352333a8fa1b22171492d4b71a54102045c9a19d (GPL-3.0-or-later).
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
 // Changes from upstream: `smithay::` paths read `crate::platform::`;
 // `CONFIG_DIR_NAME` is re-exported next to `config_path`, and the doc comment
 // of `Config::load` names the `infinify` config directory. Nothing else.
@@ -19,7 +19,7 @@ pub use parse::{
     parse_gesture_trigger, parse_key_combo, parse_mouse_action, parse_mouse_binding,
     parse_tap_combo, parse_touch_config_entry, parse_touch_trigger,
 };
-pub use toml::{CONFIG_DIR_NAME, config_path};
+pub use toml::{CONFIG_DIR_NAME, config_path, set_config_path};
 pub use types::*;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -179,9 +179,11 @@ pub struct Config {
     pub touch_speed: f64,
     /// Scroll momentum on a 0–1 scale: 0 = off, 0.5 = default, 1 = floatiest.
     pub drift: f64,
-    /// Pixels per keyboard nudge (Mod+Shift+Arrow).
+    /// Pixels per nudge-window step, and per move-to-snap step
+    /// (Mod+Shift+Arrow) with no stop that way.
     pub nudge_step: i32,
-    /// Pixels per grow-window / shrink-window step (no default binding).
+    /// Pixels per grow-window / shrink-window step (no default binding), and
+    /// per resize-to-snap shrink with no stop inside the window.
     pub resize_step: i32,
     /// Pixels per keyboard pan (Mod+Ctrl+Arrow).
     pub pan_step: f64,
@@ -238,8 +240,8 @@ pub struct Config {
     pub zoom_interact_min: f64,
     pub snap_enabled: bool,
     pub snap_gap: f64,
-    /// Inset from the usable area's edge to a fitted, filled or parked window's
-    /// title bar / content edge.
+    /// Inset from the usable area's edge to a window's title bar / content edge
+    /// under fill, parking, focus-nearest's reveal and resize-to-snap's stop.
     pub snap_outer_gap: f64,
     pub snap_distance: f64,
     pub snap_break_force: f64,
@@ -294,14 +296,13 @@ pub struct Config {
     pub resize_on_border: bool,
     /// When `true`, resizing a window by dragging its edge (SSD or CSD
     /// border) propagates to every window connected to it via snap
-    /// adjacency. Keybinding and gesture resize are unaffected — bind
-    /// `resize-window-snapped` explicitly for those.
+    /// adjacency. Keybinding and gesture resize are unaffected — their bound
+    /// action decides.
     pub decoration_resize_snapped: bool,
     /// When `true`, maximize/unmaximize initiated via window decoration
     /// (CSD maximize button, SSD title-bar double-click, xdg/foreign-toplevel
     /// set_maximized) propagates to every window connected via snap adjacency.
-    /// Keybinding and gesture fit are unaffected — bind `fit-window-snapped`
-    /// explicitly for those.
+    /// Keybinding and gesture fit are unaffected — their bound action decides.
     pub decoration_fit_snapped: bool,
     pub gestures: ContextBindings<GestureBinding, GestureConfigEntry>,
     /// Touch gesture bindings (`[touch]`), keyed by bare trigger (no modifiers).
@@ -516,11 +517,11 @@ impl Config {
 
         let window_placement = match raw.window_placement.as_deref() {
             Some("cursor") => WindowPlacement::Cursor,
-            Some("auto") => WindowPlacement::Auto,
-            Some("center") | None => WindowPlacement::Center,
+            Some("center") => WindowPlacement::Center,
+            Some("auto") | None => WindowPlacement::Auto,
             Some(other) => {
-                warn_and_collect!("config: unknown window_placement '{other}', using center");
-                WindowPlacement::Center
+                warn_and_collect!("config: unknown window_placement '{other}', using auto");
+                WindowPlacement::Auto
             }
         };
 
@@ -624,8 +625,8 @@ impl Config {
             });
 
         let resize_on_border = raw.mouse.resize_on_border.unwrap_or(true);
-        let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(false);
-        let decoration_fit_snapped = raw.mouse.decoration_fit_snapped.unwrap_or(false);
+        let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(true);
+        let decoration_fit_snapped = raw.mouse.decoration_fit_snapped.unwrap_or(true);
         let mut mouse_bindings = if disable_mouse {
             ContextBindings::empty()
         } else {
@@ -1100,9 +1101,9 @@ impl Config {
             focus_follows_mouse: raw.focus_follows_mouse.unwrap_or(false),
             session: SessionConfig {
                 suspend_on_close: raw.session.suspend_on_close.unwrap_or(false),
-                restore_windows: raw.session.restore_windows.unwrap_or(false),
-                restore_camera: raw.session.restore_camera.unwrap_or(false),
-                restore_bookmarks: raw.session.restore_bookmarks.unwrap_or(false),
+                restore_windows: raw.session.restore_windows.unwrap_or(true),
+                restore_camera: raw.session.restore_camera.unwrap_or(true),
+                restore_bookmarks: raw.session.restore_bookmarks.unwrap_or(true),
             },
             trackpad_speed,
             mouse_speed,
@@ -1180,13 +1181,13 @@ impl Config {
                 "zoom.fit_padding",
                 &mut errors,
             ),
-            zoom_reset_on_new_window: raw.zoom.reset_on_new_window.unwrap_or(true),
+            zoom_reset_on_new_window: raw.zoom.reset_on_new_window.unwrap_or(false),
             zoom_reset_on_activation: raw.zoom.reset_on_activation.unwrap_or(true),
             // clamp_warn (not non_negative): folds NaN into the below-min branch
             // → 0.0 → off, and rejects values above MAX_ZOOM rather than
             // silently accepting a threshold no zoom can ever fall below.
             zoom_interact_min: clamp_warn(
-                raw.zoom.interact_min.unwrap_or(0.0),
+                raw.zoom.interact_min.unwrap_or(0.5),
                 0.0,
                 crate::canvas::MAX_ZOOM,
                 "zoom.interact_min",
@@ -1195,7 +1196,7 @@ impl Config {
             snap_enabled: raw.snap.enabled.unwrap_or(true),
             snap_gap: non_negative(raw.snap.gap.unwrap_or(12.0), "snap.gap", &mut errors),
             snap_outer_gap: non_negative(
-                raw.snap.outer_gap.unwrap_or(0.0),
+                raw.snap.outer_gap.unwrap_or(12.0),
                 "snap.outer_gap",
                 &mut errors,
             ),
@@ -1209,7 +1210,7 @@ impl Config {
                 "snap.break_force",
                 &mut errors,
             ),
-            snap_corners: raw.snap.corners.unwrap_or(false),
+            snap_corners: raw.snap.corners.unwrap_or(true),
             snap_centers: raw.snap.centers.unwrap_or(false),
             background,
             decorations,
@@ -2506,7 +2507,7 @@ mod tests {
                 .on_window
                 .get(&GestureTrigger::Doubletap { fingers: 3 }),
             Some(&GestureConfigEntry::Threshold(ThresholdAction::Fixed(
-                Action::FitWindow
+                Action::FitWindowSnapped
             )))
         );
         assert_eq!(
@@ -2522,7 +2523,7 @@ mod tests {
                 .on_window
                 .get(&GestureTrigger::HoldSwipe { fingers: 3 }),
             Some(&GestureConfigEntry::Continuous(
-                ContinuousAction::ResizeWindow
+                ContinuousAction::ResizeWindowSnapped
             ))
         );
         // Forwarding tiers (1-2 fingers on a window) stay unbound.
@@ -2656,7 +2657,7 @@ mod tests {
 
     #[test]
     fn direction_binding_over_non_continuous_base_does_not_warn() {
-        // Base 4-finger swipe is the default center-nearest (threshold); an
+        // Base 4-finger swipe is the default focus-nearest (threshold); an
         // unbound base (5-finger, unbound here) never shadows — neither warns.
         let toml_str = r#"
             [gestures.anywhere]

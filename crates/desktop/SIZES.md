@@ -149,6 +149,13 @@ bar and has no compositor border. Nothing reads a native origin.
 
 ### `grow-window <dir>`, `shrink-window <dir>`
 
+DriftWM v0.21.0: `navigation.resize_step` (like `nudge_step`) is in **screen
+pixels**, so a step covers the same distance on screen at any zoom. The step is
+`canvas_step`: the screen step divided by the landing zoom of the active output
+when that view shows the window's center, else of the output that does, rounded
+and never less than 1 for a nonzero step. At zoom 1 nothing changes. `msg move`
+and `msg resize` stay in canvas pixels.
+
 Upstream `step_resize_focused`. The focused window's named edge walks
 `[navigation] resize_step` pixels outward, or inward for shrink; a diagonal
 moves each of its two edges by `round(step / sqrt 2)`; an axis the direction
@@ -193,9 +200,12 @@ drag, waits no longer: the rule's size is never asked over the user's.
 ### `fit-window`, `fit-window-snapped`
 
 Upstream `toggle_fit_window`. A fit sizes the window to the **active** output's
-usable area less `[snap] outer_gap` on every side, keeps its center, and flies
-that output's camera to `round(window center - usable center)` at zoom 1, so the
-frame lands exactly on the inset usable area. `focus_placement` plays no part.
+usable area, edge to edge, keeps its center, and flies that output's camera to
+`round(window center - usable center)` at zoom 1, so the frame lands exactly on
+the usable area. Since DriftWM v0.20.0 `[snap] outer_gap` plays no part: it is
+`fill-window`'s margin (and `focus_placement` parking's, `focus-nearest`'s and
+`resize-to-snap`'s), and a config that set it lost its fit margin. A native frame
+has no border to hang past the area. `focus_placement` plays no part either.
 The center is that of the frame the window was
 [last asked for](#the-size-a-window-was-last-asked-for), at the top-left it
 has.
@@ -690,3 +700,44 @@ action or by a rule. The joins with widgets, pins, rules, hover and pick mode
 ran only in the controller scenarios.
 [The shell notes](../../native/desktop/README.md#what-has-been-run-for-sizing-with-everything-else-built-in)
 have the commands and the answers.
+
+## Keyboard snapping: `move-to-snap`, `resize-to-snap` (v0.20.0, v0.21.0)
+
+Adapted from `src/state/keyboard_snap.rs` (`move_to_snap_focused`,
+`resize_to_snap_focused`, `canvas_step`, `keyboard_move_element`) at
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`; the stops and the walk are
+`driftwm-core`'s `layout::snap::{StopQuery, next_origin, next_grow_line,
+next_shrink_line}`, upstream's own code and tests. [`src/keyboard_snap.rs`](src/keyboard_snap.rs).
+
+`move-to-snap <up|down|left|right>` (the default `mod+shift+arrows`, which
+replaced `nudge-window`; `nudge-window` stays available) moves the focused
+canvas window along the direction to the next stop a drag would snap to, every
+family at any distance (docks a `snap.gap` off a neighbour's edge, same-edge and
+centre alignments), and also steps out to the side beside a neighbour above or
+below it (`side_docks`). It never lands on another window: a stop whose frame
+would overlap one is passed over. With no stop that way it nudges by
+`nudge_step` screen pixels (v0.21.0), so holding the key keeps it moving.
+Afterwards the camera follows: a stop the move left outside the view parks the
+window like a navigation does (Keep zoom); a nudge scrolls the canvas only once
+the leading edge would pass the line `snap.outer_gap` in from the usable edge,
+and then keeps the edge on that line (`leading_edge_camera`), a window wider
+than the screen included.
+
+`resize-to-snap <up|down|left|right>` is unbound by default. `right`/`down` grow
+the right or bottom edge to the next stop (`next_grow_line`), never past the
+usable area less `outer_gap` (the fence `fill-window` grows inside) and stopping
+docked against the next window instead of growing over it; `left`/`up` pull that
+edge back to the previous stop (`next_shrink_line`), or by `resize_step` when no
+stop is inside the window. It asks for the size the way `grow-window` does:
+`step_resize` with the delta to the stop, through the one native size
+transaction, so it needs `native_resize_capability` and is refused while a size
+is owed.
+
+Not adapted: upstream measures the frame with its title bar and border; a
+native frame includes both. Upstream's `requested_element_size` (a client that
+declined part of the last step) is the same as the placed size here, because
+only the size the window answered with is committed (see the transaction above).
+
+Covered by `tests/snap_actions_flow.rs` (stops and nudges derived by hand from
+upstream's rules, the resize through synthetic native results) and upstream's
+31 `layout::snap` unit tests in `crates/core`. No native window was resized.

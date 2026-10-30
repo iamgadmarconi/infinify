@@ -2,9 +2,9 @@
 //
 // Ported from DriftWM (GPL-3.0-or-later)
 //   repository: https://github.com/malbiruk/driftwm
-//   commit:     352333a8fa1b22171492d4b71a54102045c9a19d
+//   commit:     df3de27b26c7998e8a460cffd8a4925cbed3a322
 //   path:       src/stage/tests.rs
-//   sha-256:    a760231c8e481f6f5132e332f739cbf4bf4486903a5bfb4992e00da09df2515e (upstream file)
+//   sha-256:    d93728e879894075547a0dff6738edcdb7fca431db3b0f1008ee28499bc52757 (upstream file)
 // Changes from upstream: this header, and the two Smithay imports
 // (`use smithay::utils::{Point, Size};` at the top and
 // `use smithay::utils::{Logical, Point, Size};` in `mod harness`) read
@@ -16,7 +16,8 @@
 use crate::platform::utils::{Point, Size};
 
 use super::mock::TestWindow;
-use super::{ElementId, PinnedSite, Stage, StageElement, subtree_raise_order};
+use super::{ElementId, FitPush, PinnedSite, Stage, StageElement, subtree_raise_order};
+use crate::layout::snap::SnapRect;
 
 fn stage_with(n: u64) -> (Stage<TestWindow>, Vec<TestWindow>) {
     let mut stage = Stage::new();
@@ -381,6 +382,39 @@ fn fit_round_trip_restores_saved_size() {
     assert_eq!(saved, Some(Size::from((640, 480))));
     assert!(!stage.is_fit(w));
     assert_eq!(stage.take_fit_saved_size(w), None);
+}
+
+#[test]
+fn a_fit_push_lives_and_dies_with_fit_membership() {
+    let (mut stage, windows) = stage_with(1);
+    let w = &windows[0];
+    let rect = |x| SnapRect {
+        x_low: x,
+        x_high: x + 100.0,
+        y_low: 0.0,
+        y_high: 100.0,
+    };
+    let push = FitPush {
+        fitted: rect(0.0),
+        home: rect(50.0),
+    };
+
+    stage.set_fit_push(w, push);
+    assert!(stage.fit_push(w).is_none(), "no push without a fit");
+
+    for clear in [
+        |s: &mut Stage<TestWindow>, w: &TestWindow| s.clear_fit(w),
+        |s: &mut Stage<TestWindow>, w: &TestWindow| {
+            s.take_fit_saved_size(w);
+        },
+        |s: &mut Stage<TestWindow>, w: &TestWindow| s.set_fit(w, Size::from((640, 480))),
+    ] {
+        stage.set_fit(w, Size::from((640, 480)));
+        stage.set_fit_push(w, push);
+        assert!(stage.fit_push(w).is_some());
+        clear(&mut stage, w);
+        assert!(stage.fit_push(w).is_none());
+    }
 }
 
 #[test]

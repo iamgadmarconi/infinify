@@ -745,6 +745,9 @@ impl Controller {
                 MouseAction::PanViewport => ("pan_viewport", None),
                 MouseAction::Zoom => ("zoom", None),
                 MouseAction::CenterNearest => ("center_nearest", None),
+                // The shell's center-nearest press, carrying `focus`: the
+                // drag's one action is then focus-nearest (see below).
+                MouseAction::FocusNearest => ("center_nearest", None),
                 MouseAction::Action(action) => ("action", Some(action)),
             };
             let mut binding = json!({
@@ -753,6 +756,9 @@ impl Controller {
                 "combo":combo,
                 "implemented":action.map(|action| self.runs(action)),
             });
+            if matches!(bound, MouseAction::FocusNearest) {
+                binding["focus"] = json!(true);
+            }
             // The speeds the bound gesture scales by ride along with it.
             if let (Some(binding), Value::Object(settings)) =
                 (binding.as_object_mut(), self.pointer_settings())

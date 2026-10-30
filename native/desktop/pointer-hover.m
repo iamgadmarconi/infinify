@@ -40,6 +40,7 @@ typedef NS_ENUM(NSInteger,DWPress) {
     DWPress _press;
     NSNumber *_window,*_output; // what the press went down on
     CGPoint _start;
+    BOOL _focus; // the nearest press is focus-nearest's
 }
 - (instancetype)initWithHost:(NSView<DWPointerHost> *)host {
     if((self=[super init])){
@@ -108,9 +109,9 @@ typedef NS_ENUM(NSInteger,DWPress) {
     NSView<DWPointerHost> *host=_host;[host pointerApply:[host pointerCommand:@{@"op":@"activate",@"window":window,@"output":output,@"cause":@"click"} quiet:NO]];
     return YES;
 }
-- (void)nearestPress:(CGPoint)screen output:(NSNumber *)output { _press=DWPressNearest;_window=nil;_output=output;_start=screen; }
+- (void)nearestPress:(CGPoint)screen output:(NSNumber *)output focus:(BOOL)focus { _press=DWPressNearest;_window=nil;_output=output;_start=screen;_focus=focus; }
 // held: whether a real modifier is down as the swipe fires, as every action the shell sends says.
-- (NSDictionary *)nearest:(CGPoint)screen { return @{@"op":@"pointer_nearest",@"output":_output?:NSNull.null,@"screen":pointJSON(screen),@"start":pointJSON(_start),@"held":[_host pointerHeld]?@YES:@NO}; }
+- (NSDictionary *)nearest:(CGPoint)screen { return @{@"op":@"pointer_nearest",@"output":_output?:NSNull.null,@"screen":pointJSON(screen),@"start":pointJSON(_start),@"held":[_host pointerHeld]?@YES:@NO,@"focus":_focus?@YES:@NO}; }
 - (BOOL)pressDragged:(CGPoint)screen {
     NSView<DWPointerHost> *host=_host;double dx=_start.x-screen.x,dy=_start.y-screen.y,xx=dx*dx,yy=dy*dy;
     if(_press==DWPressNearest){

@@ -29,8 +29,11 @@ NATIVE_ARTIFACTS = {
     "doctor": "doctor",
     "loader": "loader-arm64e",
     "payload": "payload-arm64e.dylib",
+    "daemon": "loadd",
     "launcher": "launch.sh",
 }
+LAUNCH_DAEMON_PLIST = "com.marengox.infinify.loader.plist"
+DAEMON_IDENTIFIER = "com.marengox.infinify.loadd"
 BUILD_MANIFEST_KEYS = {
     "schema_version",
     "git_commit",
@@ -46,6 +49,21 @@ BUILD_MANIFEST_KEYS = {
     "source_sha256",
 }
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def codesign_command(identity: str, target: Path, *, identifier: str | None = None, entitlements: Path | None = None) -> list[str]:
+    """The codesign call for one signing step. A build signed with an identity gets the hardened runtime (and only the entitlements
+    its binary needs, normally none), so that a process of the same user cannot inject code into a running Infinify and borrow its
+    identity to ask the launch daemon for a load; the daemon refuses a caller without the flag. An ad-hoc build ("-") is signed
+    exactly as it always was."""
+    command = ["codesign", "--force", "--sign", identity]
+    if identity != "-":
+        command += ["--options", "runtime"]
+    if identifier is not None:
+        command += ["--identifier", identifier]
+    if entitlements is not None:
+        command += ["--entitlements", str(entitlements)]
+    return command + [str(target)]
 
 
 def run(args: list[str], *, cwd: Path) -> str:
@@ -205,8 +223,14 @@ def validate_native_bundle(
         artifact = check_bundle_path(bundle, expected_relative)
         if not artifact.is_file() or regular_file_digest(artifact, executable=True) != expected_hash:
             raise RuntimeError(f"native package bytes do not match the manifest: {artifact}")
-        if verify_signature and name in {"doctor", "loader", "payload"}:
+        if verify_signature and name in {"doctor", "loader", "payload", "daemon"}:
             subprocess.run(["codesign", "--verify", "--strict", str(artifact)], check=True)
+    # The launch daemon carries the digests of the loader and payload it will run as root and have the Dock open. A daemon built
+    # for other bytes would refuse every load; this catches that at packaging, without running any artifact.
+    daemon_bytes = check_bundle_path(bundle, NATIVE_DESKTOP_RELATIVE / NATIVE_ARTIFACTS["daemon"]).read_bytes()
+    for name in ("loader", "payload"):
+        if artifacts[name]["sha256"].encode("ascii") not in daemon_bytes:
+            raise RuntimeError(f"the launch daemon was not built for this bundle's {name} bytes")
     executable = check_bundle_path(bundle, Path("Contents/MacOS/Infinify"))
     regular_file_digest(executable, executable=True)
     if verify_signature and verify_bundle_signature:
@@ -299,6 +323,12 @@ def copy_resources(root: Path, app: Path, privileged_dir: Path) -> None:
     launch_agents = app / "Contents/Library/LaunchAgents"
     resources.mkdir(parents=True, exist_ok=True)
     launch_agents.mkdir(parents=True, exist_ok=True)
+    # launchd will not run an ad-hoc daemon, and the daemon names its caller by the team that signed it: only a build signed
+    # with an identity carries the daemon's property list. The daemon binary is in every build; nothing registers it.
+    if (os.environ.get("INFINIFY_SIGN_IDENTITY") or "-") != "-":
+        launch_daemons = app / "Contents/Library/LaunchDaemons"
+        launch_daemons.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / "native/privileged" / LAUNCH_DAEMON_PLIST, launch_daemons / LAUNCH_DAEMON_PLIST)
     for source, destination in (
         ("native/desktop/Info.plist", app / "Contents/Info.plist"),
         ("native/families/YABAI-NOTICE.txt", resources / "YABAI-NOTICE.txt"),
@@ -391,6 +421,18 @@ def publish(args: argparse.Namespace) -> None:
 
         before = json.loads(args.snapshot.read_text(encoding="utf-8"))
         copy_resources(root, staged_app, privileged_dir)
+        identity = os.environ.get("INFINIFY_SIGN_IDENTITY") or "-"
+        if identity != "-":
+            # The daemon is signed by the build's team before its bytes are bound into the manifest: the team signature is what
+            # launchd runs it under and what it tells its caller's requirement from.
+            subprocess.run(
+                codesign_command(
+                    identity,
+                    staged_app / NATIVE_DESKTOP_RELATIVE / NATIVE_ARTIFACTS["daemon"],
+                    identifier=DAEMON_IDENTIFIER,
+                ),
+                check=True,
+            )
         create_native_manifest(staged_app, before)
         validate_native_bundle(staged_app, verify_bundle_signature=False)
         current = source_state(root)
@@ -398,8 +440,7 @@ def publish(args: argparse.Namespace) -> None:
             raise RuntimeError("source files or Git state changed during the build; refusing to publish")
 
         executable = staged_app / "Contents/MacOS/Infinify"
-        identity = os.environ.get("INFINIFY_SIGN_IDENTITY") or "-"
-        subprocess.run(["codesign", "--force", "--sign", identity, str(staged_app)], check=True)
+        subprocess.run(codesign_command(identity, staged_app), check=True)
         validate_native_bundle(staged_app)
         if source_state(root) != before:
             raise RuntimeError("source files or Git state changed during signing; refusing to publish")

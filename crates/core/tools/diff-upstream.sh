@@ -1,11 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Print every textual difference between this crate and malbiruk/driftwm at
-# 352333a8fa1b22171492d4b71a54102045c9a19d. Read-only: it writes nothing.
+# df3de27b26c7998e8a460cffd8a4925cbed3a322 (v0.21.0). Read-only: it writes
+# nothing, and it needs no git and no network.
 #
-#   tools/diff-upstream.sh /path/to/driftwm-checkout
+#   tools/diff-upstream.sh [/path/to/driftwm-tree]
 #
-# 1. Checks that the checkout holds the originals this crate was ported from
+# With no argument it compares against the verbatim snapshot Infinify keeps in
+# the repository, third_party/driftwm (see its VENDORED.md); any other tree of
+# that tag works as well, a clone or `git archive` output.
+#
+# 1. Checks that the tree holds the originals this crate was ported from
 #    (tools/upstream.sha256, the SHA-256 of every upstream file used).
 # 2. For each ported Rust file, drops the provenance header and prints the
 #    unified diff of the rest against the upstream file of the same path
@@ -18,9 +23,9 @@
 # Exit status: 0 when both hash checks pass (differences in step 2 are
 # expected and listed in PORT.md), 1 otherwise.
 set -eu
-upstream=${1:?usage: tools/diff-upstream.sh /path/to/driftwm-checkout}
-upstream=$(cd "$upstream" && pwd)
 crate=$(cd "$(dirname "$0")/.." && pwd)
+upstream=${1:-$crate/../../third_party/driftwm}
+upstream=$(cd "$upstream" && pwd)
 status=0
 
 body() {

@@ -281,6 +281,9 @@ fn load_config(h: &mut Host, scratch: &Scratch, toml: &str) {
 /// Both outputs, the given config file, and the launch pass already over.
 fn running(scratch: &Scratch, toml: &str) -> Host {
     let mut h = Host::new();
+    // These scenarios press the Command key as `mod`; the default super became
+    // Control-Option, so name the Command super they were written for.
+    h.ok(json!({"op":"set_platform","super":"cmd"}));
     main_output(&mut h);
     side_output(&mut h);
     h.ok(json!({"op":"pan","output":2,"screen_delta":point(10000.0,0.0)}));
@@ -732,10 +735,12 @@ fn a_listed_combo_is_the_window_s_and_every_other_stays_a_binding() {
         (&json!("move_window"), &json!("alt+left"))
     );
     // a_combo_outside_the_list_still_binds.
+    // v0.20: alt+right drag resizes with the cluster; Shift gives the single
+    // window form.
     let resize = h.press("right", "⌥", 1);
     assert_eq!(
         kind(&resize),
-        (&json!("resize_window"), &json!("alt+right"))
+        (&json!("resize_window_snapped"), &json!("alt+right"))
     );
     let group = h.press("left", "⌥⇧", 1);
     assert_eq!(

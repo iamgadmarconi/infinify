@@ -44,9 +44,12 @@ static BOOL replaceOnSync,replaceAfterTransform,replaceAfterTransformRead,ignore
 static int transformReadStatus;static unsigned transformReadFailures;
 static unsigned transformWrites,alphaWrites,transformReads,identityReads;
 static CGAffineTransform nativeTransform;
-static CGRect nativeBounds={.size={300,200}};
+// The native frame of the fixture window. Its default origin (25,35) is the one a plain original [1,0,0,1,-25,-35] belongs to:
+// a window server transform carries the window's position, so an original that is consistent with its frame says -origin.
+static CGRect nativeBounds={{25,35},{300,200}};
 static float nativeAlpha=1;
 static BOOL failNextSync,failSyncAfterTransform,requirePendingBeforeTransform,replaceAfterBounds;
+static BOOL moveAfterTransformWrite;
 static int boundsStatus;
 static uint32_t goneWID;
 static BOOL oldWriterAlive;
@@ -100,6 +103,7 @@ static CGError writeTransform(int cid,uint32_t wid,CGAffineTransform value) {
         assert(row && !row[@"veil_bare"] && [row[@"transform"]isEqual:matrix(nativeTransform)] && [row[@"bounds"]isEqual:nowBounds]);
     }
     (void)cid;(void)wid;transformWrites++;[nativeLog addObject:@"T"];if(!ignoreTransformWrites)nativeTransform=value;
+    if(moveAfterTransformWrite){moveAfterTransformWrite=NO;nativeBounds.origin.x+=7;} // the window moves between the write and the read of its origin
     if(failSyncAfterTransform){failSyncAfterTransform=NO;failNextSync=YES;}
     if(replaceAfterTransform){replaceAfterTransform=NO;ownerValue++;}
     return 0;
@@ -214,8 +218,10 @@ static void settledRestore(NSString *reason,BOOL retry,struct dw2_restore_reply 
         v2Restore(reason,YES,nil,summary);
     }
 }
+// What a restore of this entry writes at the native origin the window has now (v2RestoreTransform).
+static CGAffineTransform rebasedFor(DW2Entry *entry) { return v2RestoreTransform(entry->transform,entry->bounds.origin,nativeBounds.origin); }
 static void spaceRestoreSettlementCase(struct dw2_identity who) {
-    clearTables();ownerValue=7;spaceMembership[@42]=@[@2];
+    clearTables();ownerValue=7;spaceMembership[@42]=@[@2];nativeBounds.origin=CGPointMake(10,20);
     rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];
     DW2Entry *entry=[DW2Entry new];entry->who=who;entry->owner=7;entry->bounds=nativeBounds;
     entry->transform=CGAffineTransformMake(1,0,0,1,-10,-20);
@@ -230,12 +236,13 @@ static void spaceRestoreSettlementCase(struct dw2_identity who) {
     // The application changes native bounds and matrix after the first exact
     // readback. An immediate corrective setter must not hide this late change.
     uint64_t now=v2Now();assert(now>3000);entry->restoreSpaceStarted=now-2001;entry->restoreSpaceQuiet=now-501;
+    // The corrective write is the original re-based on where the window is now: it follows the reflowed origin (here 45 lower).
     nativeBounds.origin.y+=45;nativeTransform.ty+=45;
     v2Restore(@"late native reflow",YES,nil,&summary);
-    assert(summary.pending==1&&v2SameTransform(nativeTransform,entry->transform));
+    assert(summary.pending==1&&v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-10,-65))&&v2SameTransform(nativeTransform,rebasedFor(entry)));
     entry->restoreSpaceQuiet=v2Now()-501;nativeTransform.tx+=12;
     v2Restore(@"late matrix-only reflow",YES,nil,&summary);
-    assert(summary.pending==1&&v2SameTransform(nativeTransform,entry->transform));
+    assert(summary.pending==1&&v2SameTransform(nativeTransform,rebasedFor(entry)));
     entry->restoreSpaceQuiet=v2Now()-501;nativeAlpha=.4;
     v2Restore(@"late alpha change",YES,nil,&summary);assert(summary.pending==1&&nativeAlpha==entry->alpha);
     entry->restoreSpaceQuiet=v2Now()-501;boundsStatus=1000;
@@ -253,6 +260,8 @@ static void spaceRestoreSettlementCase(struct dw2_identity who) {
     v2Restore(@"stable original after reflow",YES,nil,&summary);
     assert(!summary.pending&&summary.journal_persisted&&spaceWrites==moves+1&&!v2Table.count
         &&v2SameTransform(nativeTransform,decoded->transform)&&CGRectEqualToRect(v2Released[@42]->bounds,nativeBounds));
+    assert(v2SameTransform(decoded->transform,CGAffineTransformMake(1,0,0,1,-10,-65))); // the retained record says what was written, at the bounds it was written for
+    nativeBounds.origin=CGPointMake(25,35);
     puts("PASS: Space restore retains journal through late bounds/matrix/alpha changes and crash, then releases only stable original properties");
 }
 static void removedSpaceCases(struct dw2_identity who) {
@@ -384,7 +393,7 @@ static void veilCases(struct dw2_identity who) {
     struct dw2_restore_reply summary={0};uint8_t status=255;
     struct dw2_record frame={.id=who,.m={2,0,0,2,-50,-70}};
     #define VEIL_RESET(alpha) do{ clearTables();nativeLog=[NSMutableArray array];rows=veilRows(0,NO);nativeAlpha=journalAlpha=(alpha);nativeTransform=CGAffineTransformMake(1,0,0,1,-25,-35);\
-        nativeBounds=CGRectMake(0,0,300,200);transformWrites=alphaWrites=0;failNextSync=NO;replaceOnSync=NO;ownerValue=7;goneWID=0;processPID=123;processUID=getuid();allowlist=nil;\
+        nativeBounds=CGRectMake(25,35,300,200);transformWrites=alphaWrites=0;failNextSync=NO;replaceOnSync=NO;ownerValue=7;goneWID=0;processPID=123;processUID=getuid();allowlist=nil;\
         atomic_store(&v2VeilOn,true);atomic_store(&v2VeilClient,999);requireJournalBeforeAlpha=ignoreAlphaWrites=requireVeilPlacedBeforeTransform=requireNoVeilAlphaBeforeAlpha=NO;ignoreTransformWrites=NO;replaceAfterTransform=NO; }while(0)
 
     // The capability exists only for the explicit same-user helper that can read and write alpha.
@@ -450,6 +459,15 @@ static void veilCases(struct dw2_identity who) {
     [nativeLog removeAllObjects];v2Apply(&frame,1,&status);
     assert(status==DW2_APPLIED && !nativeLog.count && atomic_load(&v2JournalWrites)==writesBefore+1); // later frames write neither again
     v2VeilExpire(v2Table[@42]);assert(v2Table[@42] && !alphaWrites==NO); // the bound ends nothing that was placed
+    // A window that is placed is never veiled again, however often the window server announces it (a Space change, an order out and in):
+    // no write, no record, and the shell's own alpha 0 (a hidden or minimized window) is not touched either.
+    {uint64_t placedWrites=atomic_load(&v2JournalWrites);unsigned alphaBefore=alphaWrites,transformBefore=transformWrites;[nativeLog removeAllObjects];
+        for(int announcements=0;announcements<3;announcements++)v2Veil(42);
+        assert(!nativeLog.count && alphaWrites==alphaBefore && transformWrites==transformBefore && atomic_load(&v2JournalWrites)==placedWrites && nativeAlpha==1 && !v2Table[@42]->veiled);}
+    // ... nor one the shell released (it stays where the application put it, at the alpha it had).
+    VEIL_RESET(1);v2Veil(42);v2VeilExpire(v2Table[@42]);assert(v2Released[@42] && nativeAlpha==1);
+    {unsigned alphaBefore=alphaWrites;uint64_t releasedWrites=atomic_load(&v2JournalWrites);for(int announcements=0;announcements<3;announcements++)v2Veil(42);
+        assert(alphaWrites==alphaBefore && atomic_load(&v2JournalWrites)==releasedWrites && !v2Table.count && nativeAlpha==1);}
     // ... or the record's own alpha.
     VEIL_RESET(1);v2Veil(42);[nativeLog removeAllObjects];frame.flags=DW2_RECORD_HAS_ALPHA;frame.alpha=.5f;
     v2Apply(&frame,1,&status);
@@ -520,7 +538,7 @@ static void veilCases(struct dw2_identity who) {
     VEIL_RESET(1);v2Veil(42);nativeTransform=moved;nativeBounds=movedBounds;[nativeLog removeAllObjects];failNextSync=YES;
     v2Apply(&frame,1,&status);
     assert(status==DW2_JOURNAL && !nativeLog.count && nativeAlpha==0 && v2JournalStale);
-    veiled=v2Table[@42];assert(veiled && veiled->veiled && veiled->veilBare && veiled->veilAlpha && v2SameTransform(veiled->transform,original) && CGRectEqualToRect(veiled->bounds,CGRectMake(0,0,300,200)));
+    veiled=v2Table[@42];assert(veiled && veiled->veiled && veiled->veilBare && veiled->veilAlpha && v2SameTransform(veiled->transform,original) && CGRectEqualToRect(veiled->bounds,CGRectMake(25,35,300,200)));
     v2Restore(@"first frame journal retry",YES,nil,&summary);assert(summary.journal_persisted && !v2JournalStale);
     requireVeilPlacedBeforeTransform=YES;v2Apply(&frame,1,&status);requireVeilPlacedBeforeTransform=NO;
     assert(status==DW2_APPLIED && v2SameTransform(v2Table[@42]->transform,moved) && !v2Table[@42]->veilBare);
@@ -746,6 +764,110 @@ static void spaceCases(struct dw2_identity who) {
     clearTables();spaceMembership=nil;copyWindowSpaces=NULL;copySpaceDisplay=NULL;displayCurrentSpace=NULL;getSpaceType=NULL;moveWindowsToSpace=NULL;createDisplayUUID=NULL;
     puts("PASS: optional Space journal, active cross-display policy, no-op target, commit/identity fences, uncertain forward and exact inverse retries; substituted calls only");
 }
+
+// The native frame of a window moves during a session: the application re-lays itself out, or WindowServer's own title drag moves it
+// before the shell takes the drag over. A window server transform carries the window's position, so the original captured at the
+// first touch (which says the old origin) written back as it was draws the window at its old place while its native frame, hit
+// testing and the next session's original are elsewhere (measured in the guest: Ghostty drawn at (601,417), native frame at
+// (494,399), after a takeover drag at zoom 1). Restoration re-bases the original on the origin read when it writes.
+static DW2Entry *heldOriginal(struct dw2_identity who,CGAffineTransform transform,CGRect bounds) {
+    DW2Entry *entry=[DW2Entry new];entry->who=who;entry->owner=7;entry->state=DW2_HELD;entry->transform=transform;entry->bounds=bounds;
+    v2Table[@(who.wid)]=entry;assert(v2Persist());return entry;
+}
+static void rebaseCases(struct dw2_identity who) {
+    mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;getTransform=readTransform;setTransform=writeTransform;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
+    fixtureOnly=NO;allowlist=nil;ownerValue=7;connectionStatus=0;processPID=123;processUID=getuid();goneWID=0;boundsStatus=0;transformReadStatus=0;
+    rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];
+    CGRect savedBounds=nativeBounds;CGAffineTransform savedTransform=nativeTransform;
+    struct dw2_restore_reply summary={0};CGAffineTransform canvas=CGAffineTransformMake(2,0,0,2,-300,-200);
+
+    // Unmoved: exactly the original, as before.
+    clearTables();nativeBounds=CGRectMake(25,35,300,200);nativeTransform=canvas;
+    DW2Entry *entry=heldOriginal(who,CGAffineTransformMake(1,0,0,1,-25,-35),nativeBounds);transformWrites=0;
+    v2Restore(@"unmoved",NO,nil,&summary);
+    assert(!summary.pending && transformWrites==1 && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-25,-35)) && v2Released[@42]==entry);
+
+    // Moved: the native frame is where the application or WindowServer left it, and that is where the window is put back. The retained
+    // record, and the journal it was written to, hold what is now on the window and the bounds it was written for.
+    clearTables();nativeBounds=CGRectMake(25,35,300,200);nativeTransform=canvas;
+    entry=heldOriginal(who,CGAffineTransformMake(1,0,0,1,-25,-35),nativeBounds);
+    nativeBounds=CGRectMake(80,20,300,200);transformWrites=0;
+    v2Restore(@"native frame moved during the session",NO,nil,&summary);
+    assert(!summary.pending && summary.journal_persisted && transformWrites==1 && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-80,-20)));
+    assert(v2SameTransform(entry->transform,nativeTransform) && CGRectEqualToRect(entry->bounds,nativeBounds) && v2Released[@42]==entry);
+    assert([readJournal()[@"released_windows"][0][@"transform"]isEqual:matrix(CGAffineTransformMake(1,0,0,1,-80,-20))]
+        && [readJournal()[@"released_windows"][0][@"bounds"]isEqual:(@[@80,@20,@300,@200])]);
+
+    // An original captured already displaced (an earlier session's stale restore: drawn at (601,417), frame at (494,399)) is a plain
+    // transform, native by definition, and is put right rather than carried into the next session.
+    clearTables();nativeBounds=CGRectMake(494,399,1319,692);nativeTransform=canvas;
+    heldOriginal(who,CGAffineTransformMake(1,0,0,1,-601,-417),nativeBounds);
+    v2Restore(@"stale original",NO,nil,&summary);
+    assert(!summary.pending && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-494,-399)));
+
+    // Any other original keeps its linear part and its place relative to the frame: t' = t - M*(origin - captured origin).
+    clearTables();nativeBounds=CGRectMake(50,35,300,200);nativeTransform=canvas;
+    heldOriginal(who,CGAffineTransformMake(2,0,0,2,-100,-70),nativeBounds);nativeBounds=CGRectMake(80,45,300,200);
+    v2Restore(@"scaled original",NO,nil,&summary);
+    assert(!summary.pending && v2SameTransform(nativeTransform,CGAffineTransformMake(2,0,0,2,-160,-90)));
+    clearTables();nativeBounds=CGRectMake(10,10,300,200);nativeTransform=canvas;
+    heldOriginal(who,CGAffineTransformMake(0,1,-1,0,5,7),nativeBounds);nativeBounds=CGRectMake(13,14,300,200);
+    v2Restore(@"rotated original",NO,nil,&summary);
+    assert(!summary.pending && v2SameTransform(nativeTransform,CGAffineTransformMake(0,1,-1,0,9,4)));
+    // Moved back, a non-plain original is exactly itself again.
+    clearTables();nativeBounds=CGRectMake(50,35,300,200);nativeTransform=canvas;
+    heldOriginal(who,CGAffineTransformMake(2,0,0,2,-100,-70),nativeBounds);
+    v2Restore(@"scaled original, unmoved",NO,nil,&summary);
+    assert(!summary.pending && v2SameTransform(nativeTransform,CGAffineTransformMake(2,0,0,2,-100,-70)));
+
+    // No origin, no re-based write: the captured original is the best that can be written, the window stays pending with its original
+    // and the bounds it was captured at on disk, and the next pass writes the re-based one.
+    clearTables();nativeBounds=CGRectMake(25,35,300,200);nativeTransform=canvas;
+    entry=heldOriginal(who,CGAffineTransformMake(1,0,0,1,-25,-35),nativeBounds);nativeBounds=CGRectMake(80,20,300,200);boundsStatus=1000;
+    v2Restore(@"origin unreadable",NO,nil,&summary);
+    assert(summary.pending==1 && v2Table[@42]==entry && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-25,-35)));
+    NSDictionary *diagnostic=v2LastRestore[@"results"][0][@"diagnostic"];
+    assert([diagnostic[@"origin_status"]isEqual:@1000] && diagnostic[@"native_origin"]==NSNull.null && diagnostic[@"target_transform"]==NSNull.null
+        && [diagnostic[@"captured_origin"]isEqual:(@[@25,@35])] && v2LastRestoreValid(v2LastRestore));
+    assert([readJournal()[@"windows"][0][@"transform"]isEqual:matrix(CGAffineTransformMake(1,0,0,1,-25,-35))] && [readJournal()[@"windows"][0][@"bounds"]isEqual:(@[@25,@35,@300,@200])]);
+    boundsStatus=0;v2Restore(@"origin readable again",YES,nil,&summary);
+    assert(!summary.pending && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-80,-20)) && CGRectEqualToRect(v2Released[@42]->bounds,nativeBounds));
+
+    // A window that moves between the write and the read of its origin is not restored by that write: pending, the original still on disk,
+    // and the next pass re-bases on where it is now.
+    clearTables();nativeBounds=CGRectMake(25,35,300,200);nativeTransform=canvas;
+    entry=heldOriginal(who,CGAffineTransformMake(1,0,0,1,-25,-35),nativeBounds);moveAfterTransformWrite=YES;
+    v2Restore(@"moved between write and read",NO,nil,&summary);
+    assert(summary.pending==1 && v2Table[@42]==entry && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-25,-35)) && nativeBounds.origin.x==32);
+    diagnostic=v2LastRestore[@"results"][0][@"diagnostic"];assert([diagnostic[@"native_origin"]isEqual:(@[@25,@35])]);
+    assert([readJournal()[@"windows"][0][@"state"]isEqual:@"restoring"] && [readJournal()[@"windows"][0][@"transform"]isEqual:matrix(CGAffineTransformMake(1,0,0,1,-25,-35))]);
+    v2Restore(@"moved window, second pass",YES,nil,&summary);
+    assert(!summary.pending && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-32,-35)) && v2SameTransform(v2Released[@42]->transform,nativeTransform));
+
+    // A crash between the move and the release: the journal holds the original and its origin, the next helper re-bases it.
+    clearTables();nativeBounds=CGRectMake(25,35,300,200);nativeTransform=canvas;
+    heldOriginal(who,CGAffineTransformMake(1,0,0,1,-25,-35),nativeBounds);
+    DW2Entry *decoded=v2DecodeEntry(readJournal()[@"windows"][0],NO);assert(decoded);
+    clearTables();v2Table[@42]=decoded;nativeBounds=CGRectMake(120,90,300,200);assert(v2Persist());
+    v2Restore(@"startup recovery after a move",NO,nil,&summary);
+    assert(!summary.pending && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-120,-90)));
+
+    // A retained original whose window moved is still re-based when it is taken up again after the Dock was replaced (the reset
+    // identity transform it finds is the reattachment guard's to accept; the geometry guard stays as strict as it was).
+    clearTables();nativeBounds=CGRectMake(25,35,300,200);nativeTransform=canvas;
+    heldOriginal(who,CGAffineTransformMake(1,0,0,1,-25,-35),nativeBounds);nativeBounds=CGRectMake(80,20,300,200);
+    v2Restore(@"to be retained",NO,nil,&summary);assert(!summary.pending);
+    DW2Entry *retained=v2Released[@42];[v2Released removeAllObjects];retained->reattaching=YES;retained->state=DW2_RESTORING;v2Table[@42]=retained;
+    nativeTransform=CGAffineTransformIdentity;transformWrites=0;
+    v2Restore(@"reattach after a Dock reset",YES,nil,&summary);
+    assert(!summary.pending && transformWrites==1 && v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-80,-20)));
+    nativeBounds.origin=CGPointMake(90,20); // moved again: the guard that exists to refuse a changed window still refuses
+    clearTables();retained->reattaching=YES;retained->state=DW2_RESTORING;v2Table[@42]=retained;nativeTransform=CGAffineTransformIdentity;transformWrites=0;
+    v2Restore(@"reattach of a moved window",YES,nil,&summary);assert(summary.pending==1 && !transformWrites);
+
+    clearTables();nativeBounds=savedBounds;nativeTransform=savedTransform;
+    puts("PASS: restoration re-bases the original on the native origin read at the write (plain originals are native, others keep their linear part), refuses a re-based write without an origin or with one that moved, and the journal keeps the captured pair until release; substituted calls only");
+}
 int main(void) { @autoreleasepool {
     mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;
     fixtureOnly=NO;processUID=getuid();
@@ -811,7 +933,7 @@ int main(void) { @autoreleasepool {
     v2RetryScheduled=YES; // This regression drives each retry explicitly on its sole test thread.
     clearTables();v2WriterIdentity=@{@"server_pid":@(getpid()),@"server_birth_sec":@1000,@"server_birth_usec":@0,@"server_uid":@(getuid()),@"boot_uuid":@(bootUUID)};
     DW2Entry *entry=[DW2Entry new];entry->who=recorded;entry->owner=7;
-    entry->transform=CGAffineTransformMake(1,0,0,1,-25,-35);entry->bounds=CGRectMake(0,0,300,200);
+    entry->transform=CGAffineTransformMake(1,0,0,1,-25,-35);entry->bounds=CGRectMake(25,35,300,200);
     v2Table[@42]=entry;rows=nil;
     struct dw2_restore_reply summary={0};NSMutableData *report=[NSMutableData data];
     v2Restore(@"query regression",NO,report,&summary);
@@ -945,7 +1067,7 @@ int main(void) { @autoreleasepool {
     // paired with bounds observed after restoration (a native resize is allowed).
     ownerValue=7;nativeTransform=CGAffineTransformMake(1,0,0,1,-25,-35);nativeAlpha=.8f;
     frame.flags=DW2_RECORD_HAS_ALPHA;frame.alpha=.5f;v2Apply(&frame,1,&status);assert(status==DW2_APPLIED);
-    nativeBounds=CGRectMake(0,0,350,250);v2Restore(@"released original",NO,nil,&summary);
+    nativeBounds=CGRectMake(25,35,350,250);v2Restore(@"released original",NO,nil,&summary);
     assert(!summary.pending && summary.journal_persisted && !v2Table.count && v2Released.count==1);
     assert(CGRectEqualToRect(v2Released[@42]->bounds,nativeBounds) && v2Released[@42]->alphaTouched && nativeAlpha==.8f);
     journal=readJournal();assert([journal[@"v"]isEqual:@3] && [journal[@"state"]isEqual:@"empty"] && [journal[@"released_windows"]count]==1);
@@ -955,7 +1077,7 @@ int main(void) { @autoreleasepool {
 
     // Re-admission snapshots current outside-canvas state; failure to commit that
     // replacement retains the old released original and writes no native state.
-    DW2Entry *releasedEntry=v2Released[@42];nativeTransform.tx=-40;nativeTransform.ty=-60;nativeAlpha=.7f;
+    DW2Entry *releasedEntry=v2Released[@42];nativeTransform.tx=-40;nativeTransform.ty=-60;nativeBounds.origin=CGPointMake(40,60);nativeAlpha=.7f;
     failNextSync=YES;v2Apply(&frame,1,&status);
     assert(status==DW2_JOURNAL && !v2Table.count && v2Released[@42]==releasedEntry && transformWrites==writes);
     v2Restore(@"journal retry",YES,nil,&summary);assert(summary.journal_persisted && !v2JournalStale);
@@ -1013,7 +1135,7 @@ int main(void) { @autoreleasepool {
 
     // A second crash must use the newer committed original, not historical
     // recovery-source bytes. Here the latest release differs deliberately.
-    requirePendingBeforeTransform=NO;nativeTransform.tx=-55;v2Apply(&frame,1,&status);assert(status==DW2_APPLIED);
+    requirePendingBeforeTransform=NO;nativeTransform.tx=-55;nativeBounds.origin.x=55;v2Apply(&frame,1,&status);assert(status==DW2_APPLIED);
     v2Restore(@"latest committed original",NO,nil,&summary);assert(!summary.pending && v2Released[@42]->transform.tx==-55);
     NSMutableDictionary *nextWriter=[currentWriter mutableCopy];nextWriter[@"server_pid"]=@789;nextWriter[@"server_birth_sec"]=@2000;
     v2WriterIdentity=nextWriter;nativeTransform=CGAffineTransformIdentity;clearTables();requirePendingBeforeTransform=YES;writes=transformWrites;
@@ -1065,6 +1187,7 @@ int main(void) { @autoreleasepool {
     spaceCases(recorded);
     sublevelCases(recorded);
     veilCases(recorded);
+    rebaseCases(recorded);
     // Malformed private paths are refused without waiting for a FIFO writer.
     assert(!mkfifoat(directoryFD,"recovery-source.json",0600));BOOL absent=YES;
     assert(!v2ReadJournal("recovery-source.json",&absent) && !absent);assert(!unlinkat(directoryFD,"recovery-source.json",0));

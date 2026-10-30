@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from malbiruk/driftwm tests/config_parse_test.rs at
-// 352333a8fa1b22171492d4b71a54102045c9a19d (GPL-3.0-or-later).
+// df3de27b26c7998e8a460cffd8a4925cbed3a322 (GPL-3.0-or-later).
 // Changes from upstream: crate paths only — `driftwm::config` reads
 // `driftwm_core::config` and `smithay::` reads `driftwm_core::platform::`.
 // Nothing else.
@@ -220,6 +220,17 @@ fn parse_action_center_nearest_down_left() {
 }
 
 #[test]
+fn parse_action_focus_nearest_up_right() {
+    let result = parse_action("focus-nearest up-right").unwrap();
+    assert!(matches!(result, Action::FocusNearest(Direction::UpRight)));
+}
+
+#[test]
+fn parse_action_focus_nearest_requires_a_direction() {
+    assert!(parse_action("focus-nearest").is_err());
+}
+
+#[test]
 fn parse_action_cycle_windows_forward() {
     let result = parse_action("cycle-windows forward").unwrap();
     assert!(matches!(result, Action::CycleWindows { backward: false }));
@@ -395,19 +406,19 @@ fn default_mouse_bindings_move_snapped_windows_on_alt_shift_left() {
 }
 
 #[test]
-fn default_mouse_bindings_resize_window_on_alt_right() {
+fn default_mouse_bindings_resize_snapped_on_alt_right() {
     let config = Config::default();
     let alt = mods(true, false, false, false);
     let result = config.mouse_button_lookup_ctx(&alt, BTN_RIGHT, BindingContext::OnWindow);
     assert!(result.is_some(), "Alt+Right on window should be bound");
     assert!(
-        matches!(result.unwrap(), MouseAction::ResizeWindow),
-        "Alt+Right on window should resolve to ResizeWindow by default (flag false)"
+        matches!(result.unwrap(), MouseAction::ResizeWindowSnapped),
+        "Alt+Right on window should resolve to ResizeWindowSnapped"
     );
 }
 
 #[test]
-fn default_mouse_bindings_resize_snapped_on_alt_shift_right() {
+fn default_mouse_bindings_resize_window_on_alt_shift_right() {
     let config = Config::default();
     let alt_shift = mods(true, false, true, false);
     let result = config.mouse_button_lookup_ctx(&alt_shift, BTN_RIGHT, BindingContext::OnWindow);
@@ -416,27 +427,27 @@ fn default_mouse_bindings_resize_snapped_on_alt_shift_right() {
         "Alt+Shift+Right on window should be bound"
     );
     assert!(
-        matches!(result.unwrap(), MouseAction::ResizeWindowSnapped),
-        "Alt+Shift+Right on window should resolve to ResizeWindowSnapped"
+        matches!(result.unwrap(), MouseAction::ResizeWindow),
+        "Alt+Shift+Right on window should resolve to ResizeWindow"
     );
 }
 
 #[test]
 fn decoration_resize_snapped_exposed_on_config() {
     let default_config = Config::default();
-    assert!(!default_config.decoration_resize_snapped);
+    assert!(default_config.decoration_resize_snapped);
 
-    let flipped = Config::from_toml("[mouse]\ndecoration_resize_snapped = true").unwrap();
-    assert!(flipped.decoration_resize_snapped);
+    let flipped = Config::from_toml("[mouse]\ndecoration_resize_snapped = false").unwrap();
+    assert!(!flipped.decoration_resize_snapped);
 }
 
 #[test]
 fn decoration_fit_snapped_exposed_on_config() {
     let default_config = Config::default();
-    assert!(!default_config.decoration_fit_snapped);
+    assert!(default_config.decoration_fit_snapped);
 
-    let flipped = Config::from_toml("[mouse]\ndecoration_fit_snapped = true").unwrap();
-    assert!(flipped.decoration_fit_snapped);
+    let flipped = Config::from_toml("[mouse]\ndecoration_fit_snapped = false").unwrap();
+    assert!(!flipped.decoration_fit_snapped);
 }
 
 #[test]
@@ -692,6 +703,63 @@ fn gesture_zoom_on_swipe_is_error() {
     );
 }
 
+/// Bare `focus-nearest` takes its direction from the input exactly as bare
+/// `center-nearest` does, so both parsers accept it on the same triggers.
+#[test]
+fn bare_focus_nearest_parses_wherever_bare_center_nearest_does() {
+    use driftwm_core::config::{GestureTrigger, parse_touch_config_entry};
+    type Parse = fn(&GestureTrigger, &str) -> Result<GestureConfigEntry, String>;
+    let fingers = 4;
+    let triggers = [
+        GestureTrigger::Swipe { fingers },
+        GestureTrigger::SwipeUp { fingers },
+        GestureTrigger::SwipeDown { fingers },
+        GestureTrigger::SwipeLeft { fingers },
+        GestureTrigger::SwipeRight { fingers },
+        GestureTrigger::DoubletapSwipe { fingers },
+        GestureTrigger::Pinch { fingers },
+        GestureTrigger::PinchIn { fingers },
+        GestureTrigger::PinchOut { fingers },
+        GestureTrigger::Hold { fingers },
+        GestureTrigger::Tap { fingers },
+        GestureTrigger::Doubletap { fingers },
+        GestureTrigger::HoldSwipe { fingers },
+        GestureTrigger::DoubletapHoldSwipe { fingers },
+    ];
+    let parsers: [(&str, Parse); 2] = [
+        ("gestures", parse_gesture_config_entry),
+        ("touch", parse_touch_config_entry),
+    ];
+    for (section, parse) in parsers {
+        for trigger in &triggers {
+            match (
+                parse(trigger, "center-nearest"),
+                parse(trigger, "focus-nearest"),
+            ) {
+                (Ok(_), Ok(entry)) => assert_eq!(
+                    entry,
+                    GestureConfigEntry::Threshold(ThresholdAction::FocusNearest),
+                    "[{section}] {trigger:?}"
+                ),
+                (Err(center), Err(focus)) => assert_eq!(
+                    focus,
+                    center.replace("center-nearest", "focus-nearest"),
+                    "[{section}] {trigger:?}"
+                ),
+                (center, focus) => {
+                    panic!(
+                        "[{section}] {trigger:?}: center-nearest {center:?}, focus-nearest {focus:?}"
+                    )
+                }
+            }
+        }
+    }
+    assert_eq!(
+        parse_mouse_action("focus-nearest"),
+        Ok(MouseAction::FocusNearest)
+    );
+}
+
 #[test]
 fn gesture_center_nearest_on_hold_is_error() {
     use driftwm_core::config::GestureTrigger;
@@ -752,7 +820,7 @@ fn gesture_doubletap_swipe_resize_snapped_is_valid() {
 }
 
 #[test]
-fn gesture_alt_shift_3_finger_swipe_defaults_to_resize_snapped() {
+fn gesture_alt_shift_3_finger_swipe_defaults_to_resize_window() {
     use driftwm_core::config::GestureTrigger;
     let config = Config::default();
     let alt_shift = mods(true, false, true, false);
@@ -765,10 +833,10 @@ fn gesture_alt_shift_3_finger_swipe_defaults_to_resize_snapped() {
         matches!(
             result,
             Some(GestureConfigEntry::Continuous(
-                ContinuousAction::ResizeWindowSnapped
+                ContinuousAction::ResizeWindow
             ))
         ),
-        "default Alt+Shift+3-finger-swipe on window should resolve to resize-snapped, got: {result:?}"
+        "default Alt+Shift+3-finger-swipe on window should resolve to resize-window, got: {result:?}"
     );
 }
 

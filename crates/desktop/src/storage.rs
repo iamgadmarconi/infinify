@@ -1,4 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// The bounds on what a saved scene, a request or a stand-in may hold are adapted
+// from malbiruk/driftwm v0.21.0 (df3de27b26c7998e8a460cffd8a4925cbed3a322),
+// third_party/driftwm/src/state/session_store.rs: CAMERA_LIMIT, POSITION_LIMIT,
+// valid_canvas_point, within_window_range, valid_camera_seed, MAX_BOOKMARKS,
+// MAX_BOOKMARK_NAME, bookmark_problem, bounded_bookmarks and DriftWm::set_bookmark,
+// valid_entry_geometry (a saved window outside the limits is dropped), and
+// third_party/driftwm/src/decorations.rs MAX_BUFFER_EXTENT, the stand-in ceiling.
+// Upstream's session store is a stand-in list; here the scene file holds a slot
+// for every window, and the same rule applies to each slot.
 use super::rules::{Pin, Policy};
 use super::*;
 use std::{
@@ -10,6 +19,86 @@ use std::{
 };
 const MAX_SAVE_BYTES: u64 = 32 * 1024 * 1024;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The canvas range `msg camera` and bookmarks may point the view at.
+/// Navigating to a window can take it a little further, up to the windows'
+/// [`POSITION_LIMIT`], which a restored camera is checked against.
+pub(crate) const CAMERA_LIMIT: f64 = 1e9;
+
+/// The canvas range a window position may lie in, saved or requested: the
+/// camera's range plus headroom, so a window placed beside one at the camera's
+/// edge still survives a restore. Any two positions inside it stay an `i32`
+/// apart, so window-to-window math can't overflow.
+pub(crate) const POSITION_LIMIT: i32 = 1_050_000_000;
+
+/// Upstream `decorations::MAX_BUFFER_EXTENT`: the most a stand-in can measure
+/// along either side, and so the largest a saved slot may be.
+pub(crate) const MAX_STANDIN_EXTENT: i32 = 16384;
+
+/// The registry takes no new name past this many bookmarks.
+pub(crate) const MAX_BOOKMARKS: usize = 256;
+/// Longest bookmark name, in bytes.
+pub(crate) const MAX_BOOKMARK_NAME: usize = 256;
+
+pub(crate) fn valid_canvas_point(x: f64, y: f64) -> bool {
+    x.is_finite() && y.is_finite() && x.abs() <= CAMERA_LIMIT && y.abs() <= CAMERA_LIMIT
+}
+
+/// Whether a point lies in the windows' range: where navigating to a window
+/// can take the view.
+pub(crate) fn within_window_range(x: f64, y: f64) -> bool {
+    let limit = f64::from(POSITION_LIMIT);
+    x.is_finite() && y.is_finite() && x.abs() <= limit && y.abs() <= limit
+}
+
+/// Why bookmark `name` at `[x, y]` can't be held, if it can't. Config seeds
+/// are the user's own and stand outside these bounds.
+fn bookmark_problem(name: &str, [x, y]: [f64; 2]) -> Option<String> {
+    if name.len() > MAX_BOOKMARK_NAME {
+        return Some(format!(
+            "bookmark names are at most {MAX_BOOKMARK_NAME} bytes"
+        ));
+    }
+    if !x.is_finite() || !y.is_finite() {
+        return Some("bookmark coordinates must be finite".to_string());
+    }
+    if !valid_canvas_point(x, y) {
+        return Some(format!(
+            "bookmark coordinates must be within ±{CAMERA_LIMIT:e}"
+        ));
+    }
+    None
+}
+
+/// A saved registry cut to what [`Controller::store_bookmark`] would have
+/// accepted, so a corrupt or hand-edited scene can't restore past it.
+fn bounded_bookmarks(saved: BTreeMap<String, [f64; 2]>) -> BTreeMap<String, [f64; 2]> {
+    saved
+        .into_iter()
+        .filter(|(name, point)| bookmark_problem(name, *point).is_none())
+        .take(MAX_BOOKMARKS)
+        .collect()
+}
+
+/// Upstream `valid_entry_geometry` for one saved window: sizes in
+/// `1..=MAX_STANDIN_EXTENT` and a top-left within [`POSITION_LIMIT`].
+fn valid_slot_geometry(rect: Rect) -> bool {
+    let sizes = 1.0..=f64::from(MAX_STANDIN_EXTENT);
+    let limit = f64::from(POSITION_LIMIT);
+    sizes.contains(&rect.size.width)
+        && sizes.contains(&rect.size.height)
+        && rect.origin.x.abs() <= limit
+        && rect.origin.y.abs() <= limit
+}
+
+/// Upstream `valid_camera_seed`: a saved camera is applied only inside the
+/// windows' range and a zoom inside the real zoom bounds. An invalid one is
+/// replaced by the origin at zoom 1 instead of warping every canvas conversion.
+fn valid_camera_seed(camera: Point, zoom: f64) -> bool {
+    within_window_range(camera.x, camera.y)
+        && zoom.is_finite()
+        && (driftwm_core::canvas::MIN_ZOOM_FLOOR..=driftwm_core::canvas::MAX_ZOOM).contains(&zoom)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -170,7 +259,7 @@ impl Controller {
         if bytes.len() as u64 > MAX_SAVE_BYTES {
             return Err(Error::Invalid("save exceeds 32 MiB"));
         }
-        let saved: Saved = serde_json::from_slice(&bytes)?;
+        let mut saved: Saved = serde_json::from_slice(&bytes)?;
         if saved.version != SAVE_VERSION {
             return Err(Error::Invalid("unsupported desktop save schema"));
         }
@@ -192,6 +281,33 @@ impl Controller {
                 return Err(Error::Invalid("invalid saved metadata"));
             }
         }
+        // Upstream valid_entry_geometry: a saved window whose size is past what
+        // a stand-in can be, or whose position lies past the window range, is
+        // dropped with everything saved about it, and the rest restore. The
+        // focus is not handed on to another window, as upstream starts
+        // unfocused when the focused one is not restored.
+        let outside: Vec<WindowId> = saved
+            .scene
+            .windows()
+            .iter()
+            .filter(|w| !valid_slot_geometry(w.world_rect))
+            .map(|w| w.id)
+            .collect();
+        if !outside.is_empty() {
+            let unfocus = saved
+                .scene
+                .focused()
+                .is_some_and(|id| outside.contains(&id));
+            for id in &outside {
+                saved.scene.remove_window(*id)?;
+                saved.metadata.remove(id);
+                saved.standins.remove(id);
+                saved.pins.remove(id);
+            }
+            if unfocus {
+                saved.scene.clear_focus();
+            }
+        }
         let mut ids = std::collections::BTreeSet::new();
         let mut validation = Scene::new();
         for (id, output) in &saved.outputs {
@@ -206,10 +322,9 @@ impl Controller {
             }
             validation.add_output(output.viewport.clone())?;
         }
-        // Names are unrestricted, as upstream's are: load accepts what set stores.
-        if saved.bookmarks.values().flatten().any(|v| !v.is_finite()) {
-            return Err(Error::Invalid("invalid saved bookmark"));
-        }
+        // Upstream bounded_bookmarks: a registry past what `set` would accept
+        // is cut to the entries it would have, not refused as a whole.
+        saved.bookmarks = bounded_bookmarks(saved.bookmarks);
         if saved
             .standins
             .iter()
@@ -228,6 +343,12 @@ impl Controller {
         let mut outputs = saved.outputs;
         for output in outputs.values_mut() {
             output.seed = CameraSeed::File;
+            // Upstream valid_camera_seed: a saved camera that no window could
+            // put the view at is not restored.
+            if !valid_camera_seed(output.viewport.camera, output.viewport.zoom) {
+                output.viewport.camera = Point::default();
+                output.viewport.zoom = 1.0;
+            }
         }
         let mut controller = Self {
             scene: saved.scene,
@@ -279,5 +400,22 @@ impl Controller {
         // need not mutate a newly loaded controller to finish restoring it.
         controller.settle_state()?;
         Ok(controller)
+    }
+}
+impl Controller {
+    /// Upstream `DriftWm::set_bookmark`: set bookmark `name` to `point`,
+    /// refusing a new name once the registry holds [`MAX_BOOKMARKS`], and an
+    /// overlong name or out-of-range point.
+    pub(crate) fn store_bookmark(&mut self, name: String, point: [f64; 2]) -> Result<(), String> {
+        if let Some(problem) = bookmark_problem(&name, point) {
+            return Err(problem);
+        }
+        if !self.bookmarks.contains_key(&name) && self.bookmarks.len() >= MAX_BOOKMARKS {
+            return Err(format!(
+                "at most {MAX_BOOKMARKS} bookmarks can be set; delete one first"
+            ));
+        }
+        self.bookmarks.insert(name, point);
+        Ok(())
     }
 }

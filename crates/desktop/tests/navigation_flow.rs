@@ -243,6 +243,7 @@ fn oracle(trace: &str) -> Vec<Value> {
             "outer_frame_inset" => Some("/*OUTER_FRAME_INSET*/"),
             "pull" => Some("/*PULL*/"),
             "visual_frame_center" => Some("/*VISUAL_FRAME_CENTER*/"),
+            "zoom_anchor_camera" => Some("/*ZOOM_ANCHOR_CAMERA*/"),
             _ => None,
         };
         if let Some(marker) = marker {

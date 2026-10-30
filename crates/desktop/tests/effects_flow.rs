@@ -210,7 +210,8 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     assert_eq!(Config::from_toml("").unwrap().effects, defaults);
     assert_eq!(
         block(&defaults),
-        json!({"blur_radius":2,"blur_strength":1.1,"animate_blur_fps":20,"animation_speed":0.5,"animation_scale":0.95})
+        // v0.20: blur_radius 2 -> 5 and blur_strength 1.1 -> 1.5.
+        json!({"blur_radius":5,"blur_strength":1.5,"animate_blur_fps":20,"animation_speed":0.5,"animation_scale":0.95})
     );
     assert_eq!(h.render()["effects"], block(&defaults));
     open(&mut h);
@@ -293,7 +294,7 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     h.configure(&scratch, endless);
     assert_eq!(
         h.render()["effects"],
-        json!({"blur_radius":2,"blur_strength":0.0,"animate_blur_fps":20,"animation_speed":0.5,"animation_scale":0.95})
+        json!({"blur_radius":5,"blur_strength":0.0,"animate_blur_fps":20,"animation_speed":0.5,"animation_scale":0.95})
     );
     assert_eq!(h.revision(), before + 1);
 
@@ -304,7 +305,7 @@ fn the_effects_block_is_cores_parsed_table_and_a_change_spends_a_revision() {
     assert_eq!(launched.render()["effects"]["animation_speed"], 1.0);
     assert_eq!(launched.revision(), 1);
     let mut plain = Host::new();
-    plain.configure(&scratch, "[effects]\nblur_radius = 2\n");
+    plain.configure(&scratch, "[effects]\nblur_radius = 5\n"); // the default since v0.20
     assert_eq!(plain.render()["effects"], block(&defaults));
     assert_eq!(plain.revision(), 1);
 }

@@ -1202,6 +1202,7 @@ impl Controller {
                     output: name,
                     app_id: metadata.bundle_id.clone(),
                     title: metadata.title.clone(),
+                    pid: self.window_pid(entry.window),
                 })
             })
             .collect();
