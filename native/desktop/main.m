@@ -3344,6 +3344,22 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
     if(DWInputTrace())fprintf(stderr,"debug: native chrome owned window=#%s kind=%s gesture=%ld\n",source.logical.description.UTF8String,border?"resize":actionBinding?"binding":"title",(long)view.gesture);
     return YES;
 }
+// Is a mouse-moved packet at `point`, over the managed native window `root` (the window server's own answer to what is under the
+// pointer), one the application must not get: below [zoom] interact_min (DWPickMotion, controller-hit.h) a canvas window is a pick target
+// and a widget, a screen-pinned and a fullscreen window are not (upstream's pointer_focus_under_pick; their placement says which). The
+// window server delivers the motion to the real window under the pointer by itself, so the tap dropping the packet is all that keeps
+// hover from the application. Every moved packet comes here, so nothing in it calls the controller: the last render's outputs say
+// whether the pointer's output is in pick mode, and only then is the last rendered presentation's placement of the window read.
+- (BOOL)pickMotionAt:(CGPoint)point window:(NSNumber *)root {
+    static NSDictionary *pick;if(!pick)pick=@{@"pick":@YES};
+    return DWPickMotion(self.pointerOutputs,point,^NSDictionary *(NSNumber *output){
+        for(NSNumber *logical in self.sources){LiveSource *source=self.sources[logical];
+            if(source.detached||source.router.wid!=root.unsignedIntValue)continue;
+            for(NSDictionary *placement in self.renderedPresentation[@"placements"])if([placement[@"window"]isEqual:logical]&&[placement[@"output"]isEqual:output])
+                return [placement[@"widget"]boolValue]||[placement[@"pinned"]boolValue]||[placement[@"fullscreen"]boolValue]?nil:pick;
+            return nil;}
+        return nil;});
+}
 - (BOOL)nativeInput:(CGEventType)type event:(CGEventRef)cg {
     int64_t tag=CGEventGetIntegerValueField(cg,kCGEventSourceUserData);
     if(tag&&[self.postingTags containsObject:@(tag)])return NO;
@@ -3501,6 +3517,9 @@ static OSStatus viewKey(EventHandlerCallRef next,EventRef event,void *context) {
         if(!wid)wid=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(CGEventGetLocation(cg).x,screenTop()-CGEventGetLocation(cg).y) belowWindowWithWindowNumber:0];
         NSNumber *root=[self.native rootWindowFor:wid];CGPoint point=CGEventGetLocation(cg);
         if(root){NSEvent *motion=[NSEvent eventWithCGEvent:cg];if(motion)for(DesktopView *view in self.views)if([view outputAt:point]){[view.hover nativeMotion:motion];break;}}
+        // Below [zoom] interact_min a window takes no pointer input, hover included (POINTER.md): the canvas has had this motion above, so
+        // its own hover, sloppy focus and edge pan go on, and the packet goes no further. The window server has already moved the cursor.
+        if(root&&[self pickMotionAt:point window:root])return YES;
         if(now-self.nativeButtonMotion<.1)return NO;self.nativeButtonMotion=now;self.nativeButtonHover=nil;
         for(LiveSource *source in self.sources.allValues)if(!source.detached&&source.router.wid==root.unsignedIntValue){self.nativeButtonHover=source.logical;[self refreshNativeButtons:source];break;}
         if(!self.nativeButtonHover)for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==wid){

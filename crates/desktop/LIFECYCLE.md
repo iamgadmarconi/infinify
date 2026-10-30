@@ -214,7 +214,11 @@ its id, frame and place in the stack, and it keeps the focus if it had it. It
 drops out of the focus history. Nothing else is refocused.
 
 **The window leaves** (`standin: false`): it is removed from the scene, and
-focus follows as upstream's does. Focus moves only when the window held it, or
+focus follows as upstream's does. A window that was fitted with a snapped fit
+first puts back the neighbours the fit pushed aside (v0.20.0
+`release_fit_push`: after the first tier's pick below, before the visibility
+tests of the tiers; a stand-in leaves them where the fit put them,
+[SIZES.md](SIZES.md#closing-a-snapped-fit-window-puts-the-neighbours-back-v0200)). Focus moves only when the window held it, or
 when nothing was focused; any other focused window, a detached placeholder
 included, keeps the focus through the close. The follower is, in order:
 

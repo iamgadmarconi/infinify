@@ -19,7 +19,10 @@
 // include their title bar, so chrome is zero. A window's size is its source
 // rectangle's; its position is only ever the policy's. Upstream's marks and
 // pending relaunches expire by wall clock; here they lapse on the clock
-// `tick_navigation` brings.
+// `tick_navigation` brings. `depart` also follows v0.21.0 (df3de27b, read at
+// third_party/driftwm): toplevel_destroyed's release_fit_push call, after the
+// spatial pick and before the visibility checks, for a real close and never
+// for a stand-in conversion (sizes.rs has release_fit_push).
 use super::actions::Outcome;
 use super::ipc::{WindowSelector, readable};
 use super::rules::Pin;
@@ -631,12 +634,18 @@ impl Controller {
             .window(window)
             .ok_or(Error::Invalid("unknown window"))?
             .world_rect;
-        let live = |id: &WindowId| self.sources.contains_key(id);
-        let history = self.scene.stage().focus_history();
         let follows = match self.scene.focused() {
             Some(focused) => focused == window,
-            None => live(&window),
+            None => self.sources.contains_key(&window),
         };
+        // Upstream toplevel_destroyed: the pick reads the cluster around the
+        // fit as it stands, then release_fit_push puts back the neighbours a
+        // snapped fit pushed aside, and only then do the visibility checks
+        // below see where they landed. A stand-in conversion never gets here.
+        let picked = follows.then(|| self.spatially_related(window, rect));
+        self.release_fit_push(window);
+        let history = self.scene.stage().focus_history();
+        let live = |id: &WindowId| self.sources.contains_key(id);
         let showing = self
             .scene
             .outputs()
@@ -648,10 +657,8 @@ impl Controller {
             .or_else(|| self.scene.outputs().first().map(|o| o.id));
         let home = showing.or(active);
         let seen = |id: WindowId| active.is_some_and(|output| self.fully_on(id, output));
-        let follow = follows.then(|| {
-            let related = self
-                .spatially_related(window, rect)
-                .filter(|id| self.config().auto_navigate_on_close || seen(*id));
+        let follow = picked.map(|picked| {
+            let related = picked.filter(|id| self.config().auto_navigate_on_close || seen(*id));
             match (related, active) {
                 (Some(id), _) if seen(id) => Follow::Raise(id),
                 (Some(id), Some(output)) => Follow::Fly(id, output),

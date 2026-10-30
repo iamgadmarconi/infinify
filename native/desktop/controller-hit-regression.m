@@ -36,6 +36,33 @@ int main(void){@autoreleasepool{
     check([found[@"hit"]isKindOfClass:NSDictionary.class]&&window!=nil,@"a point inside the window gives an object hit");
     check([DWControllerHit(found[@"hit"],NO,nil)isEqual:found[@"hit"]]&&[DWControllerHit(found[@"hit"],YES,window)isEqual:found[@"hit"]],@"a real hit passes on both paths when the renderer agrees");
     check(DWControllerHit(found[@"hit"],YES,@(window.integerValue+1))==nil,@"on the ordered path a hit on another window than the renderer's top one is refused");
+    // Below [zoom] interact_min a mouse-moved packet over a window is the controller's pick, not the application's (DWPickMotion): the
+    // real controller's snapshot and hit, read as the tap reads them. interact_min is its default, 0.5.
+    __block NSUInteger asked=0;
+    NSDictionary *(^hitAt)(NSNumber *)=^NSDictionary *(NSNumber *output){asked++;
+        NSDictionary *reply=call(c,@{@"op":@"hit",@"output":output,@"screen":@{@"x":@(centre.x),@"y":@(centre.y)}});return [reply[@"hit"]isKindOfClass:NSDictionary.class]?reply[@"hit"]:nil;};
+    NSArray *outputs=call(c,@{@"op":@"snapshot"})[@"outputs"];
+    check(![outputs.firstObject[@"pick"]isEqual:@YES],@"zoom 1 is above interact_min: the output is not in pick mode");
+    check(!DWPickMotion(outputs,centre,hitAt)&&asked==0,@"above interact_min a moved packet is the application's, and the controller is not asked for a hit");
+    call(c,@{@"op":@"zoom",@"output":@1,@"zoom":@0.4,@"anchor":@{@"x":@0,@"y":@0}});
+    outputs=call(c,@{@"op":@"snapshot"})[@"outputs"];
+    check([outputs.firstObject[@"pick"]isEqual:@YES],@"zoom 0.4 is below interact_min: the output is in pick mode");
+    snapshot=call(c,@{@"op":@"snapshot"});
+    at=[snapshot[@"placements"]firstObject][@"screen_rect"];
+    CGPoint small=CGPointMake([at[@"origin"][@"x"]doubleValue]+[at[@"size"][@"width"]doubleValue]/2,[at[@"origin"][@"y"]doubleValue]+[at[@"size"][@"height"]doubleValue]/2);
+    hitAt=^NSDictionary *(NSNumber *output){asked++;
+        NSDictionary *reply=call(c,@{@"op":@"hit",@"output":output,@"screen":@{@"x":@(small.x),@"y":@(small.y)}});return [reply[@"hit"]isKindOfClass:NSDictionary.class]?reply[@"hit"]:nil;};
+    check(DWPickMotion(outputs,small,hitAt)&&asked==1,@"below interact_min a moved packet over a window is dropped, on one hit");
+    asked=0;hitAt=^NSDictionary *(NSNumber *output){asked++;(void)output;return nil;};
+    check(!DWPickMotion(outputs,CGPointMake(999,799),hitAt)&&asked==1,@"over empty canvas (no hit) the packet is the canvas's");
+    check(!DWPickMotion(outputs,CGPointMake(-5,-5),hitAt)&&asked==1,@"a point on no output is nobody's pick");
+    hitAt=^NSDictionary *(NSNumber *output){(void)output;return @{@"window":@1,@"widget":@YES};};
+    check(!DWPickMotion(outputs,small,hitAt),@"a hit that is no pick target (a widget, a pinned or a fullscreen window) keeps its pointer");
+    check(!DWPickMotion(@[NSNull.null,@"x",@{@"id":@1}],small,hitAt)&&!DWPickMotion(nil,small,hitAt)&&!DWPickMotion(outputs,small,nil),@"malformed outputs and a missing hit are no pick");
+    call(c,@{@"op":@"zoom",@"output":@1,@"zoom":@0.5,@"anchor":@{@"x":@0,@"y":@0}});
+    outputs=call(c,@{@"op":@"snapshot"})[@"outputs"];asked=0;
+    hitAt=^NSDictionary *(NSNumber *output){asked++;(void)output;return @{@"window":@1,@"pick":@YES};};
+    check(![outputs.firstObject[@"pick"]isEqual:@YES]&&!DWPickMotion(outputs,small,hitAt)&&asked==0,@"at interact_min itself the window has its pointer again (strictly below)");
     driftwm_desktop_destroy(c);
     fprintf(stderr,"controller-hit: all checks passed\n");return 0;
 }}

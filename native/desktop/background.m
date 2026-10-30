@@ -2044,14 +2044,11 @@ static IFBGTileLayout *IFBGTileLayoutMake(IFBGTiffSource *source, NSString **err
         layout->sizes[i] = raw[i] * (long)layout->aggregations[i];
     }
     // The fallback plane is the finest LOD that fits FALLBACK_MAX_DIM, else the
-    // coarsest; the LODs past it are not used.
-    NSUInteger fallback = usable - 1;
-    for (NSUInteger i = 0; i < usable; i++) {
-        if (MAX(layout->levels[i].imageWidth, layout->levels[i].imageHeight) <= kIFBGFallbackMaxDim) {
-            fallback = i;
-            break;
-        }
-    }
+    // coarsest, which has to be small enough to hold whole (v0.21.0 `whole_lod`:
+    // past 16384 px a side it is an error and not an allocation that can abort);
+    // the LODs past it are not used.
+    NSUInteger fallback = IFBGTiffWholeLevel(layout->levels, usable, kIFBGFallbackMaxDim, error);
+    if (fallback == NSNotFound) return nil;
     layout->lodCount = (uint32_t)fallback + 1;
     // `Point::from((-(image_dims.0 as i32) / 2, -(image_dims.1 as i32) / 2))`
     layout->positionX = -layout->imageW / 2;
@@ -2874,15 +2871,19 @@ static void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, N
             // The finest level that fits one bounded texture, else the coarsest,
             // among every page of the file; stretched over the full-resolution
             // extent by `_textureSize`, so it lands where the chunks would.
-            NSUInteger count = _tiff.levelCount, lod = count - 1;
-            for (NSUInteger i = 0; i < count; i++) {
-                IFBGTiffLevel level = [_tiff levelAtIndex:i];
-                if (MAX(level.imageWidth, level.imageHeight) <= kIFBGFallbackMaxDim) {
-                    lod = i;
-                    break;
-                }
-            }
-            if (lod == (NSUInteger)_layout->lodCount - 1 && _fallbackHoles == 0) {
+            // capture_background.rs prepare_tiff: `whole_lod(&lods, TIFF_LOD_CAP)`, and a level
+            // past the whole-decode limit leaves the capture without a background.
+            NSUInteger count = _tiff.levelCount;
+            IFBGTiffLevel levels[kIFBGMaxTileLODs];
+            for (NSUInteger i = 0; i < count && i < kIFBGMaxTileLODs; i++) levels[i] = [_tiff levelAtIndex:i];
+            NSString *whole = nil;
+            NSUInteger lod = IFBGTiffWholeLevel(levels, MIN(count, (NSUInteger)kIFBGMaxTileLODs), kIFBGFallbackMaxDim, &whole);
+            if (lod == NSNotFound) {
+                NSLog(@"background: capture background '%@': %@", _config.path, whole);
+                twin->_kind = IFBackgroundKindNone;
+                twin->_pipeline = nil;
+                twin->_texture = nil;
+            } else if (lod == (NSUInteger)_layout->lodCount - 1 && _fallbackHoles == 0) {
                 // The fallback plane's level, whole: the texture already loaded.
                 twin->_transparent = _fallbackTransparency;
             } else {

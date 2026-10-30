@@ -170,6 +170,7 @@
 @property CGPoint startPoint,lastPoint;
 @property NSNumber *dragOutput,*resizeTransaction;
 @property CFTimeInterval liftSeen,lastDragPan;
+@property CFTimeInterval takenOverAt; // as main.m: a native window drag taken over; 0 here
 @property InputHover *hover;
 - (BOOL)nativeTitlePressCurrent;
 - (NSNumber *)outputAt:(CGPoint)point;

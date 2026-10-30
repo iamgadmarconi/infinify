@@ -5,14 +5,16 @@
 // requested_element_size, placed_element_size), src/state/fit.rs
 // (compute_fit_geometry, fit_window, unfit_window, fit_window_snapped,
 // unfit_window_snapped, snap_rects_with_primary, shift_cluster_around_primary,
-// snap_rect_at), src/state/fill.rs (compute_fill_geometry, fill_window,
-// unfill_window, fill_restore_view), src/state/cluster_snapshot.rs
+// snap_rect_at, release_fit_push, shift_fit_cluster), src/state/fill.rs
+// (compute_fill_geometry, fill_window, unfill_window, fill_restore_view),
+// src/state/cluster_snapshot.rs
 // (cluster_snapshot_for_resize_with_rects, apply_member_shifts,
 // compute_shifts), src/state/recenter.rs (establish_exit_placement),
 // src/state/window_frame.rs (visual_frame_center, frame_loc_for_center,
 // configured_window_size as fit.rs and fill.rs read it),
 // src/handlers/xdg_shell.rs (maximize_request), src/state/fit.rs
-// (decoration_toggle_fit), src/state/navigation.rs (the RestoreFillElseReset leg of
+// (decoration_toggle_fit; toplevel_destroyed's release_fit_push call is in
+// lifecycle.rs), src/state/navigation.rs (the RestoreFillElseReset leg of
 // navigate_to_window_on), src/state/persistence.rs (window_mode),
 // src/grabs/resize_grab.rs (SizeConstraints::clamp), src/input/actions.rs (the
 // GrowWindow, ShrinkWindow, FitWindow, FitWindowSnapped, FillWindow and
@@ -21,8 +23,8 @@
 // are driftwm-core's `layout::fill::fill_rect` and `layout::cluster::
 // {cluster_of, adjacent_side, resolve_cluster_shifts}`, upstream's own code.
 // The restore state is driftwm-core `stage`'s per-entry `fit_saved_size`,
-// `fill_saved` and `restore_size`, kept here by window ID because the scene
-// is not that stage.
+// `fit_push` (its `FitPush` record, used as it is), `fill_saved` and
+// `restore_size`, kept here by window ID because the scene is not that stage.
 //
 // Upstream writes a placement for the size it asks a client for and lets the
 // client answer later. Here a size reaches a native window only through the
@@ -51,6 +53,7 @@ use driftwm_core::layout::cluster::{
 };
 use driftwm_core::layout::fill::fill_rect;
 use driftwm_core::layout::snap::SnapRect;
+use driftwm_core::stage::FitPush;
 use std::collections::{HashSet, VecDeque};
 
 /// A location or a size in upstream's whole logical pixels.
@@ -87,6 +90,11 @@ enum Restore {
         /// Upstream configured_window_size while fit: the size the fit asked
         /// for, which the size the window then took never replaces.
         configured: Px,
+        /// Upstream stage `fit_push`, set only by a snapped fit that moved a
+        /// neighbour: the frames it pushed the cluster between. Lives and dies
+        /// with fit membership, and is what a closing fit window puts back
+        /// (`release_fit_push`).
+        push: Option<FitPush>,
     },
     Fill(FillSaved),
 }
@@ -546,17 +554,24 @@ impl Controller {
             Plan::Fit {
                 saved_size, shove, ..
             } => {
-                if let Some((old, new)) = shove {
-                    self.shove_cluster(window, *old, *new);
-                }
+                // Upstream fit_window_snapped: the push is recorded only when a
+                // neighbour really moved.
+                let push = shove.and_then(|(old, new)| {
+                    self.shove_cluster(window, old, new).then_some(FitPush {
+                        fitted: new,
+                        home: old,
+                    })
+                });
                 self.sizes.restore_size.entry(window).or_insert(*saved_size);
-                // Upstream set_fit, then clear_fill. The size asked for is the
-                // one the window is configured with for as long as it is fit.
+                // Upstream set_fit, then set_fit_push, then clear_fill. The
+                // size asked for is the one the window is configured with for
+                // as long as it is fit.
                 self.sizes.restore.insert(
                     window,
                     Restore::Fit {
                         saved_size: *saved_size,
                         configured: asked.requested,
+                        push,
                     },
                 );
                 self.sizes.asked.remove(&window);
@@ -1077,6 +1092,7 @@ impl Controller {
             Some(Restore::Fit {
                 saved_size,
                 configured,
+                ..
             }) => Some((*saved_size, *configured)),
             _ => None,
         };
@@ -1482,21 +1498,41 @@ impl Controller {
     /// window follow its edges from `old` to `new`, in two passes over the
     /// resize cluster: right and bottom, then left and top. Each member moves
     /// by whole pixels and loses its fill restore point. Members keep their
-    /// stacking, which upstream's re-map raises.
-    fn shove_cluster(&mut self, primary: WindowId, old: SnapRect, new: SnapRect) {
+    /// stacking, which upstream's re-map raises. Upstream shift_fit_cluster's
+    /// answer: whether any member moved.
+    fn shove_cluster(&mut self, primary: WindowId, old: SnapRect, new: SnapRect) -> bool {
         let dx_right = (new.x_high - old.x_high) as i32;
         let dx_left = (new.x_low - old.x_low) as i32;
         let dy_bottom = (new.y_high - old.y_high) as i32;
         let dy_top = (new.y_low - old.y_low) as i32;
         if dx_right == 0 && dx_left == 0 && dy_bottom == 0 && dy_top == 0 {
-            return;
+            return false;
         }
-        self.shove_pass(primary, old, true, dx_right, dy_bottom);
-        self.shove_pass(primary, old, false, -dx_left, -dy_top);
+        let right_bottom = self.shove_pass(primary, old, true, dx_right, dy_bottom);
+        let left_top = self.shove_pass(primary, old, false, -dx_left, -dy_top);
+        right_bottom || left_top
+    }
+    /// Upstream release_fit_push, for a fit window that is closing: the unfit
+    /// that would have put the cluster back never runs, so the cluster goes
+    /// from the frame the snapped fit pushed it around to the frame it pushed
+    /// it away from, found around that frame in the windows as they are now. A
+    /// neighbour the user has moved off the fitted frame since is no member of
+    /// that cluster and stays where it was put. The record is spent here; a
+    /// window that becomes a stand-in never gets here (upstream's
+    /// convert_to_suspended clears the fit), so a suspension leaves the
+    /// neighbours where the fit put them.
+    pub(crate) fn release_fit_push(&mut self, window: WindowId) {
+        let Some(Restore::Fit { push, .. }) = self.sizes.restore.get_mut(&window) else {
+            return;
+        };
+        if let Some(push) = push.take() {
+            self.shove_cluster(window, push.fitted, push.home);
+        }
     }
     /// One pass: upstream cluster_snapshot_for_resize_with_rects classifies the
     /// cluster against the frame the deltas are measured from, and
-    /// apply_member_shifts moves whoever `resolve_cluster_shifts` shifts.
+    /// apply_member_shifts moves whoever `resolve_cluster_shifts` shifts. True
+    /// when a member moved.
     fn shove_pass(
         &mut self,
         primary: WindowId,
@@ -1504,7 +1540,7 @@ impl Controller {
         right_bottom: bool,
         width_delta: i32,
         height_delta: i32,
-    ) {
+    ) -> bool {
         let gap = self.config().snap_gap;
         // Upstream snap_rects_with_primary: the primary counts where it was.
         let rects: Vec<(WindowId, SnapRect)> = self
@@ -1586,6 +1622,7 @@ impl Controller {
         );
         let mut shifts: Vec<(usize, (i32, i32))> = shifts.into_iter().collect();
         shifts.sort_by_key(|(index, _)| *index);
+        let mut any = false;
         for (index, (dx, dy)) in shifts {
             let id = members[index].0;
             let Some(rect) = self.scene.window(id).map(|w| w.world_rect) else {
@@ -1594,8 +1631,10 @@ impl Controller {
             let moved = rect.translated(Point::new(dx.into(), dy.into()));
             if readable(moved).is_ok() && self.scene.set_window_rect(id, moved).is_ok() {
                 self.sizes.clear_fill(id);
+                any |= moved.origin != rect.origin;
             }
         }
+        any
     }
 
     /// Upstream fill_restore_view: the camera and zoom a window's fill was

@@ -169,15 +169,21 @@ review of upstream's semantics.
   implemented at `352333a8`; the re-pin changes its default to 0.5 and the row
   now states what was and was not looked at in the shell (a press, drag and
   scroll over a pick target are taken in native desktop mode; a pen's tablet
-  packets over one are now taken as well; pointer motion over one is not taken,
-  as far as the source reads) and what was run (`crates/desktop/tests/
+  packets over one are now taken as well; pointer motion over one is dropped by
+  the tap since 2026-10-30, measured in the guest: POINTER.md) and what was run (`crates/desktop/tests/
   interact_min_flow.rs`, 4 scenarios on the default configuration).
 
 **Stays missing.** `layout.fit_push_restore` (closing a window fitted with a
 snapped fit puts back the neighbours the fit pushed aside: driftwm-core carries
-the record, the controller does not use it) and `platform.tiff_wallpaper_abort`
+the record, the controller does not use it; *since 2026-10-30 this row is
+`implemented_unverified`: the controller records the push and the close releases
+it, see its note and `crates/desktop/SIZES.md`; the counts above are those of the
+re-pin and are not rewritten*) and `platform.tiff_wallpaper_abort`
 (Infinify decodes TIFF wallpapers in its own Objective-C, which this re-pin did
-not audit). The 72 rows that were `missing` stay so; none of the v0.21 items made
+not audit; *since 2026-10-30 it is `implemented_unverified` too: upstream's
+whole-level limit is ported, a crash in the tile reader's error path is fixed and
+crafted files and mutations are run, see its note and
+`native/desktop/BACKGROUND-NOTES.md` 17.10*). The 72 rows that were `missing` stay so; none of the v0.21 items made
 one implemented.
 
 **Out of scope, and why.** Nine behavior rows and two protocol rows are new and

@@ -305,7 +305,7 @@ adapted at, which this update re-read only where the v0.20/v0.21 changes touch i
 | `nudge_step` / `resize_step` in screen pixels; `fit-window` edge to edge | `keyboard_snap.rs` (`canvas_step`), `sizes.rs` | scenario tests |
 | `interact_min` default 0.5 | the pick mode of v0.19, now on by default; [POINTER.md](POINTER.md#pick-mode) | scenario tests (`tests/interact_min_flow.rs`); the shell paths were read, a pen's dedicated packets are now taken over a pick target; no Mac run |
 | IPC `pid`, `msg cursor`; request, connection, position, size, stand-in caps; owner-only files; screenshots through a temp file; spawned apps' environment | [IPC.md](IPC.md#v0210-hardening) | scenario tests and `tests/e2e/ipc-limits.sh`; see there for what was not run |
-| Closing a window fitted with a snapped fit puts back the neighbours (v0.20.0) | not done: `driftwm-core`'s stage carries `FitPush`, the controller does not record it | missing |
+| Closing a window fitted with a snapped fit puts back the neighbours (v0.20.0); suspending it leaves them | `sizes.rs` (`Restore::Fit`'s `FitPush`, `release_fit_push`), `lifecycle.rs` (`depart`); [SIZES.md](SIZES.md#closing-a-snapped-fit-window-puts-the-neighbours-back-v0200) | scenario tests (`tests/sizes_flow.rs`); no native run |
 
 Left out because they exist only for the Wayland or Linux stack: the KDE
 server-decoration protocol (GTK header bars under `[decorations] default_mode`),

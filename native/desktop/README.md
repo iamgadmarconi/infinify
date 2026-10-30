@@ -10448,3 +10448,28 @@ baseline. The new noninteractive path remains runtime-unrun. Full native resizin
 parity, reliable
 static SCK refresh, real desktop interruption handling, and third-party support
 remain **unrun and incomplete**.
+
+## Pick-mode motion and TIFF failures (2026-10-30)
+
+Two changes of the shell, each with the evidence it has and what it lacks; the long forms are in
+[POINTER.md](../../crates/desktop/POINTER.md#motion-below-interact_min-compositor-mode-2026-10-30) and
+[BACKGROUND-NOTES.md](BACKGROUND-NOTES.md#1710-a-file-that-cannot-be-decoded-is-an-error-2026-10-30).
+
+**Motion below `[zoom] interact_min` reaches no application in compositor mode.** `-[Desktop nativeInput:event:]` answers YES for a
+mouse-moved packet over a managed native window that is a pick target (`-pickMotionAt:window:`, which is `DWPickMotion` in
+`controller-hit.h` over the last render's output list and the window's placement: no controller call per packet), after the canvas
+has had the motion, and `DWNativeInput` then drops it. In the UTM guest, with real HID events at the HID tap over a window that
+counts its `mouseMoved:`: zoom 0.4 delivered 69 and 70 of 200 before and 0 after (0 of 5000 as well), zoom 0.6 about 70 after, the
+cursor at the last posted point every time, Infinify's CPU over 5000 events unchanged within run-to-run spread. In Safari at 0.4 the
+page's mousemove counter moved by the one event WebKit makes of the window server's mouse-entered. Regressions:
+`controller-hit-regression.m` (`tests/e2e/controller-hit.sh`) and `native-input-regression.m` (`tests/e2e/native-input-policy.sh`).
+Not shown: a physical device, an application's cursor shape over a target, the canvas's own hover and edge pan during the same motion.
+
+**A TIFF that cannot be read is an error and the dot grid, never an abort.** The tile reader (`background-tiff.m`) handed a failed
+tile's message to its caller from inside an `@autoreleasepool`, so any failed block read ended the process with `EXC_BAD_ACCESS`; it
+also decoded a tile of any declared size and a level of any size whole. DriftWM v0.21.0's `whole_lod` and `MAX_WHOLE_LOD_DIM` are
+ported (`IFBGTiffWholeLevel`), a tile of more than 256 MiB of decoded samples is refused, and an exception under a read is an error.
+`tests/e2e/background-tiff.sh` (`background-tiff-regression.m`) runs 59 crafted files, the program-level fallback and 6000 fixed-seed
+mutations (a one-off 150,000 as well): none crashed or hung. Before the change the same regression ended with `SIGSEGV` at its first
+failing tile read. Corrupt compressed data is still not detected (BACKGROUND-NOTES.md 17.8 item 9). Run on the host in memory; not in
+the guest or on the owner's Mac.

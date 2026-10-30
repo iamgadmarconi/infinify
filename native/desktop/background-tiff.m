@@ -29,6 +29,33 @@
 // tile_worker.rs `N_WORKERS`.
 static const NSUInteger kIFBGTileWorkers = 6;
 
+// The `tiff` crate's default `Limits::decoding_buffer_size`, which upstream's
+// read_chunk runs under: a tile whose decoded samples need more is an error
+// ("the limits of the decoder were exceeded"), not an allocation.
+static const uint64_t kIFBGTileMaxBytes = 256u << 20;
+
+const uint32_t IFBGTiffMaxWholeLevelSide = 16384;  // tile_chunks_tiff.rs MAX_WHOLE_LOD_DIM
+
+// tile_chunks_tiff.rs `whole_lod`, with its wording.
+NSUInteger IFBGTiffWholeLevel(const IFBGTiffLevel *levels, NSUInteger count, uint32_t preferred, NSString **error) {
+    for (NSUInteger i = 0; i < count; i++) {
+        if (MAX(levels[i].imageWidth, levels[i].imageHeight) <= preferred) return i;
+    }
+    if (!count) {
+        if (error) *error = @"TIFF has no LOD levels";
+        return NSNotFound;
+    }
+    IFBGTiffLevel coarsest = levels[count - 1];
+    if (MAX(coarsest.imageWidth, coarsest.imageHeight) > IFBGTiffMaxWholeLevelSide) {
+        if (error) {
+            *error = [NSString stringWithFormat:@"its coarsest level is %u×%u, past the %u px a level is decoded whole at; rebuild it as a pyramid with smaller levels",
+                                                coarsest.imageWidth, coarsest.imageHeight, IFBGTiffMaxWholeLevelSide];
+        }
+        return NSNotFound;
+    }
+    return count - 1;
+}
+
 // Rust's `io::Error` as upstream prints it.
 static NSString *IFBGTiffOSError(int code) {
     return [NSString stringWithFormat:@"%s (os error %d)", strerror(code), code];
@@ -118,6 +145,7 @@ static NSData *IFBGTiffValues(int fd, uint64_t fileSize, BOOL bigEndian, uint16_
     }
     if (count == 0 || count > (1u << 28)) return nil;
     NSMutableData *raw = [NSMutableData dataWithLength:(NSUInteger)(count * size)];
+    if (!raw) return nil;
     if (count * size <= fieldSize) {
         memcpy(raw.mutableBytes, field, (size_t)(count * size));
     } else {
@@ -126,6 +154,7 @@ static NSData *IFBGTiffValues(int fd, uint64_t fileSize, BOOL bigEndian, uint16_
         if (!IFBGTiffRead(fd, raw.mutableBytes, (size_t)(count * size), offset)) return nil;
     }
     NSMutableData *values = [NSMutableData dataWithLength:(NSUInteger)(count * sizeof(uint64_t))];
+    if (!values) return nil;
     uint64_t *v = values.mutableBytes;
     const uint8_t *p = raw.bytes;
     for (uint64_t i = 0; i < count; i++) v[i] = IFBGTiffUInt(p + i * size, size, bigEndian);
@@ -350,6 +379,11 @@ static void IFBGTiffEntry(NSMutableData *data, uint16_t tag, uint16_t type, uint
         *error = [NSString stringWithFormat:@"non-u8 sample type at LOD %lu", (unsigned long)lod];
         return NULL;
     }
+    if ((uint64_t)tw * th * spp > kIFBGTileMaxBytes) {
+        *error = [NSString stringWithFormat:@"read_chunk(%llu) at LOD %lu: the limits of the decoder were exceeded (a %u×%u tile)", index,
+                                            (unsigned long)lod, tw, th];
+        return NULL;
+    }
     uint64_t offset = ((const uint64_t *)page->offsets.bytes)[index], length = ((const uint64_t *)page->byteCounts.bytes)[index];
     if (length == 0 || length > (1u << 30) || offset > _fileSize || length > _fileSize - offset) {
         *error = [NSString stringWithFormat:@"read_chunk(%llu) at LOD %lu: the tile's data lies outside the file", index, (unsigned long)lod];
@@ -468,9 +502,17 @@ static void IFBGTiffEntry(NSMutableData *data, uint16_t tag, uint16_t type, uint
     return rgba;
 }
 
+// An exception under a read (an allocation that could not be made, a framework's own) is an error like any other: the reads run on the
+// decode pool's threads, where an exception nobody catches ends the process.
 - (IFBGTiffBlock *)readBlockAtLevel:(NSUInteger)lod gx:(uint32_t)gx gy:(uint32_t)gy aggregation:(uint32_t)n error:(NSString **)error {
     NSString *why = nil;
-    IFBGTiffBlock *block = [self blockAtLevel:lod gx:gx gy:gy aggregation:n tolerant:NO error:&why];
+    IFBGTiffBlock *block = nil;
+    @try {
+        block = [self blockAtLevel:lod gx:gx gy:gy aggregation:n tolerant:NO error:&why];
+    } @catch (NSException *exception) {
+        block = nil;
+        why = [NSString stringWithFormat:@"LOD %lu: the read raised %@: %@", (unsigned long)lod, exception.name, exception.reason];
+    }
     if (!block && error) *error = why;
     return block;
 }
@@ -478,13 +520,24 @@ static void IFBGTiffEntry(NSMutableData *data, uint16_t tag, uint16_t type, uint
 - (IFBGTiffBlock *)readWholeLevel:(NSUInteger)lod error:(NSString **)error {
     NSString *why = nil;
     IFBGTiffBlock *block = nil;
-    if (lod >= _pages.count) {
-        why = [NSString stringWithFormat:@"LOD %lu out of range", (unsigned long)lod];
-    } else {
-        IFBGTiffLevel level = _pages[lod]->level;
-        uint32_t across = (level.imageWidth + level.tileWidth - 1) / level.tileWidth;
-        uint32_t down = (level.imageHeight + level.tileHeight - 1) / level.tileHeight;
-        block = [self blockAtLevel:lod gx:0 gy:0 aggregation:MAX(across, down) tolerant:YES error:&why];
+    @try {
+        if (lod >= _pages.count) {
+            why = [NSString stringWithFormat:@"LOD %lu out of range", (unsigned long)lod];
+        } else {
+            IFBGTiffLevel level = _pages[lod]->level;
+            uint32_t across = (level.imageWidth + level.tileWidth - 1) / level.tileWidth;
+            uint32_t down = (level.imageHeight + level.tileHeight - 1) / level.tileHeight;
+            if (MAX(level.imageWidth, level.imageHeight) > IFBGTiffMaxWholeLevelSide) {
+                // upstream's `whole_lod` refuses before this is asked; nothing here has to hold what it would allocate.
+                why = [NSString stringWithFormat:@"LOD %lu is %u×%u, past the %u px a level is decoded whole at", (unsigned long)lod,
+                                                 level.imageWidth, level.imageHeight, IFBGTiffMaxWholeLevelSide];
+            } else {
+                block = [self blockAtLevel:lod gx:0 gy:0 aggregation:MAX(across, down) tolerant:YES error:&why];
+            }
+        }
+    } @catch (NSException *exception) {
+        block = nil;
+        why = [NSString stringWithFormat:@"LOD %lu: the read raised %@: %@", (unsigned long)lod, exception.name, exception.reason];
     }
     if (!block && error) *error = why;
     return block;
@@ -531,17 +584,17 @@ static void IFBGTiffEntry(NSMutableData *data, uint16_t tag, uint16_t type, uint
     }
     NSUInteger ok = 0, failed = 0;
     BOOL transparent = NO;
-    for (uint64_t ty = startY; ty < endY; ty++) {
-        for (uint64_t tx = startX; tx < endX; tx++) {
+    // Held outside the pool below: a tile's message is autoreleased inside it, and handing that to `*error` and returning from within
+    // the pool left the caller a string already gone (any failed tile of a block read ended the process when its message was read).
+    NSString *failure = nil;
+    for (uint64_t ty = startY; ty < endY && !failure; ty++) {
+        for (uint64_t tx = startX; tx < endX && !failure; tx++) {
             @autoreleasepool {
                 NSString *why = nil;
                 uint8_t *tile = [self newTile:ty * across + tx page:page lod:lod error:&why];
                 if (!tile) {
-                    if (!tolerant) {
-                        *error = why;
-                        return nil;
-                    }
-                    failed++;
+                    if (!tolerant) failure = [why copy] ?: @"the tile could not be decoded";
+                    else failed++;
                     continue;
                 }
                 uint64_t actualW = MIN(imageW - tx * tileW, tileW), actualH = MIN(imageH - ty * tileH, tileH);
@@ -557,6 +610,10 @@ static void IFBGTiffEntry(NSMutableData *data, uint16_t tag, uint16_t type, uint
                 ok++;
             }
         }
+    }
+    if (failure) {
+        *error = failure;
+        return nil;
     }
     if (tolerant && ok == 0) {
         *error = [NSString stringWithFormat:@"LOD %lu: every tile failed to decode", (unsigned long)lod];

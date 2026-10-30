@@ -340,7 +340,74 @@ Objective-C compiles:
 | **Click released within the slop** | `pick`: one navigation to the window at zoom 1 | the same, from the pair's release |
 | **Scroll** | `mouse_binding` with `pick:true` is retried on empty canvas: a bare scroll pans or zooms; nothing is forwarded | claimed (`claimed=pick`) and delivered to the view, which pans or zooms through the same binding; the scroll never reaches the application |
 | **Pen (tablet packets)** | not forwarded: the same `forward` check | **changed in this update**: dedicated tablet pointer and proximity packets over a pick target are taken by the tap (`main.m`, "Below [zoom] interact_min ... a pen's dedicated packets included"). Before, only the pen's mouse-subtype packets were the pick's |
-| **Motion** | `hover` answers `forward: false`; the overlay does not deliver it | **not taken**: a mouse-moved packet is never offered to `consume`, so the window server still delivers motion to the window under the pointer (hover effects, tooltips). The controller's hover focus does not move focus onto it either. Not changed here; whether a tap that returned NULL for mouse-moved packets would hide them without freezing the cursor was not tried |
+| **Motion** | `hover` answers `forward: false`; the overlay does not deliver it | **dropped by the annotated tap** since 2026-10-30 (below): the consumer claims a mouse-moved packet over a managed native window that is a pick target, so the window server's own delivery of it to the application never happens. The canvas has had the motion by then (its hover, sloppy focus and cursor edge pan run from it, `-queueNativeHover:` and `-[DWPointerHover nativeMotion:]`), the cursor is the window server's and is not frozen. Measured in the guest, see below |
+
+##### Motion below `interact_min`, compositor mode (2026-10-30)
+
+The row above said a mouse-moved packet "is never offered to `consume`". That
+was wrong: the annotated tap offers every mouse-moved packet to its consumer
+(`native-input.m` `-handle:event:`, and `native-input-regression.m` has always
+dropped one the consumer claims), and `-[Desktop nativeInput:event:]` took it
+for its own hover and then answered NO, so the window server went on delivering
+it. What was not known was whether a tap that drops a mouse-moved packet
+freezes the cursor. It does not (below). The consumer now answers YES for a
+packet that is over a managed native window (the window server's own answer in
+the packet, `kCGMouseEventWindowUnderMousePointer`, mapped to its root as every
+other native path does) on an output in pick mode, unless the window is a
+widget, a screen-pinned or a fullscreen one (the placement says which; the
+controller's `hit` gives the same answer and is not asked, to keep the
+per-packet cost nil). The decision is `DWPickMotion` (`controller-hit.h`),
+run in `controller-hit-regression.m` against the real controller's snapshot
+and hit at zoom 1, 0.4 and exactly 0.5 and over empty canvas, a widget and
+malformed input; the packet-level contract (a claimed moved packet is dropped,
+an unclaimed one and one during a held native button are returned untouched, a
+tagged one is not offered) is in `native-input-regression.m`.
+
+Measured in the UTM guest (macOS 27.0.1, compositor mode, default
+`interact_min` 0.5, no config file), real HID events posted at the HID tap
+with a small CGEvent program (200 plain mouse-moved events along a path inside
+the window, then the cursor read back), over a fixture window with an
+always-active tracking area that counts the `mouseMoved:` it is given (the
+window server coalesces for a consumer that is slow, which this one is: it
+writes a file per event, so 200 posted is about 70 delivered at best):
+
+| Build | zoom 0.6 | zoom 0.4 |
+| --- | --- | --- |
+| before (the tree this change started from) | 71, 71 delivered | **69, 70 delivered** |
+| after, runs of 200 events | 70, 71, 71, 72 delivered | **0, 0, 0, 0 delivered** |
+| after, runs of 5000 events, zoom 1 / 0.6 / 0.5 / 0.4 | 284 and 294, 281 and 291, 288 and 291 delivered | **0 and 0 delivered** |
+
+The cursor ended at the last posted point in every run (`CGEventCreate`'s
+location and `msg cursor` both), at 0.4 as at 0.6: the drop freezes nothing.
+Infinify's own CPU time over the 5000-event runs, before and after, at zoom 1,
+0.6, 0.5 and 0.4: 1.10, 0.85, 0.95, 1.17 s and 1.09, 1.09, 0.87, 0.85 s (a
+second run after: 0.72, 0.75, 0.76, 0.84 s), the spread between runs larger
+than any difference. A first version asked the controller for a `hit` per
+packet and cost 0.73, 1.03, 1.22, 1.60 s (about 75 microseconds a packet more
+in pick mode); it was replaced by the placement lookup.
+
+In Safari (a local page with three large links, `a:hover` red and a counter of
+the page's `mousemove` events, window 900 x 640): at zoom 0.6 a 150-event path
+over the links took the counter from 152 to 229 and left the link under the
+pointer red; at 0.4, from a pointer parked off the window, the same path took
+it from 151 to 152 and the pointer ended over a link that was not red. The one
+event is the window server's own: when the pointer enters the window it sends
+the application a mouse-entered event, which WebKit turns into a mouse move,
+and no tap sees it; the link under the entry point stays red until the pointer
+leaves (a hover state the page had before the zoom dropped below the threshold
+likewise stays until the pointer leaves or moves in an application that still
+gets events). The fixture, which counts only `mouseMoved:`, saw 0.
+
+Not shown: a physical mouse or trackpad (the guest's events are synthetic, at
+the HID tap, which the window server treats as hardware); the cursor's shape
+over an application (it is the application's last request, and an application
+that gets no motion cannot change it, so an I-beam or a pointing hand may
+persist over a pick target; the canvas's pointing hand is drawn only where its
+own panel is under the pointer); cursor edge pan and the canvas's hover during
+the same motion (they run from the same packet before it is dropped; not
+observed in the guest); a gaming mouse's packet rate; or a packet that arrives
+while the output's view is crossing the threshold (the output list is the last
+render's, one frame old at most).
 
 A press that arrives with the Command/Control/Option chord of a held-modifier
 binding is that binding's, as upstream's `try_pick_button` lets it be. A

@@ -130,6 +130,20 @@ int main(void) {@autoreleasepool {
     check([input handle:kCGEventLeftMouseDown event:taggedDown]==taggedDown&&consumed==before,@"tagged down bypasses physical bookkeeping");
     take=YES;check([input handle:kCGEventMouseMoved event:move]==NULL,@"tagged down creates no native reservation");
 
+    // Below [zoom] interact_min a window takes no hover (POINTER.md): the shell's consumer claims a mouse-moved packet over a pick target
+    // and the tap must then drop it, while one it does not claim goes on untouched. The packet is offered to the consumer every time, and
+    // a moved packet while a native button is held (the application's own drag tracking) is never the consumer's to claim.
+    {CGEventRef still=packet(kCGEventMouseMoved,0,foreign);NSUInteger offered=consumed;
+        check(DWNativeInputAnnotatedMask()&CGEventMaskBit(kCGEventMouseMoved),@"the annotated tap subscribes to mouse-moved packets");
+        take=NO;check(unchanged(still,^{return [input handle:kCGEventMouseMoved event:still];})&&consumed==offered+1,@"a moved packet over an application is offered to the consumer and left untouched when it declines");
+        take=YES;check([input handle:kCGEventMouseMoved event:still]==NULL&&consumed==offered+2,@"a moved packet the consumer claims (a pick target) is dropped, once offered");
+        take=NO;[input handle:kCGEventLeftMouseDown event:down];offered=consumed;take=YES;
+        check(unchanged(still,^{return [input handle:kCGEventMouseMoved event:still];})&&consumed==offered,@"a moved packet while a native button is held is not offered and not dropped");
+        [input handle:kCGEventLeftMouseUp event:up];
+        CGEventRef tagged=packet(kCGEventMouseMoved,0,foreign);CGEventSetIntegerValueField(tagged,kCGEventSourceUserData,771);offered=consumed;
+        check(unchanged(tagged,^{return [input handle:kCGEventMouseMoved event:tagged];})&&consumed==offered,@"the shell's own tagged motion is neither offered nor dropped");
+        CFRelease(still);CFRelease(tagged);take=NO;}
+
     // Which native presses count as the application's own window drag of a transformed window (native-drag-takeover.h).
     {CGRect press=CGRectMake(0,528,800,632),drawn=CGRectMake(611,309,401,317),moved=CGRectMake(236,447,800,632);CGPoint start=CGPointMake(891,323),away=CGPointMake(841,348);
         check(DWNativeWindowDragStarted(press,drawn,moved,start,away),@"a transformed window whose native origin moves with its extent unchanged is the application's own drag");

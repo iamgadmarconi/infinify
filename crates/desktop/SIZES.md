@@ -233,6 +233,57 @@ shifted neighbour loses its fill restore point. The edges travel from the
 frame the window was [last asked for](#the-size-a-window-was-last-asked-for),
 and its neighbours are the windows snapped to that frame.
 
+#### Closing a snapped fit window puts the neighbours back (v0.20.0)
+
+When a snapped fit moved at least one neighbour, the fit also records the two
+frames it pushed the cluster between: the frame it asked for and the one it
+asked from (upstream `Stage` `fit_push`, `FitPush { fitted, home }`, which
+`driftwm-core` carries and the controller now uses as it is). The record is
+written with the fit's restore point and lives and dies with it, as upstream's
+does: an unfit of any kind, a fill, a step, an IPC resize or a resize drag ends
+it. A fit that moved nobody records nothing, so a window that arrives beside
+the fitted frame later is nobody's pushed neighbour.
+
+- **A real close** (`window_closed` with no suspension) calls upstream's
+  `release_fit_push` in `depart`, at upstream's place in `toplevel_destroyed`:
+  after the focus follower has been picked from the cluster around the fit, and
+  before the visibility checks that choose whether to fly to it, so those see
+  the neighbours where they land. The cluster is found again around the
+  recorded `fitted` frame in the windows as they are then, and shoved to the
+  recorded `home` frame by the same two passes as the fit's own shove. The
+  window itself is not touched; it is leaving.
+- **A suspension leaves the neighbours.** A window that becomes a stand-in
+  never reaches `release_fit_push` (upstream's `convert_to_suspended` clears the
+  fit state and returns first); the stand-in keeps the fit's spot and so do the
+  neighbours. Dismissing the stand-in later is no fit window closing either.
+- **A neighbour the user moved meanwhile** is handled as upstream handles it,
+  by the cluster being found at the close and not remembered: one moved out of
+  snap range of the fitted frame is no member and stays where the user put it;
+  one that still snaps to it, or to a member that does, travels back by the
+  recorded distance, a window put beside a pushed neighbour since included.
+- **The window took another size than asked.** The record holds the frame
+  asked for, which is the frame the neighbours were pushed around, so a
+  clamped fit is put back exactly as an unclamped one is.
+- **Stand-ins and the fit's other entries.** A fit window that is a stand-in
+  has no record (the restore point goes with the source), `fit-window` toggling
+  a snapped fit back shoves nobody and drops the record, as upstream's
+  `unfit_window` does, and the decoration maximize records one exactly when
+  `decoration_fit_snapped` (default on) makes it a snapped fit.
+
+Differences: upstream slides the pushed-back neighbours
+(`animate_cluster_shift`); here they move at once, as the fit's own shove moves
+them. The inventory note that came with the row mentions an upstream fix (#322)
+for a docked window moving after closing an app that opened maximized; nothing
+of it is in the vendored source this was read from, and it is not claimed here.
+Why the record exists at all is upstream's own account, in `FitPush`'s
+comment: the window's geometry has stopped describing the fit by the time it
+closes (a disconnect drops its title bar first, a fullscreen parks it
+elsewhere). Coverage is `tests/sizes_flow.rs` (scenario tests through the C
+ABI, mutation-checked by removing the call in `depart`: six of the seven
+scenarios fail without it, the seventh, a fit that pushed nobody, having
+nothing to put back); no native window
+was closed, fitted or resized for it.
+
 ### `fill-window`
 
 Upstream `toggle_fill_window`. The window grows in place, from the frame it
@@ -570,8 +621,8 @@ coordinator and driver are unchanged.
   begins, and the window is measured by the size it has from then on.
   Upstream goes on reading the last size the drag configured, which is
   another only for a window that clamped the drag.
-- **Stacking.** Neighbours shifted by a snapped fit keep their stacking, which
-  upstream's re-map raises.
+- **Stacking.** Neighbours shifted by a snapped fit, or put back by the close
+  of its window, keep their stacking, which upstream's re-map raises.
 - **A window that loses its source** loses its restore point, including one
   that is only detached and later rebound.
 - **Fractions.** Upstream's frames are integers. A world frame with a
@@ -611,8 +662,15 @@ fill, a snapped fit and `zoom-to-fit-snapped` see, a drag above and below
 `zoom.interact_min` (a widget and a window owed its size refused, a pinned
 window dragged in screen space, the pin of a window owed its size refused),
 a size still owed holding the pointer, a pick's return to a fill view, centring past a pinned window,
-`send-to-output`, and a resize drag elsewhere. A rule's `size` is in
-[`tests/rules_flow.rs`](tests/rules_flow.rs).
+`send-to-output`, and a resize drag elsewhere. Seven more are
+[closing a snapped fit window](#closing-a-snapped-fit-window-puts-the-neighbours-back-v0200):
+the close putting four neighbours home, a clamped fit put back from the frame
+asked for, a suspension (explicit, by `suspend_on_close`, and a `Close` mark
+overriding it) leaving them, a fit that pushed nobody, a neighbour the user
+moved away and a window put beside a pushed one, the decoration maximize with
+`decoration_fit_snapped` on and off, and the record ending with fit membership
+(a plain fit toggling back, the snapped unfit, a second snapped fit). A rule's
+`size` is in [`tests/rules_flow.rs`](tests/rules_flow.rs).
 
 It establishes the controller's policy and wire behaviour. It does **not**
 establish that:

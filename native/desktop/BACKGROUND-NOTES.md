@@ -1249,9 +1249,13 @@ above, and upstream was followed.
 11. **`usesCamera` is YES for both kinds**, where upstream clears
     `background_uses_camera`: there the chunk elements damage what they move
     over; here that flag is what makes `IFBackgroundLayer` redraw on a pan.
-12. **Limits of this reader**: 64 pages, 4096 entries a directory, 1 GiB a
-    tile, 32768 pixels a block side, 16384 pixels a texture side (the fallback
-    level and each chunk).
+12. **Limits of this reader**: 64 pages, 4096 entries a directory, 1 GiB of
+    compressed data a tile, 256 MiB of decoded samples a tile (the `tiff`
+    crate's default `decoding_buffer_size`, which upstream's `read_chunk` runs
+    under; a larger tile is "the limits of the decoder were exceeded" at its
+    first read), 32768 pixels a block side, 16384 pixels a texture side (each
+    chunk) and, since 2026-10-30, 16384 pixels the side of a level read whole
+    (17.10).
 13. **A TIFF cache survives a change of its output's scale**, since nothing in
     it depends on the scale; upstream drops every cache of such an output and
     loads it again. The baked cache starts again, as upstream's.
@@ -1270,6 +1274,54 @@ above, and upstream was followed.
     were built on a 60 Hz `NSTimer`, where this item named it.
 16. **Upstream's log lines** (`tracing`) for a failed tile, a cut pyramid, a
     plane with holes and a degraded bake go to stderr through `NSLog`.
+
+### 17.10 A file that cannot be decoded is an error (2026-10-30)
+
+DriftWM v0.21.0 turned a TIFF failure that aborted the compositor into an
+error (inventory row `platform.tiff_wallpaper_abort`). Its source, read at
+`third_party/driftwm/src/render/tile_chunks_tiff.rs`: `MAX_WHOLE_LOD_DIM`
+(16384, "1 GiB of RGBA at the limit, and past it an allocation that can abort
+the compositor before it draws") and `whole_lod`, which the chunk cache and
+the capture both use to choose the level they decode whole. Here:
+
+- **`IFBGTiffWholeLevel`** (`background-tiff.m`) is `whole_lod` in its
+  words, and `IFBGTileLayoutMake` and the capture's level choice
+  (`-captureProgram`) call it. A pyramid whose coarsest level is past 16384
+  px a side is `tile bg '<path>': its coarsest level is 30000×15000, past the
+  16384 px a level is decoded whole at; rebuild it as a pyramid with smaller
+  levels` over the dot grid, and a capture of it has no background. Before,
+  the fallback was the coarsest level whatever its size: a 20000×20000 single
+  page was decoded whole (measured below: 1.6 GB, no error) and only refused
+  by the texture upload afterwards, if memory lasted. `readWholeLevel` also
+  refuses such a level at once, for a caller that did not ask first.
+- **A tile of more than 256 MiB of decoded samples is an error at its read**,
+  not an allocation (12). Before, a file declaring 40000×40000 tiles and
+  holding a 16×16 one was read as a valid picture, which means a 6.4 GB RGBA
+  buffer (40000×40000×4) was made for it, in 9 s; one whose zlib stream
+  inflates to a full 16384×16384 RGB tile (805 MB of samples) would have been
+  handed to ImageIO the same way (not run on the old tree).
+- **An exception under a read is an error** (`readBlockAtLevel:` and
+  `readWholeLevel:` catch it). The reads run on the decode pool's threads.
+- **A failed tile no longer ends the process.** `blockAtLevel` returned from
+  inside an `@autoreleasepool` after storing the tile's message in `*error`;
+  the message was autoreleased inside that pool, so the caller was handed a
+  string already gone and the pool's worker (`IFBGTileResponse`'s `[error
+  copy]`) or the regression's read of it crashed with `EXC_BAD_ACCESS` in
+  `objc_retain`. Any block read that failed on a tile, a truncated file, an
+  unreadable tile offset, an unsupported sample format, reached it. The
+  message is now kept outside the pool. This is the Objective-C counterpart of
+  the abort, and the one a crafted or damaged file could actually reach; the
+  whole-level fallback tolerates failed tiles and did not reach it.
+- Allocations of the directory reader that came back nil are checked.
+
+`tests/e2e/background-tiff.sh` (`background-tiff-regression.m`) writes crafted
+files and runs them through `IFBGTiffSource` and `IFBackgroundProgram`; see
+17.9. What it does not show: **corrupt compressed data is not an error**
+(item 9 of 17.8; the regression lists Deflate and LZW garbage as
+"survives", a picture, since ImageIO fills what it cannot read), and a file
+that makes ImageIO itself crash is out of this module's reach (no such file
+was found in 156,000 mutations). A level of tiles a few pixels wide is slow
+(one ImageIO call a tile) and not refused.
 
 ### 17.9 Verification
 
@@ -1297,6 +1349,7 @@ compared as raw BGRA; the PNGs named "looked at" were opened.
 | `DWCanvasRenderer`, `-render:` and `-flush` on a layer outside any window, then `-animates:draw:` every 1/60 s while it says so | baked shader: one draw, none in 30 further ticks; after a pan to new cells two ticks and three draws, then identical to the live frame. TIFF: three draws (plane, then the chunks as they arrive), none in 30 further ticks, identical to the PNG tile. Two outputs at different cameras and zooms: each identical to the module's frame for it. A fullscreen description: one draw, nothing pending. A snapshot without `cache_budget_mb`: the default. A refused TIFF: its message in `note` |
 | `-[DWCanvasRenderer screenshot:snapshot:]` | `cache_shader` true and false: the PNG files are byte-identical at four regions and scales. TIFF: pixel-identical to its 4096 level drawn as a PNG tile at the matching scale; against the full-resolution PNG 59 % to 95 % of pixels differ (17.7); one capture looked at |
 | After the review: one translucent blurred window over a cached background, through the compositor's offscreen encode. A view, then frames with only `time` advancing until nothing is pending, compared with a renderer that has no frost yet drawing the settled view. Baked `dark_sea.glsl` after a jump (1x, and 2x under 512 MB) and on the frame that leaves a concealed stretch; baked `dot_grid.glsl` leaving one at 2x; the 16384×8192 pyramid after a jump at 1x, 2x and zoom 0.5 and on its first frames | the frost is recomputed on each frame a chunk lands in (one or two frames a case) and on none after; settled against fresh: 0 pixels differ inside the window and outside in all eight, and the two PNG files are byte-identical; bakes and uploads per frame as before the change (5 then 7; 3, 11, 13). Controls, the live shader and the PNG tile: no recompute after the first frame, 0 pixels. Before the change the same sequences left 150,243 to 214,121 of 231,000 window pixels different for the baked shader (the reviewer's run). Three frames looked at: the first frame of a jump with the frost over the coarse cover, the settled one with a fine blur of the sharp field, and a settled pyramid |
+| 2026-10-30: crafted TIFFs and mutations (`tests/e2e/background-tiff.sh`) | 17.10. On the tree this change started from the regression ended with `SIGSEGV` (exit 139) at its first file whose tile read failed ("float samples"), after two earlier files had been read as valid pictures that should be errors (a 40000×40000 tile declared over 256×256, in 9 s; a 20000×20000 level read whole). On the tree with the change: 47,832 checks pass in about 5 s: 59 crafted files (a valid RGB8, RGBA8 Deflate, PackBits and two-page set read back to the pixel; empty, 4-byte, text, wrong-magic, cut and looped files; zero, 2³²−1 and 20000-pixel dimensions; stripped, planar, CMYK, 16-bit, grey, palette, YCbCr, 1-bit and float files; a second page that is bad; tile offsets and counts past the end; a Deflate stream that inflates to 805 MB) each an error with its cause or, for the lenient ones, a picture; the nine `bad` files and six unreadable ones through `IFBackgroundProgram` as `type = "tile"` and as an inherited TIFF wallpaper: the dot grid and a message, never a crash; and 6000 mutations of four valid files (seed 20261030; 4584 opened, 4543 read clean). A one-off run of 150,000 mutations (seed 777, 1m42s): 114,717 opened, 113,700 read clean, none crashed or hung |
 | After the review: a pyramid's output described once, then concealed by a fullscreen description before its decodes were received, and the shell's timer for a second; the decode pool read through its private counters. Twelve runs before the change to the ready handler and twelve after | before: in 3 runs two blocks were still decoding at the concealment, and both were still held a second later (in the other 9 none was); after: in 11 runs one or two were, and none was held a second later. No draw in that second either way |
 
 **At integration,** with the controller's `cache_budget_mb` key: the app was

@@ -12,6 +12,10 @@
 // Upstream decodes with the `tiff` crate; here the container is walked by this
 // file and each tile's compressed bytes are decoded by ImageIO
 // (BACKGROUND-NOTES.md, section 17).
+// Since 2026-10-30 also from v0.21.0 (df3de27b26c7998e8a460cffd8a4925cbed3a322,
+// third_party/driftwm): src/render/tile_chunks_tiff.rs `MAX_WHOLE_LOD_DIM` and
+// `whole_lod`, upstream's turning of an allocation that could abort the
+// compositor into an error (platform.tiff_wallpaper_abort).
 
 #import <Foundation/Foundation.h>
 
@@ -33,6 +37,17 @@ typedef struct IFBGTiffLevel {
 /// `read_whole_lod` only: tiles that could not be decoded and were left zeroed.
 @property (nonatomic, readonly) NSUInteger failedTileCount;
 @end
+
+/// Upstream `MAX_WHOLE_LOD_DIM`: the longest side of a level decoded whole.
+/// 1 GiB of RGBA at the limit, and past it an allocation that can abort the
+/// compositor before it draws.
+extern const uint32_t IFBGTiffMaxWholeLevelSide;
+
+/// Upstream `whole_lod`: the index within `levels[0 ..< count]` of the level to
+/// decode whole, the finest of at most `preferred` pixels a side, else the
+/// coarsest, which has to be within `IFBGTiffMaxWholeLevelSide`. Returns
+/// `NSNotFound` and sets `*error` to upstream's message when there is none.
+NSUInteger IFBGTiffWholeLevel(const IFBGTiffLevel *levels, NSUInteger count, uint32_t preferred, NSString *_Nullable *_Nullable error);
 
 /// Upstream `TiffSource`. Immutable after it is opened; every method may be
 /// called from any thread, and from several at once.
@@ -58,7 +73,9 @@ typedef struct IFBGTiffLevel {
                                        error:(NSString *_Nullable *_Nullable)error;
 
 /// `read_whole_lod`: the whole level, with a tile that cannot be decoded left
-/// zeroed (opaque black in an RGB8 file). Fails only when every tile did.
+/// zeroed (opaque black in an RGB8 file). Fails only when every tile did, and
+/// at once for a level past `IFBGTiffMaxWholeLevelSide`, which nothing has to
+/// try to hold. An exception raised under any read is an error as well.
 - (nullable IFBGTiffBlock *)readWholeLevel:(NSUInteger)level error:(NSString *_Nullable *_Nullable)error;
 @end
 

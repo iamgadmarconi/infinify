@@ -811,6 +811,282 @@ fn fit_window_snapped_shoves_the_snapped_neighbours_and_brings_them_back() {
     assert_eq!(world(&mut h, 5), rect(3000.0, 3000.0, 100.0, 100.0));
 }
 
+// Upstream v0.20 release_fit_push (third_party/driftwm/src/state/fit.rs, called
+// by handlers/xdg_shell.rs toplevel_destroyed for a real close): a snapped fit
+// records the frames it pushed its cluster between, and a close of the fit
+// window puts the cluster back. Window 1 fits to (-180, -120) 960 x 740, which
+// pushes window 2 from x 512 to 792, window 3 from y 412 to 632 and window 4
+// from x -62 to -342; window 5 is nobody's neighbour.
+type Frame = (f64, f64, f64, f64);
+const HOME: [(u64, Frame); 4] = [
+    (2, (512.0, 100.0, 200.0, 300.0)),
+    (3, (100.0, 412.0, 400.0, 200.0)),
+    (4, (-62.0, 100.0, 150.0, 300.0)),
+    (5, (3000.0, 3000.0, 100.0, 100.0)),
+];
+const PUSHED: [(u64, Frame); 4] = [
+    (2, (792.0, 100.0, 200.0, 300.0)),
+    (3, (100.0, 632.0, 400.0, 200.0)),
+    (4, (-342.0, 100.0, 150.0, 300.0)),
+    (5, (3000.0, 3000.0, 100.0, 100.0)),
+];
+fn at(h: &mut Host, expected: &[(u64, Frame)]) {
+    for (id, frame) in expected {
+        assert_eq!(
+            world(h, *id),
+            rect(frame.0, frame.1, frame.2, frame.3),
+            "window {id}"
+        );
+    }
+}
+/// Window 1 and its neighbours at home, under `toml`.
+fn neighbours_in(toml: &str) -> Host {
+    let mut h = capable(one(toml));
+    for (id, frame) in HOME {
+        attach(&mut h, id, frame);
+    }
+    h.ok(json!({"op":"focus","window":1}));
+    h
+}
+fn neighbours() -> Host {
+    neighbours_in(CONFIG)
+}
+/// `neighbours_in` after a snapped fit that took the 960 x 740 it was asked for.
+fn pushed_in(toml: &str) -> Host {
+    let mut h = neighbours_in(toml);
+    let reply = action(&mut h, "fit-window-snapped");
+    deliver(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (960.0, 740.0),
+        "applied",
+        (960.0, 740.0),
+    );
+    assert_eq!(mode(&mut h, 1), "fit");
+    at(&mut h, &PUSHED);
+    h
+}
+fn pushed() -> Host {
+    pushed_in(CONFIG)
+}
+fn close(h: &mut Host, id: u64) -> Value {
+    h.ok(json!({"op":"window_closed","window":id,"identity":identity(id),"output":1}))
+}
+fn gone(h: &mut Host, id: u64) -> bool {
+    let windows = h.snapshot()["windows"].clone();
+    !windows
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w["window"] == id)
+}
+
+#[test]
+fn closing_a_snapped_fit_window_puts_back_the_neighbours_it_pushed() {
+    let mut h = pushed();
+    let closed = close(&mut h, 1);
+    assert_eq!(closed["standin"], false);
+    assert!(gone(&mut h, 1));
+    at(&mut h, &HOME);
+    for id in 2..=5 {
+        assert_eq!(mode(&mut h, id), Value::Null);
+    }
+    // The same through close-window: the shell closes the window, then reports it.
+    let mut h = pushed();
+    ipc(&mut h, json!({"Close":null}));
+    close(&mut h, 1);
+    at(&mut h, &HOME);
+}
+
+#[test]
+fn a_snapped_fit_the_window_clamped_is_put_back_from_the_frame_it_was_asked_for() {
+    // The window took 956 x 734 of the 960 x 740 asked for. The neighbours
+    // were pushed around the frame asked for, so the close pulls them back
+    // between the frames the fit recorded and not the sizes the window has.
+    let mut h = neighbours();
+    let reply = action(&mut h, "fit-window-snapped");
+    deliver(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (960.0, 740.0),
+        "clamped",
+        (956.0, 734.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 956.0, 734.0));
+    at(&mut h, &PUSHED);
+    close(&mut h, 1);
+    at(&mut h, &HOME);
+}
+
+#[test]
+fn suspending_a_snapped_fit_window_leaves_the_neighbours_where_the_fit_put_them() {
+    // Upstream convert_to_suspended returns before release_fit_push is reached:
+    // the stand-in keeps the fit's spot, so the neighbours keep theirs.
+    let mut h = pushed();
+    ipc(&mut h, json!({"Suspend":null}));
+    let closed = close(&mut h, 1);
+    assert_eq!(closed["standin"], true);
+    assert_eq!(h.snapshot()["lifecycle"]["standins"], json!([1]));
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
+    assert_eq!(mode(&mut h, 1), Value::Null);
+    at(&mut h, &PUSHED);
+    // Dismissing the stand-in afterwards is no fit window closing either.
+    ipc(&mut h, json!({"Close":1}));
+    at(&mut h, &PUSHED);
+
+    // suspend_on_close does the same for a close nobody marked, and a close-window
+    // mark overrides it, so that one is a real close and the neighbours go home.
+    let toml = format!("{CONFIG}[session]\nsuspend_on_close = true\n");
+    let mut h = pushed_in(&toml);
+    let closed = close(&mut h, 1);
+    assert_eq!(closed["standin"], true);
+    at(&mut h, &PUSHED);
+    let mut h = pushed_in(&toml);
+    ipc(&mut h, json!({"Close":null}));
+    let closed = close(&mut h, 1);
+    assert_eq!(closed["standin"], false);
+    at(&mut h, &HOME);
+}
+
+#[test]
+fn a_fit_that_pushed_nobody_records_nothing_to_put_back() {
+    // Upstream records the push only when a cluster member really moved. A
+    // window that arrives beside the fitted frame afterwards is no pushed
+    // neighbour, and the close leaves it where it is.
+    let mut h = capable(one(CONFIG));
+    h.ok(json!({"op":"focus","window":1}));
+    let reply = action(&mut h, "fit-window-snapped");
+    deliver(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (960.0, 740.0),
+        "applied",
+        (960.0, 740.0),
+    );
+    assert_eq!(world(&mut h, 1), rect(-180.0, -120.0, 960.0, 740.0));
+    attach(&mut h, 2, (792.0, -120.0, 200.0, 300.0));
+    h.ok(json!({"op":"focus","window":1}));
+    close(&mut h, 1);
+    assert_eq!(world(&mut h, 2), rect(792.0, -120.0, 200.0, 300.0));
+}
+
+#[test]
+fn a_neighbour_the_user_moved_since_is_put_back_only_while_it_still_snaps_to_the_fit() {
+    // Upstream finds the cluster again at the close, around the fitted frame:
+    // a pushed neighbour the user has moved away is no member and stays where
+    // it was put; one that still touches it, or touches a member that does,
+    // goes back by the recorded travel.
+    let mut h = pushed();
+    // Window 3 is nudged out of the 12 pixel snap gap below the fit.
+    h.ok(json!({"op":"focus","window":3}));
+    action(&mut h, "nudge-window down");
+    let nudged = world(&mut h, 3);
+    assert_ne!(nudged, rect(100.0, 632.0, 400.0, 200.0));
+    // Window 6 arrives to the right of window 2, which is a member of the
+    // cluster by way of the fit, and so travels with it.
+    attach(&mut h, 6, (1004.0, 100.0, 100.0, 300.0));
+    h.ok(json!({"op":"focus","window":1}));
+    close(&mut h, 1);
+    assert_eq!(world(&mut h, 2), rect(512.0, 100.0, 200.0, 300.0));
+    assert_eq!(world(&mut h, 4), rect(-62.0, 100.0, 150.0, 300.0));
+    assert_eq!(world(&mut h, 3), nudged);
+    assert_eq!(world(&mut h, 6), rect(724.0, 100.0, 100.0, 300.0));
+    assert_eq!(world(&mut h, 5), rect(3000.0, 3000.0, 100.0, 100.0));
+}
+
+#[test]
+fn a_maximize_under_decoration_fit_snapped_is_put_back_by_the_close_too() {
+    let maximize = |h: &mut Host| {
+        let source = window(h, 1)["source"].clone();
+        let reply = h.ok(json!({"op":"native_decoration","window":1,"output":1,"identity":source["identity"],"generation":source["generation"],"action":"fit"}));
+        deliver(
+            h,
+            &reply,
+            (400.0, 300.0),
+            (960.0, 740.0),
+            "applied",
+            (960.0, 740.0),
+        );
+    };
+    // decoration_fit_snapped defaults on, upstream's default too.
+    let mut h = neighbours();
+    maximize(&mut h);
+    at(&mut h, &PUSHED);
+    close(&mut h, 1);
+    at(&mut h, &HOME);
+    // Off, the maximize is a plain fit: it pushes nobody and the close moves nobody.
+    let mut h = neighbours_in(&format!(
+        "{CONFIG}[mouse]\ndecoration_fit_snapped = false\n"
+    ));
+    maximize(&mut h);
+    at(&mut h, &HOME);
+    close(&mut h, 1);
+    at(&mut h, &HOME);
+}
+
+#[test]
+fn the_push_lives_and_dies_with_fit_membership() {
+    // A plain fit toggles a snapped one back without shoving (upstream
+    // unfit_window), and that ends the record: the neighbours stay pushed and
+    // the later close has nothing to put back.
+    let mut h = pushed();
+    let reply = action(&mut h, "fit-window");
+    deliver(
+        &mut h,
+        &reply,
+        (960.0, 740.0),
+        (400.0, 300.0),
+        "applied",
+        (400.0, 300.0),
+    );
+    assert_eq!(mode(&mut h, 1), Value::Null);
+    at(&mut h, &PUSHED);
+    close(&mut h, 1);
+    at(&mut h, &PUSHED);
+
+    // The snapped unfit shoves them home itself; the close then moves nobody.
+    let mut h = pushed();
+    let reply = action(&mut h, "fit-window-snapped");
+    deliver(
+        &mut h,
+        &reply,
+        (960.0, 740.0),
+        (400.0, 300.0),
+        "applied",
+        (400.0, 300.0),
+    );
+    at(&mut h, &HOME);
+    close(&mut h, 1);
+    at(&mut h, &HOME);
+
+    // A second snapped fit records its own push, and a close releases that one.
+    let mut h = pushed();
+    let reply = action(&mut h, "fit-window-snapped");
+    deliver(
+        &mut h,
+        &reply,
+        (960.0, 740.0),
+        (400.0, 300.0),
+        "applied",
+        (400.0, 300.0),
+    );
+    let reply = action(&mut h, "fit-window-snapped");
+    deliver(
+        &mut h,
+        &reply,
+        (400.0, 300.0),
+        (960.0, 740.0),
+        "applied",
+        (960.0, 740.0),
+    );
+    at(&mut h, &PUSHED);
+    close(&mut h, 1);
+    at(&mut h, &HOME);
+}
+
 // Upstream compute_fill_geometry, by hand. With the camera at the world origin
 // at zoom 1 the usable area covers x 20..980, y 40..780, and snap.outer_gap 8
 // leaves x 28..972, y 48..772 to grow into. Window 2 stands along the left
