@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Actual root mailbox and source acceptance methods, extracted from main.m by
+// Actual root mailbox and source acceptance methods, extracted from native/app/Desktop (DWRootCaptureMailbox.h/.m, LiveSource.m, Desktop+Private.h) by
 // the runner. Only sample storage, image installation and asynchronous dispatch
 // are substituted. No SCStream, AppKit window, native input or capture is made.
 #import <Foundation/Foundation.h>

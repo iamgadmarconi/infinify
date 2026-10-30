@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Actual captured-input consumers extracted from main.m. Native identity/AX,
+// Actual captured-input consumers extracted from native/app/Desktop (Desktop+Private.h, Desktop+Input/Navigation/Fill.m, DesktopView.m). Native identity/AX,
 // controller replies and posting are substituted; mouse/tablet capture uses
 // the real adapters and in-memory CGEvent packets. No application is launched,
 // no native window is read/mutated, and no event is posted to WindowServer.
@@ -170,7 +170,7 @@
 @property CGPoint startPoint,lastPoint;
 @property NSNumber *dragOutput,*resizeTransaction;
 @property CFTimeInterval liftSeen,lastDragPan;
-@property CFTimeInterval takenOverAt; // as main.m: a native window drag taken over; 0 here
+@property CFTimeInterval takenOverAt; // as Desktop.h: a native window drag taken over; 0 here
 @property InputHover *hover;
 - (BOOL)nativeTitlePressCurrent;
 - (NSNumber *)outputAt:(CGPoint)point;
