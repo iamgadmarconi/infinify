@@ -423,7 +423,7 @@ static void IFBGTiffEntry(NSMutableData *data, uint16_t tag, uint16_t type, uint
     if (image && CGImageGetWidth(image) == tw && CGImageGetHeight(image) == th) {
         rgba = [self newSamplesOfImage:image samples:spp];
     }
-    // As for a PNG or a JPEG (IFBackgroundProgram.m, IFBGLoadImage): only once the pixels
+    // As for a PNG or a JPEG (DWBackgroundFiles.m, IFBGLoadImage): only once the pixels
     // have been produced does ImageIO know whether the data ran out.
     CGImageSourceStatus status = source ? CGImageSourceGetStatusAtIndex(source, 0) : kCGImageStatusInvalidData;
     if (image) CGImageRelease(image);

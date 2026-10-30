@@ -19,7 +19,7 @@
 // record for it before it releases the window itself (VEIL below).
 #define DW2_VEIL_TIMEOUT_MS 1000
 // How long the helper keeps the placement it gave, at the announcement, to a child window of a placed root (a menu, a popover, a sheet)
-// without a frame naming it, before it releases the window itself (VEIL below, DWPayload.m v2ArrivalPlace).
+// without a frame naming it, before it releases the window itself (VEIL below, DWPayloadArrival.m v2ArrivalPlace).
 #define DW2_ARRIVAL_TIMEOUT_MS 500
 
 enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7, DW2_FRAME_SPACE=8, DW2_VEIL=9 };
@@ -71,7 +71,7 @@ enum { DW2_APPLIED=0, DW2_SCOPE=1, DW2_IDENTITY=2, DW2_MATRIX=3, DW2_ALPHA=4, DW
 // ways out. The helper never veils a window of the requesting client's own process. Veiling ends
 // with the session. The idea, and the window server announcement it rests on, are adapted
 // from Sunlight (MIT), https://github.com/spacefarm-digital/sunlight commit
-// afeea74b18e70ca49bf462d6fe462cf65deb2b32; exact source provenance is in DWPayload.m.
+// afeea74b18e70ca49bf462d6fe462cf65deb2b32; exact source provenance is in the headers of native/dock-helper/Payload/*.m.
 enum { DW2_FRAME_APPLIED=0, DW2_FRAME_DROPPED=1 };
 enum { DW2_RESTORED=0, DW2_GONE=1, DW2_PENDING=2 };
 enum { DW2_HELD=0, DW2_RESTORING=1 };

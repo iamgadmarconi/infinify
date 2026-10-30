@@ -39,9 +39,18 @@ block or section):
                                 storage, taps, view_actions, window_actions
   native/app/main.m            the process entry point (and the Desktop/ files
                                 cut from the former main.m)
-  native/app/Canvas/            IFBackground.h, IFBackgroundProgram.m,
-                                IFBGTiffSource, IFCompositor.h,
-                                IFCompositorRenderer.m, DWCanvasRenderer,
+  native/app/Canvas/            IFBackgroundProgram (.h, .m),
+                                IFBackgroundProgram+Private.h,
+                                IFBGDeviceResources, DWBackgroundGLSLTranslation,
+                                DWBackgroundFiles, IFBGChunk, IFBGShaderChunks,
+                                IFBGTileChunks, IFBGTiffSource, IFCompositor.h,
+                                IFCompositor+Private.h, IFCDeviceResources,
+                                IFCompositorFrame, DWCompositorRasterizers,
+                                IFCompositorRenderer (.m, +Draw.m, +Blur.m),
+                                IFCompositorLayer, DWCanvasRenderer (.h,
+                                +Private.h, .m, +Fullscreen.m, +Families.m,
+                                +Lifecycle.m, +GeometryTransitions.m,
+                                +Screenshot.m), DWCanvasAttachment (.h, .m),
                                 DWFrameDriver
   native/app/Input/             DWCycleHold, DWHotCorners, DWHotKeys,
                                 DWInputSources, DWPointerHover, DWTapKeys,
@@ -76,9 +85,11 @@ file. Each adapted file names what it took. Files derived from Sunlight:
   native/app/Windows/DWWindowEvents.m and DWWindowEvents.h adapt
   Sources/Canvas/RealWindows/WindowServerEvents.swift (SkyLight's window-created
   event and its payload).
-  The arrival veil of native/dock-helper/Payload/DWPayload.m adapts the same event
-  source and the aim of LiveWindows/osax/sunbeam.h that a new window is never
-  seen before it is placed (native/dock-helper/Client/DWHelperProtocol.h carries its constants).
+  The arrival veil of the Dock helper payload (native/dock-helper/Payload:
+  DWPayloadArrival.m, with its state in DWPayloadState.m and its request in
+  DWDockPayload.m) adapts the same event source and the aim of
+  LiveWindows/osax/sunbeam.h that a new window is never seen before it is placed
+  (native/dock-helper/Client/DWHelperProtocol.h carries its constants).
   Compositor mode at login: native/dock-helper/Daemon/Daemon.m copies LiveWindows/helper.m
   (the daemon, its XPC listener and caller requirement, with the edits its header
   lists); native/dock-helper/Daemon/DWLoaddRequest.m borrows the caller-requirement form;
@@ -99,7 +110,8 @@ provenance of the window-server query and the window-forward calls, is
 native/app/Resources/YABAI-NOTICE.txt, which the app bundle carries beside this file.
 Each adapted file names the upstream paths it follows. Files derived from yabai:
   native/dock-helper/Loader/DWLoader.m is adapted from yabai and retains its MIT licence,
-  copyright and Jeremy Legendre arm64e attribution; DWPayload.m
+  copyright and Jeremy Legendre arm64e attribution; the payload
+  (native/dock-helper/Payload/DWDockPayload.m and the fragments it #imports)
   cites the same commit for the Dock-side calls. native/dock-helper/Daemon/Daemon.m reaches
   yabai's src/sa.m by way of Sunlight's LiveWindows/helper.m (see Sunlight above)
   and pins only the Sunlight commit.
@@ -110,8 +122,10 @@ Each adapted file names the upstream paths it follows. Files derived from yabai:
   observed with, and what each one means).
   native/app/CompositorMode/DWWindowServerFamily.h (src/window.c:872-897,
   src/misc/extern.h:9,66-72, src/window_manager.c:841-855), used by
-  DWNativeFamily.m, DWNativeDisplaySpace.m, DWNativePlacementValidation.m and
-  DWNativePresenter.m.
+  DWNativeFamily.m, DWNativeDisplaySpace.m and DWNativePlacementValidation.m.
+  The SkyLight signatures checked against yabai (SLSGetWindowBounds,
+  SLSMainConnectionID, SLSDisableUpdate and SLSReenableUpdate) live in
+  native/app/CompositorMode/DWNativeWindowServer.m.
   native/app/Navigation/DWNativeFocus.m brings a window that is on another desktop forward with the
   calls and the event record of window_manager_focus_window_with_raise and
   window_manager_make_key_window (src/window_manager.c:1269-1335,

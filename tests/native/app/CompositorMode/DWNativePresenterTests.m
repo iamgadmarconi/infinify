@@ -13,7 +13,13 @@ static BOOL readinessNoScreens;
 + (NSArray<DWReadinessScreen *> *)screens { return readinessNoScreens?@[]:@[[DWReadinessScreen new]]; }
 @end
 #define NSScreen DWReadinessScreen
+#import "DWNativeWindowServer.m"
 #import "DWNativePresenter.m"
+#import "DWNativePresenter+Acknowledgement.m"
+#import "DWNativePresenter+Families.m"
+#import "DWNativePresenter+Withholding.m"
+#import "DWNativePresenter+Frames.m"
+#import "DWNativePresenterGroup.m"
 #undef NSScreen
 
 struct dw_client { uint64_t sequence; };

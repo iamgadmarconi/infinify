@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Rectangles as the controller's JSON carries them: {origin:{x,y},size:{width,height}}.
-// Shared by the native-* modules. The strict readers in DWNativePresenter.m, DWNativeViews.m,
+// Shared by the native-* modules. The strict readers in DWNativePresenter+Frames.m, DWNativeViews.m,
 // DWNativeTransition.m and DWNativePlacementValidation.m validate differently from each
 // other and from the lenient reader here; they stay where they are.
 #import <Foundation/Foundation.h>

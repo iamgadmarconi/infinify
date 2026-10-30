@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
-#import "DWCanvasRenderer.h"
+#import "DWCanvasAttachment.h"
 
 // Capture only freshly parented members of roots already bound by the shell.
 // Each root is {window,identity,generation,native_bounds,density,capture?,

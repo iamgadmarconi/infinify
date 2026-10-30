@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Read-only batched window observations. Native bounds use DWNativePresenter.h's
+// Read-only batched window observations. Native bounds use DWNativeWindowServer.h's
 // pinned SkyLight ABI; this adapter introduces no native mutation API.
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>

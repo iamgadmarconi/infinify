@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Metal plumbing that IFBackgroundProgram.m and IFCompositorRenderer.m both need and must keep
+// Metal plumbing that IFBGDeviceResources.m, IFBackgroundProgram.m and the compositor pieces
+// (IFCDeviceResources.m, IFCompositorFrame.m) both need and must keep
 // identical: the integer output size of a frame, the per-device cache of shared
 // resources, the shader compile options and the linear sampler. Header-only
 // (static inline); each module keeps its own pipelines and shaders.

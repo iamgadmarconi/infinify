@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Tiled pyramidal TIFF source and decode pool for the canvas background's
-// gigapixel path. Part of the background module (IFBackground.h); no dependency
+// gigapixel path. Part of the background module (IFBackgroundProgram.h); no dependency
 // on the rest of the app, and none on Metal.
 //
 // Adapted from DriftWM, https://github.com/malbiruk/driftwm @

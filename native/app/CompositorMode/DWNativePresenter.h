@@ -1,35 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import "DWNativeWindowServer.h"
 // The second way to present (`--native-helper`): the window server draws each real window
 // where the canvas places it, moved and scaled by the transform helper of
-// native/dock-helper (protocol v2, through dwclient). native-views selects its one
+// native/dock-helper (protocol v2, through dwclient). DWNativeViews selects its one
 // physical placement; the canvas draws live copies on additional outputs. The
 // first way, the overlay, is every run without that argument and
 // uses nothing of this file.
-//
-// A window's own frame, untransformed, in global top-left points: where the window is
-// and how large, whatever transform the helper has put on it. kCGWindowBounds follows
-// the transform and is of no use for that (a 320x232 window drawn at half size reads
-// 160x116 there); SLSGetWindowBounds, asked from this process about another's window,
-// stays the window's own (measured 2026-10-11 on 27.2, on a cooperative host window:
-// [80,937,320,232] untouched, at half size and parked). NO when the window server
-// does not answer for that window. Any thread.
-bool DWNativeBounds(uint32_t wid,CGRect *out);
-// Balanced, bounded by the caller, on this app connection. Private signatures
-// follow pinned yabai; success alone does not prove cross-process atomicity.
-CGError DWNativeScreenUpdates(BOOL enabled);
-// Desired rectangular display clipping in a member's own local coordinates.
-// Pure geometry: native and rootNative are untransformed bounds; rootScreen is
-// the canvas placement in global top-left points. The viewport is that output's
-// screen_bounds, not the root's clip_rect (a popup may extend beyond its root).
-// This does not read or replace the native window's original shape, shadow or
-// event region, and is not evidence that WindowServer can enforce the clip.
-typedef struct {
-    CGRect screen,visible,local;
-    bool required;
-} DWNativeClipGeometry;
-bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGRect viewport,DWNativeClipGeometry *out);
 // Immutable receipt for one entire bound native family in one helper frame. The
 // helper acknowledged these requested matrices; this is not observed geometry,
 // an optical result, a native clipping receipt or authorization to send input.
@@ -92,6 +70,27 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // Main thread: stop placement immediately, remove the run-loop watch, and drain
 // restoration/connection closure off the main queue. Completion is on main.
 - (void)suspendWithCompletion:(void (^)(void))completed;
+// Optional main-thread wakeup after a complete ACK of the current submitted
+// frame has updated transition/placement state. Subscribe only for an active
+// handoff, then clear it. Old, duplicate, short and ended-session ACKs do not
+// notify. A callback is a scheduling hint, never placement/input authority;
+// the consumer must revalidate its handoff and read the ordinary exact receipt.
+@property(nonatomic,copy) void (^transitionFrameAcknowledged)(void);
+// Quit: every window put back, confirmed, within two seconds per helper; then each session is
+// closed, which makes the helper restore whatever it still holds. One stderr line
+// unless every window was restored or was gone.
+- (void)finish;
+// The DebugNative request (--debug-pointer): the library's counters, the helper's own
+// probe (what it holds, with each window's transform, alpha and screen rectangle as
+// the helper reads them), and the records last handed over. {"stall":N} answers and
+// then keeps the main thread from its run loop for N seconds, at most 30.
+- (NSData *)debug:(NSDictionary *)request;
+// The helper is gone, the watchdog closed the session, or -finish ran. Nothing is
+// described or sent from then on. Recovery creates a separately audited object.
+@property (readonly) BOOL ended;
+@end
+// Each category below is implemented in DWNativePresenter+<Category>.m.
+@interface DWNativePresenter (Families)
 // Broader allowlist helpers bind only verified native roots. Attached children
 // follow that root's placement and do not become independent world windows.
 - (BOOL)allowsWindow:(NSDictionary *)identity;
@@ -122,6 +121,8 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // and the next -submit lets it appear. Idempotent, best effort, no-op for a window the helper holds
 // nothing of, for a bound window and for a helper without the veil. Main thread.
 - (void)declineWindow:(NSDictionary *)identity;
+@end
+@interface DWNativePresenter (Withholding)
 // Temporarily omit this exact root and every bound family member from frames
 // while its application owns a native Fill animation. Originals stay journaled;
 // unbind/finish still restore them. No placement receipt is eligible while held.
@@ -143,12 +144,8 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition;
 - (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha;
 - (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition;
-// Optional main-thread wakeup after a complete ACK of the current submitted
-// frame has updated transition/placement state. Subscribe only for an active
-// handoff, then clear it. Old, duplicate, short and ended-session ACKs do not
-// notify. A callback is a scheduling hint, never placement/input authority;
-// the consumer must revalidate its handoff and read the ordinary exact receipt.
-@property(nonatomic,copy) void (^transitionFrameAcknowledged)(void);
+@end
+@interface DWNativePresenter (Frames)
 // The frame this snapshot asks for: one record for every bound window (`identities`,
 // logical id → identity), at its placement's screen_rect, or parked beyond every
 // display when it has none. Nothing is sent. A snapshot without outputs (a display
@@ -161,6 +158,8 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // Hands the described frame to the library's writer thread if it differs from the
 // last one handed over, or a window's own frame changed since. Never waits.
 - (void)submit;
+@end
+@interface DWNativePresenter (Acknowledgement)
 // Main thread: supersede every receipt/pending ACK and require another eligible
 // -describe and a newly submitted frame/ACK, even when its geometry is identical.
 // Call once for each new consumer transfer/cancellation revision before describe.
@@ -184,16 +183,4 @@ bool DWNativeClipPlacement(CGRect native,CGRect rootNative,CGRect rootScreen,CGR
 // only fences the ACK against current presentation state; it performs no native
 // getters or event-hit queries and never establishes usable input by itself.
 - (BOOL)isAcknowledgedPlacementCurrent:(DWNativeAppliedPlacement *)placement;
-// Quit: every window put back, confirmed, within two seconds per helper; then each session is
-// closed, which makes the helper restore whatever it still holds. One stderr line
-// unless every window was restored or was gone.
-- (void)finish;
-// The DebugNative request (--debug-pointer): the library's counters, the helper's own
-// probe (what it holds, with each window's transform, alpha and screen rectangle as
-// the helper reads them), and the records last handed over. {"stall":N} answers and
-// then keeps the main thread from its run loop for N seconds, at most 30.
-- (NSData *)debug:(NSDictionary *)request;
-// The helper is gone, the watchdog closed the session, or -finish ran. Nothing is
-// described or sent from then on. Recovery creates a separately audited object.
-@property (readonly) BOOL ended;
 @end

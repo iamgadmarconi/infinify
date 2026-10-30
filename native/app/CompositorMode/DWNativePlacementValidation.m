@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Read-only ABI cross-checked in ../privileged/payload.m and the owned event-hit
+// Read-only ABI cross-checked in ../../dock-helper/Payload/DWPayloadState.m and the owned event-hit
 // fixture against yabai (MIT), https://github.com/asmvik/yabai,
 // dd845723416f5fe92af49fad5ebab00369e07edd:
 // src/osax/payload.m; src/misc/extern.h:16,17,79,82. Native parent discovery is

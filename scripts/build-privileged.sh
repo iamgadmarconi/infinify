@@ -33,7 +33,7 @@ xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra -Werror $hel
   native/dock-helper/Loader/DWDoctor.m -framework Foundation -o "$out/doctor"
 # Apple arm64e payload is for Dock. The arm64 build is for our ordinary fixture
 # host; macOS may prohibit arm64e third-party processes without boot policy changes.
-# DWPayload.m holds the helper.
+# native/dock-helper/Payload/DWDockPayload.m (with the fragments it #imports) holds the helper; compile only that file.
 architectures=arm64e
 [ "$mode" = production ] || architectures='arm64 arm64e'
 for arch in $architectures; do
@@ -41,7 +41,7 @@ for arch in $architectures; do
   # of its identity so rebuilding unchanged source preserves helper reuse hashes.
   xcrun clang -O2 -arch "$arch" -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $helper_includes -dynamiclib \
     -Wl,-install_name,"@rpath/payload-$arch.dylib" \
-    native/dock-helper/Payload/DWPayload.m -framework AppKit -o "$out/payload-$arch.dylib"
+    native/dock-helper/Payload/DWDockPayload.m -framework AppKit -o "$out/payload-$arch.dylib"
 done
 # Protocol v2 client library for the desktop shell.
 xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror $helper_includes -c \

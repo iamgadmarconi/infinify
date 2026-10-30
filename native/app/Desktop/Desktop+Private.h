@@ -10,7 +10,7 @@
 #import "DWSessionWatch.h"
 #import "DWTypedValue.h"
 #import "DesktopView.h"
-#import "IFBackground.h"
+#import "IFBackgroundProgram.h"
 #import "LiveSource.h"
 #import "DWDesktopSupport.h"
 // DriftWM's pointer policy (DWPointerHover.h): every panel's view hosts one. DWPolicyPress is a view's

@@ -11,7 +11,7 @@
 // adapted from the same commit's src/render/shader_chunks.rs,
 // src/render/tile_chunks.rs, src/render/capture_background.rs,
 // src/shaders/chunk_bg.glsl and upstream docs/gigapixel-wallpapers.md, with
-// background-tiff.{h,m} beside this file (BACKGROUND-NOTES.md, section 17).
+// IFBGTiffSource.{h,m} beside this file (BACKGROUND-NOTES.md, section 17).
 //
 // The module has no dependency on the rest of the app. See BACKGROUND-NOTES.md
 // for the uniform mapping, the host driving protocol and every deviation from

@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Headless regression of the Dock helper payload and its C client. DWPayloadRestoreIdentityTests.m and DWPayloadForwardOperationsTests.m compile
-# the real payload (native/dock-helper/Payload/DWPayload.m) with substituted native calls: journal before mutation, identity fences, restore
+# the real payload (native/dock-helper/Payload/DWDockPayload.m and the fragments it #imports) with substituted native calls: journal before mutation, identity fences, restore
 # re-basing, handoff recovery, Space and veil rules, outcomes and native-call counts. DWHelperClientTests.py builds the C client
 # (DWHelperClient.c) and runs it against a fake peer on a temporary socket. No window, Dock, root, setting or permission is touched; none
 # of this is native compositing evidence.

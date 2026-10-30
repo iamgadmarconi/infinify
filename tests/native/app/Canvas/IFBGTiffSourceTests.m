@@ -11,7 +11,7 @@
 #import <Metal/Metal.h>
 #import <zlib.h>
 #import "IFBGTiffSource.h"
-#import "IFBackground.h"
+#import "IFBackgroundProgram.h"
 #include <signal.h>
 #include <unistd.h>
 
