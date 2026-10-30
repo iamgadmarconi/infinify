@@ -254,7 +254,7 @@ where the canvas put them. What was run was run in the guest, never on the owner
 
 Ad-hoc builds carry no daemon property list and cannot enable this; they keep `native-desktop` in a
 terminal with `sudo`. The launcher refuses an unknown or pending
-earlier load, a journal that is not schema 3, a different boot session's journal, a live earlier Dock, a payload
+earlier load, a journal with no integer schema number, a different boot session's journal, a live earlier Dock, a payload
 that differs from the bundle.
 
 ### Limits of desktop mode

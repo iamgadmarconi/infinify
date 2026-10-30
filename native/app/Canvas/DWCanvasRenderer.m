@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/canvas-renderer.m at 37b27b1.
 // Adapted from DriftWM, https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: src/ipc/mod.rs (cmd_screenshot,
 // resolve_screenshot_region, window_visual_rect, snap_rect_to_rect, union_rect:
@@ -36,30 +37,6 @@
 #import <AppKit/AppKit.h>
 #import "DWScreenshotWriter.h"
 
-NSArray *list(id value) { return [value isKindOfClass:NSArray.class]?value:@[]; }
-BOOL validAttachment(DWCanvasAttachment *image) {
-    if(![image isKindOfClass:DWCanvasAttachment.class]||!image.buffer||!DWFiniteRect(image.unitRect))return NO;
-    CGRect crop=image.contentRect;if(CGRectIsNull(crop))return YES;
-    return DWFiniteRect(crop)&&crop.origin.x>=0&&crop.origin.y>=0&&CGRectGetMaxX(crop)<=CVPixelBufferGetWidth(image.buffer)&&CGRectGetMaxY(crop)<=CVPixelBufferGetHeight(image.buffer);
-}
-CGPoint pointOf(id value) { NSDictionary *p=DWTyped(value,NSDictionary.class);return CGPointMake([DWTyped(p[@"x"],NSNumber.class)doubleValue],[DWTyped(p[@"y"],NSNumber.class)doubleValue]); }
-// The controller's {origin:{x,y},size:{width,height}}; CGRectNull for anything else.
-CGRect rectOf(id value) {
-    NSDictionary *r=DWTyped(value,NSDictionary.class),*origin=DWTyped(r[@"origin"],NSDictionary.class),*size=DWTyped(r[@"size"],NSDictionary.class);if(!DWTyped(origin[@"x"],NSNumber.class)||!DWTyped(origin[@"y"],NSNumber.class)||!DWTyped(size[@"width"],NSNumber.class)||!DWTyped(size[@"height"],NSNumber.class))return CGRectNull;
-    return CGRectMake([DWTyped(origin[@"x"],NSNumber.class)doubleValue],[DWTyped(origin[@"y"],NSNumber.class)doubleValue],[DWTyped(size[@"width"],NSNumber.class)doubleValue],[DWTyped(size[@"height"],NSNumber.class)doubleValue]);
-}
-BOOL currentDrawnPlacement(NSDictionary *p) {
-    NSString *kind=DWTyped(p[@"kind"],NSString.class);
-    return ([kind isEqual:@"window"]||[kind isEqual:@"standin"])&&DWTyped(p[@"focused"],NSNumber.class)&&DWFiniteRect(rectOf(p[@"world_rect"]));
-}
-BOOL currentOutputPlacement(NSDictionary *p) {
-    return currentDrawnPlacement(p)&&DWTyped(p[@"window"],NSNumber.class)&&DWTyped(p[@"output"],NSNumber.class);
-}
-BOOL currentOutputPlacements(id value) {
-    if(![value isKindOfClass:NSArray.class])return NO;
-    for(id entry in value)if(!currentOutputPlacement(DWTyped(entry,NSDictionary.class)))return NO;
-    return YES;
-}
 static BOOL drawableOutput(NSDictionary *output) {
     NSDictionary *camera=DWTyped(output[@"camera"],NSDictionary.class);NSNumber *zoom=DWTyped(output[@"zoom"],NSNumber.class),*identifier=DWTyped(output[@"id"],NSNumber.class);
     return identifier&&isfinite(identifier.doubleValue)&&identifier.doubleValue>0&&floor(identifier.doubleValue)==identifier.doubleValue&&identifier.unsignedLongLongValue>0&&DWFiniteRect(rectOf(output[@"screen_bounds"]))&&DWTyped(camera[@"x"],NSNumber.class)&&DWTyped(camera[@"y"],NSNumber.class)&&isfinite([camera[@"x"]doubleValue])&&isfinite([camera[@"y"]doubleValue])&&isfinite(zoom.doubleValue)&&zoom.doubleValue>0;
@@ -101,7 +78,7 @@ static NSString *displayName(NSString *app) {
     return names[app]=name.length?name:app;
 }
 // One clock for every output and every screenshot: seconds since the first frame was described.
-double canvasTime(void) { static CFTimeInterval start;static dispatch_once_t once;dispatch_once(&once,^{start=CACurrentMediaTime();});return CACurrentMediaTime()-start; }
+double DWCanvasRendererTime(void) { static CFTimeInterval start;static dispatch_once_t once;dispatch_once(&once,^{start=CACurrentMediaTime();});return CACurrentMediaTime()-start; }
 
 @implementation DWCanvasOutput
 @end
@@ -117,7 +94,7 @@ double canvasTime(void) { static CFTimeInterval start;static dispatch_once_t onc
     return counts;
 }
 - (instancetype)initWithSource:(DWCanvasSource)source {
-    if((self=[super init])){_source=[source copy];_states=[NSMutableDictionary dictionary];canvasTime();}
+    if((self=[super init])){_source=[source copy];_states=[NSMutableDictionary dictionary];DWCanvasRendererTime();}
     return self;
 }
 - (void)setNativeMenuBackground:(BOOL)enabled {
@@ -199,7 +176,7 @@ double canvasTime(void) { static CFTimeInterval start;static dispatch_once_t onc
 }
 // Is the window of this placement, or of this entry of the window list, screen-pinned?
 // A placement says so with a boolean, a window entry with its pin ({output, screen_rect}).
-BOOL pinnedOf(NSDictionary *p) { return [DWTyped(p[@"pinned"],NSNumber.class)boolValue]||DWTyped(p[@"pinned"],NSDictionary.class)!=nil; }
+
 // One placement as a compositor element. `rect` is the window's rectangle: its canvas
 // rectangle, or with `onScreen` its pin's rectangle in the output's own points, which
 // the compositor draws at zoom 1 whatever the camera (upstream's screen-pinned
@@ -228,11 +205,6 @@ BOOL pinnedOf(NSDictionary *p) { return [DWTyped(p[@"pinned"],NSNumber.class)boo
     [self content:element window:window placement:p];
     return YES;
 }
-// When an animation that begins now began, on this output's clock. Upstream advances every animation before it draws, so the
-// first frame that shows one is already a tick in: the time of the last frame presented. This canvas draws on demand, so
-// that frame can be long past, and the animation would be over before it was seen: never more than one 60 Hz tick ago.
-double began(DWCanvasOutput *state,double now) { return fmax(state.presented,now-1.0/60); }
-BOOL pictured(IFCompositorElement *element) { return element.pixelBuffer||element.texture; }
 static const double sizeHold=10;
 // A closing-bucket element stays in the frame beside whatever keeps its window's identifier, so it carries one of its own.
 - (uint64_t)mark { return 1ULL<<63|++self.marks; }
@@ -252,7 +224,7 @@ static NSArray<NSDictionary *> *orderBinding(NSDictionary *snapshot,NSNumber *ou
     if(!currentOutputPlacements(snapshot[@"placements"]))return nil;
     DWCanvasOutput *state=self.states[output];if(!state.orderApplied||!snapshot||state.orderDirty||state.geometryAnimating||state.geometryNeedsSettledDraw||state.orderProvider!=self.liveOrder||state.orderRevisionProvider!=self.liveOrderRevision)return nil;
     if(self.liveOrderRevision){if(state.orderRevision!=self.liveOrderRevision(output))return nil;}
-    else if(![state.orderApplied isEqualToArray:validatedOrder(self.liveOrder?self.liveOrder(state.orderBase,output):nil,state.orderBase)])return nil;
+    else if(![state.orderApplied isEqualToArray:DWCanvasValidatedOrder(self.liveOrder?self.liveOrder(state.orderBase,output):nil,state.orderBase)])return nil;
     if(snapshot!=state.orderSnapshot&&snapshot!=state.orderMatchedSnapshot){
         NSDictionary *current=nil;for(id entry in list(snapshot[@"outputs"])){NSDictionary *o=DWTyped(entry,NSDictionary.class);if(drawableOutput(o)&&[o[@"id"]isEqual:output]){current=o;break;}}
         if(![state.orderOutput isEqual:current]||![state.orderBinding isEqualToArray:orderBinding(snapshot,output)])return nil;
@@ -300,7 +272,7 @@ static NSArray<NSDictionary *> *orderBinding(NSDictionary *snapshot,NSNumber *ou
     NSMutableArray<NSDictionary *> *all=[NSMutableArray array];NSMutableSet<NSNumber *> *alive=[NSMutableSet set];
     for(id entry in list(snapshot[@"outputs"])){NSDictionary *output=DWTyped(entry,NSDictionary.class);if(drawableOutput(output)&&![alive containsObject:output[@"id"]]){[all addObject:output];[alive addObject:output[@"id"]];}}
     for(NSNumber *output in self.states.allKeys)if(![alive containsObject:output]){[self stopOutput:self.states[output]];[self.states removeObjectForKey:output];}
-    if(!host)return;[self configure:snapshot];double now=canvasTime();[self play:snapshot now:now];
+    if(!host)return;[self configure:snapshot];double now=DWCanvasRendererTime();[self play:snapshot now:now];
     // The windows an `open` event of this snapshot names, and the serial of each: an output that has not been described with it yet opens the window.
     NSMutableDictionary<NSNumber *,NSNumber *> *opened=[NSMutableDictionary dictionary];
     for(id entry in list(snapshot[@"lifecycle_events"])){NSDictionary *event=DWTyped(entry,NSDictionary.class);if(DWTyped(event[@"window"],NSNumber.class)&&DWTyped(event[@"serial"],NSNumber.class)&&[event[@"event"]isEqual:@"open"])opened[event[@"window"]]=event[@"serial"];}
@@ -428,7 +400,7 @@ static NSArray<NSDictionary *> *orderBinding(NSDictionary *snapshot,NSNumber *ou
         // Not while the window's size is owed: that picture is of the size it is leaving, and -render: starts both when the size has settled.
         // A window that is fullscreen here is not held for the output's size (-render:).
         if(!state.unseen[window]||!pictured(element)||([self.sizing isEqual:window]&&![DWTyped(state.placements[window][@"fullscreen"],NSNumber.class)boolValue]))continue;
-        [state.unseen removeObjectForKey:window];IFCompositorElement *fade=state.adopted[window];double start=began(state,canvasTime());
+        [state.unseen removeObjectForKey:window];IFCompositorElement *fade=state.adopted[window];double start=began(state,DWCanvasRendererTime());
         if(element.lifecycle==IFCompositorLifecycleOpening&&isnan(element.lifecycleStartTime)){element.lifecycleStartTime=start;opening=YES;}
         if(fade){fade.lifecycleStartTime=start;[state.adopted removeObjectForKey:window];opening=YES;}
     }
@@ -477,7 +449,7 @@ static NSArray<NSDictionary *> *orderBinding(NSDictionary *snapshot,NSNumber *ou
     self.frameTarget=time;self.paced=YES;for(DWCanvasOutput *state in self.states.allValues){state.layer.presentationTime=time;state.layer.presentationInterval=rate>0?1.0/rate:0;state.menuLayer.presentationTime=time;state.menuLayer.presentationInterval=state.layer.presentationInterval;}[self flush];self.paced=NO;
 }
 - (void)flush {
-    BOOL placed=self.placed;self.pending=NO;self.placed=NO;double now=canvasTime();CFTimeInterval began=self.measured?CACurrentMediaTime():0;BOOL any=NO;
+    BOOL placed=self.placed;self.pending=NO;self.placed=NO;double now=DWCanvasRendererTime();CFTimeInterval began=self.measured?CACurrentMediaTime():0;BOOL any=NO;
     for(DWCanvasOutput *state in self.states.allValues){
         if(!state.dirty){if(state.menuDirty)[self flushMenuBackground:state];continue;}
         if(self.paced&&!placed&&state.layer.drawablePending){state.awaitingDrawable=YES;if(state.menuDirty)[self flushMenuBackground:state];continue;}

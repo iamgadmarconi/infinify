@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/canvas-renderer.h at 37b27b1: lines 12-29 moved out to DWCanvasAttachment.h.
 #import <QuartzCore/QuartzCore.h>
 #import <CoreVideo/CoreVideo.h>
 #import "DWCanvasAttachment.h"

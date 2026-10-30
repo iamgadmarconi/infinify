@@ -12,7 +12,7 @@
 // WINDOW_CREATED, WINDOW_DEMINIMIZED and APPLICATION_VISIBLE look for the window at once, APPLICATION_LAUNCHED for all of an
 // application's. DWWindowEvents.h has the observers and the rest of the provenance. Here creation hints coalesce into the
 // host's single-flight worker observation; existing bound-window events are delivered to the host immediately.
-// Split from native/app/Windows/DWWindowManager.m at 37b27b1: the discovery passes (the pass over the window records, the shareable
+// Split from native/desktop/window-manager.m at 37b27b1: the discovery passes (the pass over the window records, the shareable
 // read and its completion), moved verbatim.
 #import "DWWindowManager+Private.h"
 #import "DWNativeFamily.h"
@@ -99,7 +99,7 @@
     NSMutableDictionary<NSNumber *,NSDictionary *> *requestedBounds=[NSMutableDictionary dictionary],*requestedBases=[NSMutableDictionary dictionary],*titleTickets=[NSMutableDictionary dictionary];for(NSNumber *wid in asked){requestedBounds[wid]=bounds[wid];requestedBases[wid]=bases[wid];
         if(self.native&&!listedTitles[wid]){NSMutableDictionary *ticket=[@{@"basis":bases[wid],@"deadline":@0}mutableCopy];self.titleRetries[wid]=ticket;titleTickets[wid]=ticket;}}
     NSDictionary *frames=requestedBounds.copy,*basis=requestedBases.copy,*tickets=titleTickets.copy;
-    if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?windowSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels basis:basis titleTickets:tickets earlyTickets:nil];});}];return;}
+    if(self.capturing){[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){NSDictionary<NSNumber *,id> *subroles=content?DWWindowManagerSubroles(asked,nil):nil;dispatch_async(dispatch_get_main_queue(),^{[weak read:content error:error asked:asked front:front subroles:subroles titles:nil frames:nil levels:levels basis:basis titleTickets:tickets earlyTickets:nil];});}];return;}
     // Native presentation or a scoped overlay without Screen Recording access: shareable windows are not asked for, so nothing can prompt. What they
     // would have said of a candidate is read from the window list (this pass's bounds) and from Accessibility, off the main thread like the subroles.
     NSMutableDictionary *uncached=[asked mutableCopy],*cachedRoles=[NSMutableDictionary dictionary],*cachedTitles=[listedTitles mutableCopy];
@@ -111,9 +111,9 @@
     if(asked.count&&!uncached.count){[self read:nil error:nil asked:asked front:front subroles:cachedRoles titles:cachedTitles frames:frames levels:levels basis:basis titleTickets:tickets earlyTickets:nil];return;}
     // Do not carry an older prefetched result through another app's slow read.
     // A mixed batch uses the ordinary fresh selection for its complete set.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[listedTitles mutableCopy];NSDictionary<NSNumber *,id> *subroles=windowSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis titleTickets:tickets earlyTickets:nil];});});
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{NSMutableDictionary<NSNumber *,NSString *> *titles=[listedTitles mutableCopy];NSDictionary<NSNumber *,id> *subroles=DWWindowManagerSubroles(asked,titles);dispatch_async(dispatch_get_main_queue(),^{[weak read:nil error:nil asked:asked front:front subroles:subroles titles:titles frames:frames levels:levels basis:basis titleTickets:tickets earlyTickets:nil];});});
 }
-// `front` is the window list's own order, front to back. `subroles` is windowSubroles' answer for `asked`, read before this turn of the main queue.
+// `front` is the window list's own order, front to back. `subroles` is DWWindowManagerSubroles' answer for `asked`, read before this turn of the main queue.
 // `titles` and `frames` stand in for the shareable windows in a run that does not read them (`capturing` NO): `content` is then nil and no failure.
 - (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles titles:(NSDictionary<NSNumber *,NSString *> *)titles frames:(NSDictionary<NSNumber *,NSDictionary *> *)frames levels:(NSDictionary<NSNumber *,NSNumber *> *)levels basis:(NSDictionary<NSNumber *,NSDictionary *> *)basis titleTickets:(NSDictionary<NSNumber *,NSDictionary *> *)tickets earlyTickets:(NSDictionary<NSNumber *,NSDictionary *> *)earlyTickets {
     if(self.stopped)return;self.reading=NO;id<DWWindowHost> host=self.host;
@@ -140,7 +140,7 @@
         NSDictionary *early=earlyTickets[wid];BOOL earlyReady=self.native&&self.completed&&early&&self.nativeMetadata[wid]==early
             &&[early[@"basis"]isEqual:basis[wid]]&&[early[@"since"]isEqual:held]&&NSProcessInfo.processInfo.systemUptime-[early[@"started"]doubleValue]<=.1
             &&[levels[wid]integerValue]==0&&[subroles[wid]isEqual:(__bridge NSString *)kAXStandardWindowSubrole]
-            &&[titles[wid]isKindOfClass:NSString.class]&&canonicalNativeBasis(basis[wid]);
+            &&[titles[wid]isKindOfClass:NSString.class]&&DWWindowManagerIsCanonicalBasis(basis[wid]);
         if(![self.bases[wid]isEqual:basis[wid]]||!held||(earlyTickets?!earlyReady:NSProcessInfo.processInfo.systemUptime-held.doubleValue<still)){again=YES;continue;}
         DWWindowCandidate *window=found[wid];
         // A window the read did not list yet is asked for once more, then left until it next comes on screen.
@@ -157,7 +157,7 @@
         window.displayFixed=floating&&[subrole isEqual:(__bridge NSString *)kAXFloatingWindowSubrole];
         // Utility panels have an explicit AX role and keep their native window
         // level. Do not guess a panel from a title, size or failed AX response.
-        BOOL real=floating?window.displayFixed:([subrole isKindOfClass:NSString.class]?toplevelSubrole(subrole):window.title.length||(window.frame.size.width>=200&&window.frame.size.height>=150));
+        BOOL real=floating?window.displayFixed:([subrole isKindOfClass:NSString.class]?DWWindowManagerIsToplevelSubrole(subrole):window.title.length||(window.frame.size.width>=200&&window.frame.size.height>=150));
         // An unavailable title is not an authored "Untitled" document. During
         // startup that invented name could bind a different same-app saved slot.
         // Keep an otherwise eligible native candidate unoffered until CG or AX
@@ -197,7 +197,7 @@
     if(self.native){
         self.reading=YES;NSDictionary *scope=self.scope;NSSet *offered=self.offered.copy;NSInteger panelLevel=self.testPanelWindowLevel;__weak DWWindowManager *weak=self;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-            NSString *why=nil;NSArray *records=nativePreservedWindows(scope,offered,panelLevel,&why);
+            NSString *why=nil;NSArray *records=DWWindowManagerPreservedWindows(scope,offered,panelLevel,&why);
             dispatch_async(dispatch_get_main_queue(),^{DWWindowManager *manager=weak;if(!manager||manager.stopped)return;manager.reading=NO;
                 if(!records){manager.retry=NSProcessInfo.processInfo.systemUptime+2;manager.requested=[NSSet set];[manager.host discoveryFailed:why];return;}
                 NSMutableArray *present=[NSMutableArray array];

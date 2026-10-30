@@ -9,18 +9,17 @@
 // top of it, so every call site's absolute-matrix meaning is exercised through the placement-1 path. Values are stored as 32-bit
 // floats like the window server's. The model proves what the helper asks for (never placement 0, identity at placement 1 on
 // restore), not what the window server then does: that is the guest's to show.
-static CGAffineTransform modelBase,modelLayer;static BOOL modelBaseSet,modelIgnoreLayer;static int modelReadStatus;static unsigned modelWrites[4];
+// modelExtra stands for every placement above 1 that some other writer holds (the system's own window open animation, measured on the guest
+// as a catenated [0.999,0,0,1,0.5,-201] on a Finder window): it is part of the catenated transform, and the helper neither reads nor writes it.
+static CGAffineTransform modelBase,modelLayer,modelExtra;static BOOL modelBaseSet,modelIgnoreLayer;static int modelReadStatus;static unsigned modelWrites[4];
 static CGAffineTransform modelFloats(CGAffineTransform t) { return CGAffineTransformMake((float)t.a,(float)t.b,(float)t.c,(float)t.d,(float)t.tx,(float)t.ty); }
 static CGAffineTransform modelNatural(void) { return CGAffineTransformMake(1,0,0,1,-nativeBounds.origin.x,-nativeBounds.origin.y); }
 static CGAffineTransform modelPlacement0(void) { return modelBaseSet ? modelBase : modelFloats(modelNatural()); }
-static CGAffineTransform modelCatenated(void) { return modelFloats(CGAffineTransformConcat(modelPlacement0(),modelLayer)); }
+static CGAffineTransform modelCatenated(void) { return modelFloats(CGAffineTransformConcat(CGAffineTransformConcat(modelPlacement0(),modelLayer),modelExtra)); }
 static CGError modelGet(int cid,uint32_t wid,int placement,void *flags,CGAffineTransform *out) {
     assert(cid==1&&wid==42&&!flags&&(placement==0||placement==1));
     if(modelReadStatus)return modelReadStatus;
     *out=placement==0 ? modelPlacement0() : modelLayer;return 0;
-}
-static CGError modelGetCatenated(int cid,uint32_t wid,CGAffineTransform *out) {
-    assert(cid==1&&wid==42);if(modelReadStatus)return modelReadStatus;*out=modelCatenated();return 0;
 }
 static CGError modelSet(int cid,uint32_t wid,int placement,int flags,const CGAffineTransform *value) {
     assert(cid==1&&wid==42&&flags==0&&(placement==0||placement==1));
@@ -30,14 +29,14 @@ static CGError modelSet(int cid,uint32_t wid,int placement,int flags,const CGAff
     return 0;
 }
 static void modelReset(CGRect frame) {
-    nativeBounds=frame;modelBaseSet=modelIgnoreLayer=NO;modelLayer=CGAffineTransformIdentity;modelReadStatus=0;memset(modelWrites,0,sizeof(modelWrites));
+    nativeBounds=frame;modelBaseSet=modelIgnoreLayer=NO;modelLayer=modelExtra=CGAffineTransformIdentity;modelReadStatus=0;memset(modelWrites,0,sizeof(modelWrites));
 }
 static BOOL modelIdentityLayer(void) {
     return modelLayer.a==1&&modelLayer.b==0&&modelLayer.c==0&&modelLayer.d==1&&modelLayer.tx==0&&modelLayer.ty==0;
 }
 static void placementCases(struct dw2_identity who) {
     mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
-    skyGetPlacement=modelGet;skySetPlacement=modelSet;skyGetCatenated=modelGetCatenated;getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;
+    skyGetPlacement=modelGet;skySetPlacement=modelSet;getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;getLayer=dwReadLayer;setLayer=dwWriteLayer;
     fixtureOnly=NO;allowlist=nil;ownerValue=7;connectionStatus=0;processPID=123;processUID=getuid();goneWID=0;boundsStatus=0;transformReadStatus=0;perWindowNatives=NO;
     rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];
     CGRect savedBounds=nativeBounds;CGAffineTransform savedTransform=nativeTransform;
@@ -51,15 +50,15 @@ static void placementCases(struct dw2_identity who) {
     v2Apply(&frame,1,&status);
     assert(status==DW2_APPLIED && !modelWrites[0] && modelWrites[1]==1 && !modelBaseSet && v2SameTransform(modelCatenated(),requested));
     assert(fabs(modelLayer.tx-(-106.685+.5*25))<1e-4 && fabs(modelLayer.ty-(-61.37+.5*35))<1e-4 && modelLayer.a==.5f && modelLayer.d==.5f);
-    // The original was captured as the natural placement-0 value.
-    assert(v2SameTransform(v2Table[@42]->transform,natural));
+    // The original is the window's placement-1 layer, the identity here, not the absolute matrix.
+    assert(CGAffineTransformIsIdentity(v2Table[@42]->layer));
     // The application moves its own window by +140: placement 0 follows the native frame, so the drawn picture moves with it until
     // the next frame, which sees the catenated read differ and writes placement 1 again, to the same absolute request.
     nativeBounds.origin.x+=140;assert(!v2SameTransform(modelCatenated(),requested));
     v2Apply(&frame,1,&status);
     assert(status==DW2_APPLIED && !modelWrites[0] && modelWrites[1]==2 && v2SameTransform(modelCatenated(),requested));
-    // Restore: the original is re-based on the origin now (165,35). The window is natural there, so the layer that composes with
-    // the untouched placement 0 is exactly the identity, written at placement 1; placement 0 is never written.
+    // Restore: the original layer (the identity) is written back at placement 1; placement 0 is never written and the window is natural
+    // at the origin it has now (165,35), whatever it did meanwhile.
     v2Restore(@"placement restore",NO,nil,&summary);
     assert(!summary.pending && !v2Table.count && v2Released[@42] && !modelWrites[0] && modelWrites[1]==3 && modelIdentityLayer());
     assert(v2SameTransform(modelCatenated(),CGAffineTransformMake(1,0,0,1,-165,-35)) && !modelBaseSet);
@@ -74,13 +73,14 @@ static void placementCases(struct dw2_identity who) {
     assert(!summary.pending && !modelWrites[0] && modelWrites[1]==layerWrites+1 && modelIdentityLayer()
         && v2SameTransform(modelCatenated(),CGAffineTransformMake(1,0,0,1,-165,-35)));
 
-    // A window an earlier build left with placement 0 reset to identity (drawn at the display's corner): the original read is the
-    // identity (plain), the frame's absolute request is reached with placement 1 alone, and restore draws it natural again.
+    // A window an earlier build left with placement 0 reset to identity (drawn at the display's corner): its layer is the identity, the
+    // frame's absolute request is reached with placement 1 alone, and restore puts the layer back and nothing else. Placement 0 is not
+    // the helper's to write, so the window stays where that build left it (only its application's restart fixes that, see the README).
     clearTables();modelReset(CGRectMake(25,35,300,200));modelBase=CGAffineTransformIdentity;modelBaseSet=YES;
     v2Apply(&frame,1,&status);
     assert(status==DW2_APPLIED && !modelWrites[0] && v2SameTransform(modelCatenated(),requested) && v2SameTransform(modelLayer,requested));
     v2Restore(@"restore of a window left at placement 0 = identity",NO,nil,&summary);
-    assert(!summary.pending && !modelWrites[0] && v2SameTransform(modelCatenated(),natural) && v2SameTransform(modelLayer,natural));
+    assert(!summary.pending && !modelWrites[0] && modelIdentityLayer() && v2SameTransform(modelCatenated(),CGAffineTransformIdentity));
 
     // Safety checks that were there stay: an unreadable placement 0 writes nothing, a placement 0 that is not a usable matrix writes
     // nothing, a layer the window server does not take is not acknowledged and not called restored, and is put right once it is taken.
@@ -100,6 +100,6 @@ static void placementCases(struct dw2_identity who) {
     // Placement 0 is never resolved: there is no symbol to fall back on.
     assert(skyGetPlacement==modelGet);
     clearTables();nativeBounds=savedBounds;nativeTransform=savedTransform;
-    getTransform=readTransform;setTransform=writeTransform;
+    getTransform=readTransform;setTransform=writeTransform;getLayer=readTransform;setLayer=writeTransform;
     puts("PASS: every transform is written at placement 1 and read back catenated; a natural window restores with the identity at placement 1, a native move is followed, a reset layer is re-restored, placement 0 is never written, and an unreadable base, an unusable base or a layer the server does not take is refused; modelled window server only");
 }

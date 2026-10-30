@@ -171,7 +171,7 @@ static inline void familyNormalizeOrder(NSDictionary<NSNumber *,DWReplicaOrder *
 - (void)pruneCaptureDemand;
 @end
 // Defined in DWReplicaMember.m: one lifecycle trace for the process (its log limit is shared).
-void familyTrace(DWReplicaMember *member,const char *event,const char *reason,NSInteger error);
+void DWReplicaFamilyTrace(DWReplicaMember *member,const char *event,const char *reason,NSInteger error);
 static inline NSDictionary *familyHit(DWReplicaMember *member,NSDictionary *root,CGPoint local) {
     if(![member imageAvailable]||!member.image.buffer||!familyBinding(member.root,root))return nil;
     CGPoint own=CGPointMake(local.x+member.rootBounds.origin.x-member.bounds.origin.x,local.y+member.rootBounds.origin.y-member.bounds.origin.y);

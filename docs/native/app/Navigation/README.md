@@ -428,7 +428,7 @@ The controller answers a `hit` query with `{"hit": null}` when no source lies un
 placement under the pointer) it subscripted it as `hit[@"window"]`. JSON null arrives as `NSNull`, which has no keyed
 subscripting, so build `c49eae1` raised `NSInvalidArgumentException` inside the event tap and ended the owner's
 first compositor-mode run (`-[NSNull objectForKeyedSubscript:]` in `-[DesktopView hit:output:]`, called from
-`-[Desktop nativeInput:event:]`). The reply is now read through `DWControllerHit` (`native/app/CompositorMode/DWControllerHit.h`),
+`-[Desktop nativeInput:event:]`). The reply is now read through `DWControllerHit` (`native/app/Desktop/DWControllerHit.h`),
 which accepts only an object, and on the ordered path only the very window the renderer put on top; a null, a missing
 or a non-object `hit` is no hit on either path. The controller reply itself is also read as an object
 (`NSDictionary *result=asDict(reply[@"data"])` in `-[Desktop call:raw:]`), so a reply whose `data` is not an object is

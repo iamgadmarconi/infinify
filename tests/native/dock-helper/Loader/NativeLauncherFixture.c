@@ -84,7 +84,7 @@ static int helper(char **a, int n) {
     if (write(fd, text, strlen(text)) < 0) return 1; close(fd);
     snprintf(p, sizeof p, "%s/v2-journal.json", runtime);
     fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0600); if (fd < 0) return 1;
-    snprintf(text, sizeof text, "{\"v\":3,\"server_pid\":%s,\"server_birth_sec\":%s,\"server_birth_usec\":%s,\"server_uid\":%u,\"boot_uuid\":\"%s\",\"generation\":1,\"state\":\"empty\",\"windows\":[],\"released_windows\":[],\"last_restore\":{}}", a[5], a[6], a[7], getuid(), boot);
+    snprintf(text, sizeof text, "{\"v\":4,\"server_pid\":%s,\"server_birth_sec\":%s,\"server_birth_usec\":%s,\"server_uid\":%u,\"boot_uuid\":\"%s\",\"generation\":1,\"state\":\"empty\",\"windows\":[],\"released_windows\":[],\"last_restore\":{}}", a[5], a[6], a[7], getuid(), boot);
     if (write(fd, text, strlen(text)) < 0) return 1; close(fd);
     fputs("stub: authenticated v2 helper ready in Dock (stub)\n", stderr);
     return 0;

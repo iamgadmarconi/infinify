@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Internal interface of DWWindowManager, shared by DWWindowManager.m and DWWindowManager+Discovery.m: the class extension,
 // the stability interval, the discovery category and the helper functions both files call.
-// Split from native/app/Windows/DWWindowManager.m at 37b27b1, moved verbatim.
+// Split from native/desktop/window-manager.m at 37b27b1, moved verbatim.
 #pragma once
 #import "DWWindowManager.h"
 #import "DWWindowEvents.h"
@@ -65,7 +65,7 @@ static const NSTimeInterval still=.05;
 - (void)read:(SCShareableContent *)content error:(NSError *)error asked:(NSDictionary<NSNumber *,NSNumber *> *)asked front:(NSArray<NSNumber *> *)front subroles:(NSDictionary<NSNumber *,id> *)subroles titles:(NSDictionary<NSNumber *,NSString *> *)titles frames:(NSDictionary<NSNumber *,NSDictionary *> *)frames levels:(NSDictionary<NSNumber *,NSNumber *> *)levels basis:(NSDictionary<NSNumber *,NSDictionary *> *)basis titleTickets:(NSDictionary<NSNumber *,NSDictionary *> *)tickets earlyTickets:(NSDictionary<NSNumber *,NSDictionary *> *)earlyTickets;
 - (void)complete:(SCShareableContent *)content;
 @end
-NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNumber *> *asked,NSMutableDictionary<NSNumber *,NSString *> *titles);
-NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *offered,NSInteger panelLevel,NSString *__autoreleasing *why);
-BOOL toplevelSubrole(NSString *subrole);
-BOOL canonicalNativeBasis(NSDictionary *basis);
+NSDictionary<NSNumber *,id> *DWWindowManagerSubroles(NSDictionary<NSNumber *,NSNumber *> *asked,NSMutableDictionary<NSNumber *,NSString *> *titles);
+NSArray<NSDictionary *> *DWWindowManagerPreservedWindows(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *offered,NSInteger panelLevel,NSString *__autoreleasing *why);
+BOOL DWWindowManagerIsToplevelSubrole(NSString *subrole);
+BOOL DWWindowManagerIsCanonicalBasis(NSDictionary *basis);

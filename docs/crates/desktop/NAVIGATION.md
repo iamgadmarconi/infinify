@@ -1,5 +1,7 @@
 # Normal-window navigation, ABI 1
 
+Bare `src/…` paths on this page name `crates/desktop/src/` when that file exists there and otherwise name the upstream file the text cites; the `tests/upstream/` link is `docs/crates/desktop/tests/upstream/`, beside this page.
+
 The commands in the table below place the camera on a selected normal window
 with `keep` or `reset` zoom. Upstream's own window navigation (`center-window`,
 `center-nearest`, `cycle-windows`, `focus-center`, and what a click or an

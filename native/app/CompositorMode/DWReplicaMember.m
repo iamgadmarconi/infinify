@@ -4,7 +4,7 @@
 #import "DWNativeReplicaFamilies+Private.h"
 // Explicit diagnostic only: bounded lifecycle records, never titles, pixels or
 // unrestricted error text. It does not change capture or validation decisions.
-void familyTrace(DWReplicaMember *member,const char *event,const char *reason,NSInteger error) {
+void DWReplicaFamilyTrace(DWReplicaMember *member,const char *event,const char *reason,NSInteger error) {
     static BOOL enabled;static dispatch_once_t once;static NSUInteger records;
     dispatch_once(&once,^{const char *value=getenv("INFINIFY_DEBUG_FAMILIES");enabled=value&&!strcmp(value,"1");});
     if(!enabled||records>=4096)return;
@@ -23,14 +23,14 @@ void familyTrace(DWReplicaMember *member,const char *event,const char *reason,NS
 }
 - (BOOL)imageAvailable { return atomic_load(&alive)&&!atomic_load(&stopped)&&atomic_load(&publishedSequence)>atomic_load(&unavailableSequence); }
 - (void)retire {
-    if(atomic_load(&alive))familyTrace(self,"retire","none",0);
+    if(atomic_load(&alive))DWReplicaFamilyTrace(self,"retire","none",0);
     atomic_store(&alive,NO);self.image.buffer=NULL;[self.owner.coldAttempts removeObject:self];
     SCStream *stream=self.stream;if(!stream)return;self.stream=nil;
     [stream removeStreamOutput:self type:SCStreamOutputTypeScreen error:nil];
     [stream stopCaptureWithCompletionHandler:^(NSError *error){(void)error;}];
 }
 - (void)fail:(NSString *)failure code:(const char *)code error:(NSInteger)error {
-    if(!atomic_load(&alive))return;familyTrace(self,"fail",code,error);self.failure=failure;[self retire];
+    if(!atomic_load(&alive))return;DWReplicaFamilyTrace(self,"fail",code,error);self.failure=failure;[self retire];
     [self.owner memberFailed:self];
 }
 - (void)start {
@@ -42,7 +42,7 @@ void familyTrace(DWReplicaMember *member,const char *event,const char *reason,NS
     [self.stream startCaptureWithCompletionHandler:^(NSError *failure){CFTimeInterval completed=CACurrentMediaTime();dispatch_async(dispatch_get_main_queue(),^{
         DWReplicaMember *started=weak;if(!started||!atomic_load(&started->alive))return;
         if(failure)[started fail:failure.localizedDescription code:"start_failed" error:failure.code];
-        else{started.started=YES;familyTrace(started,"started","none",0);started.firstFrameDeadline=completed+2;
+        else{started.started=YES;DWReplicaFamilyTrace(started,"started","none",0);started.firstFrameDeadline=completed+2;
             if(!started.hadImage)dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(MAX(0,started.firstFrameDeadline-CACurrentMediaTime())*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[weak expireFirstFrame];});
         }
     });}];
@@ -116,7 +116,7 @@ void familyTrace(DWReplicaMember *member,const char *event,const char *reason,NS
             // A later status may arrive while the main queue installs pixels.
             // Its revocation must win even over this successful publication.
             if(![self imageAvailable]){self.image.buffer=NULL;[self.owner memberBecameUnavailable:self];}
-            else if(!old||newlyAvailable){familyTrace(self,"first_frame","none",0);[self.owner memberBecameDrawable:self];}
+            else if(!old||newlyAvailable){DWReplicaFamilyTrace(self,"first_frame","none",0);[self.owner memberBecameDrawable:self];}
             else if(changed)[self.owner changedWindow:self.root[@"window"]];
         }
         CVPixelBufferRelease(pixels);atomic_store(&self->pending,NO);

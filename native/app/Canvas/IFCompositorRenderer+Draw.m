@@ -142,20 +142,6 @@ static void IFCCornerClipUniforms(IFCRectI element, IFCRectD geometry, const flo
     u->corner_radius = simd_make_float4(clamped[0], clamped[1], clamped[2], clamped[3]);
 }
 
-// The sampled sub-rect `source` (texels) of a `texW` x `texH` texture: smithay's
-// tex_matrix, plus the centres of its outermost texels.
-void IFCSetSource(IFCUniforms *u, CGRect source, double texW, double texH) {
-    texW = fmax(texW, 1.0);
-    texH = fmax(texH, 1.0);
-    double x0 = source.origin.x, y0 = source.origin.y;
-    double x1 = x0 + source.size.width, y1 = y0 + source.size.height;
-    u->src = simd_make_float4((float)(x0 / texW), (float)(y0 / texH), (float)((x1 - x0) / texW), (float)((y1 - y0) / texH));
-    double loX = x0 + 0.5, hiX = x1 - 0.5, loY = y0 + 0.5, hiY = y1 - 0.5;
-    if (loX > hiX) loX = hiX = (x0 + x1) / 2.0;
-    if (loY > hiY) loY = hiY = (y0 + y1) / 2.0;
-    u->uv_bounds = simd_make_float4((float)(loX / texW), (float)(loY / texH), (float)(hiX / texW), (float)(hiY / texH));
-}
-
 static inline simd_float4 IFCColorVector(IFCompositorColor c) {
     return simd_make_float4((float)c.r / 255.0f, (float)c.g / 255.0f, (float)c.b / 255.0f, (float)c.a / 255.0f);
 }
@@ -163,15 +149,6 @@ static inline simd_float4 IFCColorVector(IFCompositorColor c) {
 @implementation IFCompositorRenderer (Draw)
 
 // MARK: Draw submission
-
-// elements.rs `WindowTransformElement::transform_rect`.
-IFCRectI IFCTransformRect(IFCRectI r, IFCompositorTransform t) {
-    double x0 = t.originX + ((double)r.x - t.originX) * t.scaleX + t.offsetX;
-    double y0 = t.originY + ((double)r.y - t.originY) * t.scaleY + t.offsetY;
-    double x1 = t.originX + ((double)(r.x + r.w) - t.originX) * t.scaleX + t.offsetX;
-    double y1 = t.originY + ((double)(r.y + r.h) - t.originY) * t.scaleY + t.offsetY;
-    return IFCRectIMake(IFCRound(x0), IFCRound(y0), MAX(IFCRound(x1) - IFCRound(x0), 0L), MAX(IFCRound(y1) - IFCRound(y0), 0L));
-}
 
 - (void)draw:(IFCPipe)pipe dst:(IFCRectI)dst uniforms:(IFCUniforms *)u texture:(id<MTLTexture>)texture
      element:(IFCompositorElement *)element {

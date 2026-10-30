@@ -2,6 +2,8 @@
 
 # driftwm-core: provenance record
 
+Bare `src/…` and `tests/…` paths on this page name files of `crates/core/` when that file exists there (the row for this crate's own tests is `crates/core/tests/`) and otherwise name upstream DriftWM files.
+
 One platform-neutral crate holding the parts of DriftWM that Infinify uses:
 canvas math, configuration, layout geometry, and one gesture helper. Every
 ported file's header says "See docs/crates/core/PORT.md"; this is that file, kept under the repository's `docs/` tree with the rest of the Markdown.

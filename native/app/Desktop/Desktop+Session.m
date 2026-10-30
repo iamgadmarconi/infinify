@@ -12,7 +12,7 @@
 }
 // A size transaction of the controller's own is left to run: the quit action ends a fullscreen first, and its reply carries the
 // transaction that hands the window its size back. -cleanup performs it to its end, then shuts the coordinator down as before.
-- (void)quit:(id)sender { (void)sender;if(![self sizing])[self.resize shutdown];[self stopNavigation];stopped=1; }
+- (void)quit:(id)sender { (void)sender;if(![self sizing])[self.resize shutdown];[self stopNavigation];DWStopSignal=1; }
 // The saved world and its cameras need no capture: placeholders, navigation and
 // view actions work before any source is chosen or any privacy grant exists.
 // A normal run's takeover of Stage Manager and window tiling (DWSystemTakeover.m): its own stderr line says what changed. Idempotent.
@@ -69,7 +69,7 @@
     [self suspendPresentationLeavingSession:YES];
 }
 - (void)resumeNative {
-    if(self.cleaning||stopped)return;
+    if(self.cleaning||DWStopSignal)return;
     if(self.native.ended&&self.nativeEndpoints.count&&!self.nativeResumeWanted&&!self.sessionInactive){
         // Loss can occur with the desktop still active. Enter the same drain and
         // authenticated re-admission used after session return, once per loss.
@@ -90,7 +90,7 @@
             :[DWNativePresenter reconnectedPresentersAt:endpoints scope:scope why:&failure];
         dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;
             if(d)d.nativeResumeInFlight=NO;
-            if(!d||d.cleaning||stopped||d.sessionInactive||epoch!=d.nativeSessionEpoch||!d.nativeResumeWanted){[candidate suspendWithCompletion:nil];return;}
+            if(!d||d.cleaning||DWStopSignal||d.sessionInactive||epoch!=d.nativeSessionEpoch||!d.nativeResumeWanted){[candidate suspendWithCompletion:nil];return;}
             if(!candidate||![candidate activate]){
                 [candidate suspendWithCompletion:nil];d.nativeResumeFailures++;
                 d.nativeResumeAfter=CACurrentMediaTime()+fmin(30,.25*pow(2,MIN(d.nativeResumeFailures-1,7u)));

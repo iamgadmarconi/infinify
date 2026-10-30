@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The bundled native-desktop launcher's modes (owner start, --login, --reload), end to end, against a signed stand-in bundle:
-# stub doctor/loader/app/daemon client (tests/e2e/native-launcher/stub.c) that load nothing, a throwaway HOME, and the real
+# stub doctor/loader/app/daemon client (tests/native/dock-helper/Loader/NativeLauncherFixture.c) that load nothing, a throwaway HOME, and the real
 # launcher script. It shows the launcher's decisions: when it asks the launch daemon and with which arguments, the journal
 # handoff from a retired Dock, the pause of automatic loading, the refusal of uncertain states, the quiet login refusals. It is
 # not evidence that anything loads into a Dock (see docs/native/dock-helper/Daemon/README.md for the guest run).
@@ -39,7 +39,7 @@ control=$work/control
 export HOME=$work/home STUB_DIR=$control STUB_PAYLOAD=$native/payload-arm64e.dylib
 mkdir -p "$app/Contents/MacOS" "$native" "$control" "$HOME"
 # STUB_BINARY: a stand-in already built (for a machine without the compiler, such as the guest).
-if [ -n "${STUB_BINARY:-}" ]; then cp "$STUB_BINARY" "$work/stub"; else xcrun clang -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra -Werror -O1 tests/e2e/native-launcher/stub.c -o "$work/stub"; fi
+if [ -n "${STUB_BINARY:-}" ]; then cp "$STUB_BINARY" "$work/stub"; else xcrun clang -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra -Werror -O1 tests/native/dock-helper/Loader/NativeLauncherFixture.c -o "$work/stub"; fi
 cp "$work/stub" "$app/Contents/MacOS/Infinify"
 for name in doctor loader-arm64e payload-arm64e.dylib loadd; do cp "$work/stub" "$native/$name"; done
 cp scripts/native-desktop-launcher.sh "$native/launch.sh"
@@ -240,6 +240,57 @@ run 'login start with a record of a previous boot' 0 "$launcher" --login
 expect_loads 'previous boot' 6
 if sed -n 6p "$control/daemon-loads" | grep -q -- '--recover-journal'; then bad 'a previous boot replayed a journal'; else ok 'a record of a previous boot starts fresh, without recovery'; fi
 if [ "$(record outcome string)" = ready ] && [ "$(record dock_pid integer)" = 9990004 ]; then ok 'and the new ready record is for the current Dock'; else bad 'record after the fresh start'; fi
+
+# A retired helper journal of the previous schema (absolute originals) is refused whole and does not block: the launch record and the
+# journal are archived, the retired runtime stays as it was, the start is fresh (no recovery arguments), nothing is left pending, and the
+# next Dock restart recovers from the fresh runtime's own journal as usual.
+old_runtime=$(record runtime string)
+/usr/bin/plutil -replace v -integer 3 "$old_runtime/v2-journal.json"; chmod 600 "$old_runtime/v2-journal.json"
+D5="9990005 1790000400 555"; D6="9990006 1790000500 666"
+dock $D5
+archives_before=$(ls -d "$(state_dir)"/retired-launch.* | wc -l | tr -d ' ')
+run_split 'reload with a retired journal of the previous schema' 0 "$app/Contents/MacOS/Infinify" stub-reload-parent
+expect_loads 'previous schema' 7
+if grep -q 'schema 3 and this build recovers schema 4 only' "$out.err" && grep -q 'startup will be fresh without journal replay' "$out.err"; then ok 'the launcher says the old schema is not recovered and the start is fresh'; else bad 'no message about the old schema'; sed 's/^/     | /' "$out.err"; fi
+if sed -n 7p "$control/daemon-loads" | grep -q -- '--recover-journal'; then bad 'a journal of the previous schema was offered for recovery'; else ok 'a journal of the previous schema is not offered for recovery'; fi
+absent 'no pending marker after refusing the old journal' "$(state_dir)/launch.pending.plist"
+if [ "$(record outcome string)" = ready ] && [ "$(record dock_pid integer)" = 9990005 ] && [ "$(record runtime string)" != "$old_runtime" ]; then ok 'the new ready record is for the current Dock and a fresh runtime'; else bad 'record after refusing the old journal'; fi
+archived=
+for d in "$(state_dir)"/retired-launch.*; do if [ -f "$d/v2-journal.json" ] && [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$d/v2-journal.json")" = 3 ]; then archived=$d; fi; done
+if [ -n "$archived" ] && [ -f "$archived/launch.plist" ] && [ "$(stat -f '%Lp' "$archived/v2-journal.json")" = 600 ] && cmp -s "$archived/v2-journal.json" "$old_runtime/v2-journal.json"; then ok 'the launch record and the old journal were archived byte for byte'; else bad 'the old journal was not archived'; fi
+exists 'the retired runtime and its journal were left in place' "$old_runtime/v2-journal.json"
+[ "$(ls -d "$(state_dir)"/retired-launch.* | wc -l | tr -d ' ')" = "$((archives_before + 1))" ] && ok 'exactly one archive was made' || bad 'archive count'
+# A retired runtime with no journal at all (its helper never changed a window, so it never wrote one: the guest's first smoke runs left
+# exactly that) has nothing to recover; it is archived like a record of an earlier boot instead of blocking every later start.
+old_runtime=$(record runtime string)
+rm -f "$old_runtime/v2-journal.json"
+dock $D6
+run_split 'reload with a retired runtime that never wrote a journal' 0 "$app/Contents/MacOS/Infinify" stub-reload-parent
+expect_loads 'no journal' 8
+if grep -q 'holds no journal and no recovery source' "$out.err"; then ok 'the launcher says nothing needs recovering and the start is fresh'; else bad 'no message about the absent journal'; sed 's/^/     | /' "$out.err"; fi
+if sed -n 8p "$control/daemon-loads" | grep -q -- '--recover-journal'; then bad 'an absent journal was offered for recovery'; else ok 'an absent journal is not offered for recovery'; fi
+absent 'no pending marker after an absent journal' "$(state_dir)/launch.pending.plist"
+if [ "$(record outcome string)" = ready ] && [ "$(record dock_pid integer)" = 9990006 ]; then ok 'the new ready record is for the current Dock'; else bad 'record after the absent journal'; fi
+
+# Now the next Dock restart recovers from a current-schema journal as usual.
+D7="9990007 1790000600 777"; D8="9990008 1790000700 888"
+dock $D7
+run_split 'the next reload recovers from the fresh runtime' 0 "$app/Contents/MacOS/Infinify" stub-reload-parent
+expect_loads 'after the refusals' 9
+if sed -n 9p "$control/daemon-loads" | grep -q -- "--recover-journal .*/v2-journal.json --expected-retired-dock $D6 "; then ok 'a current-schema journal is recovered again'; else bad 'recovery after the refusals'; sed -n 9p "$control/daemon-loads"; fi
+absent 'nothing pending after the recovery' "$(state_dir)/launch.pending.plist"
+
+# A runtime that kept a recovery import but lost its journal is another matter: that import is an obligation, so the start is refused
+# and everything is preserved.
+old_runtime=$(record runtime string)
+exists 'the recovered runtime holds its recovery import' "$old_runtime/recovery-source.json"
+rm -f "$old_runtime/v2-journal.json"
+dock $D8
+run_split 'reload with a retired runtime that kept a recovery import but no journal' 1 "$app/Contents/MacOS/Infinify" stub-reload-parent
+expect_loads 'recovery import without a journal' 9
+if grep -q 'no private committed v2 journal' "$out.err"; then ok 'a recovery import without its journal is still refused and preserved'; else bad 'wrong refusal'; sed 's/^/     | /' "$out.err"; fi
+exists 'the launch record is untouched' "$(state_dir)/launch.plist"
+absent 'and nothing is pending' "$(state_dir)/launch.pending.plist"
 
 if [ "$fails" -ne 0 ]; then printf 'native-launcher: %s of %s checks FAILED\n' "$fails" "$checks" >&2; exit 1; fi
 printf 'native-launcher: %s checks passed\n' "$checks"

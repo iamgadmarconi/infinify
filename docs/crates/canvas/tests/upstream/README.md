@@ -1,5 +1,7 @@
 # Executable upstream oracle
 
+Bare `src/…` paths on this page name files of upstream DriftWM, not of `crates/canvas/src/`.
+
 This page describes the files in `crates/canvas/tests/upstream/` (it lives under `docs/` with the rest of the Markdown); "this directory" below means that directory.
 
 `stage/mod.rs` is a byte-for-byte copy of `src/stage/mod.rs` from

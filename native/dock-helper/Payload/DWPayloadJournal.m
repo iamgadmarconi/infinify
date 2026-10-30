@@ -16,11 +16,12 @@
 // The journal: every original is written durably (no-follow staging, fsync, rename) before anything is changed, and a journal an
 // earlier helper left is validated, decoded and recovered, with writer handoff, before the listener accepts a client.
 // Moved verbatim from native/privileged/payload.m (37b27b1), lines 487-522, 643, 1439-1638. #imported by DWPayload.m in a fixed order; never compiled alone.
+// Edited since the move: schema 4, the original is the field layer instead of the absolute transform.
 
 // Durable no-follow staging and rename; original values survive every frame.
 static NSDictionary *v2JournalEntry(DW2Entry *e,NSString *state) {
     NSMutableDictionary *row=[@{@"pid":@(e->who.pid),@"birth_sec":@(e->who.birth_sec),@"birth_usec":@(e->who.birth_usec),@"wid":@(e->who.wid),@"owner":@(e->owner),
-        @"transform":matrix(e->transform),@"alpha":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,@"alpha_touched":@(e->alphaTouched),
+        @"layer":matrix(e->layer),@"alpha":e->hasAlpha ? @(e->alpha) : (id)NSNull.null,@"alpha_touched":@(e->alphaTouched),
         @"bounds":@[@(e->bounds.origin.x),@(e->bounds.origin.y),@(e->bounds.size.width),@(e->bounds.size.height)],@"state":state}mutableCopy];
     if(e->sublevelTouched)row[@"original_sublevel"]=@(e->originalSublevel);
     if(e->veilBare)row[@"veil_bare"]=@YES;
@@ -39,7 +40,7 @@ static BOOL v2Persist(void) {
     }
     for(NSNumber *wid in [v2Released.allKeys sortedArrayUsingSelector:@selector(compare:)])[released addObject:v2JournalEntry(v2Released[wid],@"released")];
     NSMutableDictionary *journal=[v2WriterIdentity mutableCopy];
-    [journal addEntriesFromDictionary:@{@"v":@3,@"generation":@(v2Generation+1),@"state":!windows.count ? @"empty" : restoring ? @"restoring" : @"holding",
+    [journal addEntriesFromDictionary:@{@"v":@4,@"generation":@(v2Generation+1),@"state":!windows.count ? @"empty" : restoring ? @"restoring" : @"holding",
         @"windows":windows,@"released_windows":released,@"last_restore":v2LastRestore ?: (id)NSNull.null}];
     NSData *data=[NSJSONSerialization dataWithJSONObject:journal options:NSJSONWritingPrettyPrinted error:NULL];
     if(!data)return NO;
@@ -82,8 +83,9 @@ static BOOL v2LastRestoreValid(id value) {
     }
     return YES;
 }
-// Schema 3 preserves released originals for a later, explicitly authorized
-// connection handoff; only that schema is accepted.
+// Schema 4 preserves released originals for a later, explicitly authorized connection handoff, and records each original as the
+// window's placement-1 layer (field layer) instead of the absolute matrix schema 3 held; only schema 4 is accepted, an older journal
+// is not migrated (the launcher archives it and starts fresh, scripts/native-desktop-launcher.sh).
 static NSArray *v2WriterKeys(void) {
     return @[@"server_pid",@"server_birth_sec",@"server_birth_usec",@"server_uid",@"boot_uuid"];
 }
@@ -154,7 +156,7 @@ static BOOL v2RemoveStaging(void) {
     return errno==ENOENT;
 }
 static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
-    NSArray *keys=@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"transform",@"alpha",@"alpha_touched",@"bounds",@"state"];
+    NSArray *keys=@[@"pid",@"birth_sec",@"birth_usec",@"wid",@"owner",@"layer",@"alpha",@"alpha_touched",@"bounds",@"state"];
     if([w isKindOfClass:NSDictionary.class]&&w[@"original_space"])keys=[keys arrayByAddingObject:@"original_space"];
     if([w isKindOfClass:NSDictionary.class]&&w[@"original_sublevel"])keys=[keys arrayByAddingObject:@"original_sublevel"];
     if([w isKindOfClass:NSDictionary.class]&&w[@"veil_bare"])keys=[keys arrayByAddingObject:@"veil_bare"];
@@ -163,15 +165,15 @@ static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
         || !v2Integer(w[@"pid"],1,INT_MAX) || !v2Integer(w[@"birth_sec"],1,UINT64_MAX) || !v2Integer(w[@"birth_usec"],0,999999)
         || !v2Integer(w[@"wid"],1,UINT32_MAX) || !v2Integer(w[@"owner"],1,INT_MAX) || !v2Boolean(w[@"alpha_touched"])
         || !(released ? [w[@"state"]isEqual:@"released"] : [@[@"held",@"restoring",@"reattaching"]containsObject:w[@"state"]]))return nil;
-    NSArray *t=w[@"transform"],*b=w[@"bounds"];
+    NSArray *t=w[@"layer"],*b=w[@"bounds"];
     if(![t isKindOfClass:NSArray.class] || t.count!=6 || ![b isKindOfClass:NSArray.class] || b.count!=4)return nil;
     for(id value in [t arrayByAddingObjectsFromArray:b])if(!isNumber(value) || !isfinite([value doubleValue]))return nil;
     DW2Entry *e=[DW2Entry new];
     e->who=(struct dw2_identity){.pid=[w[@"pid"]intValue],.wid=[w[@"wid"]unsignedIntValue],.birth_sec=[w[@"birth_sec"]unsignedLongLongValue],.birth_usec=[w[@"birth_usec"]unsignedLongLongValue]};
     e->owner=[w[@"owner"]intValue];e->state=DW2_RESTORING;e->reattaching=[w[@"state"]isEqual:@"reattaching"];
-    e->transform=CGAffineTransformMake([t[0]doubleValue],[t[1]doubleValue],[t[2]doubleValue],[t[3]doubleValue],[t[4]doubleValue],[t[5]doubleValue]);
+    e->layer=CGAffineTransformMake([t[0]doubleValue],[t[1]doubleValue],[t[2]doubleValue],[t[3]doubleValue],[t[4]doubleValue],[t[5]doubleValue]);
     e->bounds=CGRectMake([b[0]doubleValue],[b[1]doubleValue],[b[2]doubleValue],[b[3]doubleValue]);
-    if(!finiteMatrix(e->transform) || !v2FiniteRect(e->bounds))return nil;
+    if(!finiteMatrix(e->layer) || !v2FiniteRect(e->bounds))return nil;
     if(w[@"alpha"]!=NSNull.null) {
         if(!isNumber(w[@"alpha"]) || !isfinite([w[@"alpha"]doubleValue]) || [w[@"alpha"]doubleValue]<0 || [w[@"alpha"]doubleValue]>1)return nil;
         e->alpha=[w[@"alpha"]floatValue];e->hasAlpha=YES;
@@ -203,7 +205,7 @@ static DW2Entry *v2DecodeEntry(NSDictionary *w,BOOL released) {
 static NSDictionary *v2DecodeJournal(NSData *data,NSMutableDictionary *active,NSMutableDictionary *released) {
     NSDictionary *journal=[NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
     NSArray *keys=[v2WriterKeys()arrayByAddingObjectsFromArray:@[@"v",@"generation",@"state",@"windows",@"released_windows",@"last_restore"]];
-    if(!dw_exact_keys(journal,keys) || !v2Integer(journal[@"v"],3,3) || !v2WriterValid(journal) || !v2Integer(journal[@"generation"],0,UINT64_MAX-1)
+    if(!dw_exact_keys(journal,keys) || !v2Integer(journal[@"v"],4,4) || !v2WriterValid(journal) || !v2Integer(journal[@"generation"],0,UINT64_MAX-1)
         || ![journal[@"windows"]isKindOfClass:NSArray.class] || ![journal[@"released_windows"]isKindOfClass:NSArray.class]
         || [journal[@"windows"]count]+[journal[@"released_windows"]count]>DW2_MAX_TABLE || !v2LastRestoreValid(journal[@"last_restore"]))return nil;
     BOOL restoring=NO;

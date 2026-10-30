@@ -1,5 +1,7 @@
 # Window sizing actions
 
+Bare `src/…` paths on this page name `crates/desktop/src/` when that file exists there and otherwise name the upstream file the text cites; `tests/e2e/` and `tests/native/` are the repository's own, as [docs/README.md](../../README.md) says.
+
 DriftWM's sizing actions as controller policy: `grow-window`, `shrink-window`,
 IPC `resize W H`, `fit-window`, `fit-window-snapped`, `fill-window` and
 `zoom-to-fit-snapped`. Which size, which place, which camera and what a second

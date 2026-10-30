@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Split from native/desktop/canvas-renderer.m at 37b27b1.
+// Split from native/desktop/canvas-renderer.h at 37b27b1.
 #import <QuartzCore/QuartzCore.h>
 #import <CoreVideo/CoreVideo.h>
 // Optional image attachments in the root's normalized top-left rectangle:

@@ -21,7 +21,7 @@
            [w[(id)kCGWindowBounds] isEqual:self.bounds];
 }
 - (BOOL)post:(CGEventRef)e at:(CGPoint)p {
-    if (!e || ![self valid] || stopped) return NO;
+    if (!e || ![self valid] || DWStopSignal) return NO;
     CGEventSetSource(e,self.eventSource);
     CGEventSetIntegerValueField(e,kCGEventSourceUserData,self.tag);
     CGEventSetIntegerValueField(e,(CGEventField)91,self.wid); CGEventSetIntegerValueField(e,(CGEventField)92,self.wid);

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Moved from native/desktop/compositor.h at 37b27b1; its import and the comments naming renamed files changed.
 //
 // Infinify compositor: one Metal renderer per output that draws the whole
 // frame — canvas background, output outlines, and every window with its

@@ -356,11 +356,6 @@
     return nil;
 }
 
-// Integer output size, as upstream's logical output size is integral.
-void IFBGPixelSize(IFBackgroundFrame f, long *logicalW, long *logicalH, NSUInteger *pxW, NSUInteger *pxH) {
-    DWMetalPixelSize(f.width, f.height, f.scale, logicalW, logicalH, pxW, pxH);
-}
-
 /// The uniform mapping, including the macOS wallpaper extension below.
 - (IFBGUniforms)uniformsForFrame:(IFBackgroundFrame)f {
     IFBGUniforms u;

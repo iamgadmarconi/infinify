@@ -1,5 +1,7 @@
 # Native resize controller protocol (ABI 1)
 
+Bare `src/…` paths on this page name `crates/desktop/src/` when that file exists there and otherwise name the upstream file the text cites; `tests/e2e/` and `tests/native/` are the repository's own, as [docs/README.md](../../README.md) says.
+
 This module coordinates one bound ordinary window and all eight edges. It emits
 requests for the native shell; it does not call AX, capture pixels, resize
 third-party windows, or establish usable compositing. Existing `begin_resize`

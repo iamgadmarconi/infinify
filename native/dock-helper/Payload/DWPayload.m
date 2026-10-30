@@ -15,8 +15,8 @@
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
 // The Dock helper payload, one translation unit. This file holds the protocol v2 server (the enrollment, inspect and probe replies,
 // the transport, sessions and their end), the listener, startup, the fixture entry points and the production constructor; the
-// fragments it #imports below hold the rest. Every line of code here and in them is moved verbatim from native/dock-helper/Payload/DWPayload.m
-// (37b27b1), #import paths aside. scripts/build-privileged.sh compiles only this file, and the regression tests #import it after
+// fragments it #imports below hold the rest. Every line of code here and in them is moved verbatim from native/privileged/payload.m
+// (37b27b1), #import paths aside, except that startServer also resolves getLayer and setLayer (the placement-1 layer originals). scripts/build-privileged.sh compiles only this file, and the regression tests #import it after
 // their native call substitutes: the same single translation unit in both.
 #import <AppKit/AppKit.h>
 #import <dlfcn.h>
@@ -410,11 +410,11 @@ static int startServer(const char *directory, const char *nonce, const uint32_t 
     void *sky=v2Sky();
     if(!sky)return -__LINE__;
     mainConnection=dlsym(sky,"SLSMainConnectionID");getOwner=dlsym(sky,"SLSGetWindowOwner");
-    skyGetPlacement=dlsym(sky,"SLSGetWindowTransformAtPlacement");skySetPlacement=dlsym(sky,"SLSSetWindowTransformAtPlacement");skyGetCatenated=dlsym(sky,"SLSGetCatenatedWindowTransform");
+    skyGetPlacement=dlsym(sky,"SLSGetWindowTransformAtPlacement");skySetPlacement=dlsym(sky,"SLSSetWindowTransformAtPlacement");
     getScreenRect=dlsym(sky,"SLSGetScreenRectForWindow");getBounds=dlsym(sky,"SLSGetWindowBounds");
     // No fallback to SLSGetWindowTransform / SLSSetWindowTransform: a placement-0 write is the Dock-death corner bug.
-    if(!mainConnection||!getOwner||!skyGetPlacement||!skySetPlacement||!skyGetCatenated||!getScreenRect||!getBounds)return -__LINE__;
-    getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;
+    if(!mainConnection||!getOwner||!skyGetPlacement||!skySetPlacement||!getScreenRect||!getBounds)return -__LINE__;
+    getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;getLayer=dwReadLayer;setLayer=dwWriteLayer;
     getAlpha=dlsym(sky,"SLSGetWindowAlpha");setAlpha=dlsym(sky,"SLSSetWindowAlpha");connectionPID=dlsym(sky,"SLSConnectionGetPID");
     v2RegisterNotify=dlsym(sky,"SLSRegisterConnectionNotifyProc");
     copyWindowSpaces=dlsym(sky,"SLSCopySpacesForWindows");copySpaceDisplay=dlsym(sky,"SLSCopyManagedDisplayForSpace");

@@ -42,7 +42,7 @@
 // Accept only the complete original tokens. Roots retain controller order and a
 // child cannot move between compositor buckets or through a physical/stand-in/
 // closing barrier. Provider dictionaries carry no additional ordering authority.
-NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidate,NSArray<NSDictionary *> *base) {
+NSArray<NSDictionary *> *DWCanvasValidatedOrder(NSArray<NSDictionary *> *candidate,NSArray<NSDictionary *> *base) {
     if(![candidate isKindOfClass:NSArray.class]||candidate.count!=base.count)return base;
     NSSet *expected=[NSSet setWithArray:base];NSMutableSet *seen=[NSMutableSet set];
     NSMutableDictionary<NSDictionary *,NSNumber *> *segments=[NSMutableDictionary dictionary];
@@ -94,7 +94,7 @@ NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidate,NSArr
     uint64_t revision=self.liveOrderRevision?self.liveOrderRevision(output):0;
     if(!state.orderDirty&&state.orderProvider==self.liveOrder&&state.orderRevisionProvider==self.liveOrderRevision&&(!self.liveOrder||(self.liveOrderRevision&&state.orderRevision==revision)))return NO;
     if(state.orderDirty)[self rebuildOrderForState:state];
-    NSArray *order=validatedOrder(self.liveOrder?self.liveOrder(state.orderBase,output):nil,state.orderBase);
+    NSArray *order=DWCanvasValidatedOrder(self.liveOrder?self.liveOrder(state.orderBase,output):nil,state.orderBase);
     NSMutableArray<IFCompositorElement *> *elements=[NSMutableArray array];for(NSDictionary *token in order)if(state.orderElements[token])[elements addObject:state.orderElements[token]];
     // A missing description is never a usable hit order. It cannot silently drop
     // a visual element should a future compositor element lack a token adapter.

@@ -16,6 +16,7 @@
 // Space membership: reads, forward-move eligibility, confirmation of void move requests, deleted-target evidence, and restoration
 // to the original Space with its settling.
 // Moved verbatim from native/privileged/payload.m (37b27b1), lines 288-318, 523-642. #imported by DWPayload.m in a fixed order; never compiled alone.
+// Edited since the move: the settlement sample compares the layer.
 
 static uint64_t v2WindowSpace(uint32_t wid) {
     if(!v2SpaceAPI())return 0;
@@ -152,7 +153,7 @@ static void v2SpaceRestoreSample(DW2Entry *e) {
     BOOL stable=e->restoreSpaceSample&&!e->pendingSpace&&v2EntryCurrent(e)
         &&v2WindowSpace(e->who.wid)==e->originalSpace
         &&!getBounds(mainConnection(),e->who.wid,&bounds)&&v2FiniteRect(bounds)&&CGRectEqualToRect(bounds,e->restoreSpaceBounds)
-        &&!getTransform(mainConnection(),e->who.wid,&actual)&&v2SameTransform(actual,v2RestoreTransform(e->transform,e->bounds.origin,bounds.origin))
+        &&!getLayer(mainConnection(),e->who.wid,&actual)&&v2SameTransform(actual,e->layer)
         &&(!e->alphaTouched||e->veilAlpha||(getAlpha&&!getAlpha(mainConnection(),e->who.wid,&alpha)&&alpha==e->alpha))
         &&(!e->sublevelTouched||v2SublevelMatches(e,e->originalSublevel))
         &&v2EntryCurrent(e);

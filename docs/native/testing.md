@@ -21,7 +21,7 @@ Run the regression a change touches, not the whole set. The scripts build what t
 | `tests/e2e/native-display-space-cache.sh`, `tests/e2e/native-placement-validation.sh`, `tests/e2e/native-presenter-readiness.sh`, `tests/e2e/native-view-transfer.sh`, `tests/e2e/native-family-recovery.sh`, `tests/e2e/root-capture-mailbox.sh` | The presenter and its verifiers with substituted reads: display queries, placement validation, ACK readiness, view transfer, family recovery, the capture mailbox |
 | `tests/e2e/native-focus.sh`, `tests/e2e/native-frame-restore.sh` | The shipped focus adapter's refusals through its C ABI, and the resize adapter's frame regression |
 | `tests/e2e/native-input-policy.sh` | The adapter's packet policy, including the native-drag takeover |
-| `tests/e2e/native-launcher.sh` | The bundled launcher's modes against a signed stand-in bundle (it skips itself where an Infinify process is running) |
+| `tests/e2e/native-launcher.sh` | The bundled launcher's modes against a signed stand-in bundle built from `tests/native/dock-helper/Loader/NativeLauncherFixture.c` (it skips itself where an Infinify process is running) |
 | `tests/e2e/privileged-regression.sh` | The Dock helper payload and its C client |
 | `tests/e2e/system-takeover.sh` | The Stage Manager and window-tiling takeover against an in-memory preferences store |
 | `tests/e2e/window-discovery.sh`, `tests/e2e/window-events.sh` | Window metadata and scheduling, and the application/KVO lifecycle |
@@ -36,7 +36,7 @@ Run the regression a change touches, not the whole set. The scripts build what t
 | `tests/e2e/scoped-native-decorations.py`, `-family.py`, `-group.py`, `-panels.py` (`--live-owned-fixture`) | The green control, a root with a popup and a sheet, two cooperative helpers, an owned utility panel | As above |
 | `tests/e2e/physical-resize-edge.sh --live-owned-fixture` | One guarded physical right-edge drag per mode, on owned windows | Real CGEvents |
 | `tests/e2e/privileged-fixture.sh --live-owned-fixture` | The protocol v2 server on hosts holding only owned fixture windows | Owned fixtures |
-| `tests/e2e/compositor-dnd.sh --live-guest` | Real-HID drag-and-drop between two fixtures drawn away from their native frames | A disposable guest running Infinify in compositor mode (`DND_GSSH`, `DND_GSCP`) |
+| `tests/e2e/compositor-dnd.sh --live-guest` | Real-HID drag-and-drop between two fixtures drawn away from their native frames, driven by `tests/native/app/CompositorMode/CompositorDnDHIDFixture.c` | A disposable guest running Infinify in compositor mode (`DND_GSSH`, `DND_GSCP`) |
 
 ## Focused fixture validation
 

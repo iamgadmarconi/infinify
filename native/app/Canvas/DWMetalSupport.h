@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Moved from native/desktop/metal-support.h at 37b27b1; the comment naming its users changed.
 //
 // Metal plumbing that IFBGDeviceResources.m, IFBackgroundProgram.m and the compositor pieces
 // (IFCDeviceResources.m, IFCompositorFrame.m) both need and must keep

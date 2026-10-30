@@ -150,7 +150,7 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
         // a root needed to validate its complete captured family membership.
         NSMutableArray<NSDictionary *> *base=[NSMutableArray array];
         for(NSNumber *bucket in @[@(IFCompositorStackLayerWidget),@(IFCompositorStackLayerNormal)])for(NSDictionary *token in exportTokens)if([token[@"bucket"]isEqual:bucket])[base addObject:token];
-        NSArray *order=validatedOrder(self.exportOrder(base.copy,effect,snapshot),base.copy);
+        NSArray *order=DWCanvasValidatedOrder(self.exportOrder(base.copy,effect,snapshot),base.copy);
         NSMutableArray<IFCompositorElement *> *ordered=[NSMutableArray arrayWithCapacity:elements.count];for(NSDictionary *token in order)if(exportElements[token])[ordered addObject:exportElements[token]];
         if(ordered.count!=elements.count)return refusal(@"capture ordering does not describe every exported image");
         elements=ordered;
@@ -197,7 +197,7 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
     // cache: a baked shader is rendered live and a pyramidal TIFF from one level of at
     // most 4096 pixels, whatever the outputs have loaded (the module's captureProgram).
     IFCompositorFrame *frame=[IFCompositorFrame new];
-    frame.size=region.size;frame.scale=scale;frame.cameraX=region.origin.x;frame.cameraY=region.origin.y;frame.zoom=1;frame.time=canvasTime();frame.clear=IFCompositorClearTransparent;
+    frame.size=region.size;frame.scale=scale;frame.cameraX=region.origin.x;frame.cameraY=region.origin.y;frame.zoom=1;frame.time=DWCanvasRendererTime();frame.clear=IFCompositorClearTransparent;
     frame.chrome=self.chrome;frame.placeholderColor=self.chrome.backgroundColor;frame.background=isolate||wallpaper?nil:backgroundProgram.captureProgram;
     for(IFCompositorElement *element in elements){
         // Nothing of an element farther away than its bar, border and shadow reaches the region.

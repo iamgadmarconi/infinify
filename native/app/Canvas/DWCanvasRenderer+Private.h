@@ -33,6 +33,8 @@
 // screen rectangles are the controller's, and no native window geometry is read.
 #import "DWCanvasRenderer.h"
 #import "IFCompositor.h"
+#import "DWTypedValue.h"
+#import "DWGeometryJSON.h"
 
 @class DWCanvasMenuPanel;
 // Generic family image geometry and stable compositor elements. The shell owns
@@ -164,20 +166,42 @@
 - (NSDictionary *)screenshotPixels:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot;
 @end
 // Helpers that were file-static before this file was split and are shared across its pieces.
-// Each has exactly one definition, so there is still one canvas clock (canvasTime).
-// Defined in DWCanvasRenderer.m:
-NSArray *list(id value);
-BOOL validAttachment(DWCanvasAttachment *image);
-CGPoint pointOf(id value);
-CGRect rectOf(id value);
-BOOL currentDrawnPlacement(NSDictionary *p);
-BOOL currentOutputPlacement(NSDictionary *p);
-BOOL currentOutputPlacements(id value);
-double canvasTime(void);
-BOOL pinnedOf(NSDictionary *p);
-double began(DWCanvasOutput *state,double now);
-BOOL pictured(IFCompositorElement *element);
-// Defined in DWCanvasRenderer+GeometryTransitions.m:
-CGRect geometryScreen(CGRect rect,IFCompositorSpace space,IFCompositorFrame *frame);
-// Defined in DWCanvasRenderer+Families.m:
-NSArray<NSDictionary *> *validatedOrder(NSArray<NSDictionary *> *candidate,NSArray<NSDictionary *> *base);
+// They are static inline here, so no piece exports a generic C name. Two stay external under DW names:
+// the one canvas clock (DWCanvasRendererTime, defined in DWCanvasRenderer.m: a static local per piece would
+// be several clocks) and DWCanvasValidatedOrder (defined in DWCanvasRenderer+Families.m: too long to copy).
+double DWCanvasRendererTime(void);
+NSArray<NSDictionary *> *DWCanvasValidatedOrder(NSArray<NSDictionary *> *candidate,NSArray<NSDictionary *> *base);
+static inline NSArray *list(id value) { return [value isKindOfClass:NSArray.class]?value:@[]; }
+static inline BOOL validAttachment(DWCanvasAttachment *image) {
+    if(![image isKindOfClass:DWCanvasAttachment.class]||!image.buffer||!DWFiniteRect(image.unitRect))return NO;
+    CGRect crop=image.contentRect;if(CGRectIsNull(crop))return YES;
+    return DWFiniteRect(crop)&&crop.origin.x>=0&&crop.origin.y>=0&&CGRectGetMaxX(crop)<=CVPixelBufferGetWidth(image.buffer)&&CGRectGetMaxY(crop)<=CVPixelBufferGetHeight(image.buffer);
+}
+static inline CGPoint pointOf(id value) { NSDictionary *p=DWTyped(value,NSDictionary.class);return CGPointMake([DWTyped(p[@"x"],NSNumber.class)doubleValue],[DWTyped(p[@"y"],NSNumber.class)doubleValue]); }
+// The controller's {origin:{x,y},size:{width,height}}; CGRectNull for anything else.
+static inline CGRect rectOf(id value) {
+    NSDictionary *r=DWTyped(value,NSDictionary.class),*origin=DWTyped(r[@"origin"],NSDictionary.class),*size=DWTyped(r[@"size"],NSDictionary.class);if(!DWTyped(origin[@"x"],NSNumber.class)||!DWTyped(origin[@"y"],NSNumber.class)||!DWTyped(size[@"width"],NSNumber.class)||!DWTyped(size[@"height"],NSNumber.class))return CGRectNull;
+    return CGRectMake([DWTyped(origin[@"x"],NSNumber.class)doubleValue],[DWTyped(origin[@"y"],NSNumber.class)doubleValue],[DWTyped(size[@"width"],NSNumber.class)doubleValue],[DWTyped(size[@"height"],NSNumber.class)doubleValue]);
+}
+static inline BOOL currentDrawnPlacement(NSDictionary *p) {
+    NSString *kind=DWTyped(p[@"kind"],NSString.class);
+    return ([kind isEqual:@"window"]||[kind isEqual:@"standin"])&&DWTyped(p[@"focused"],NSNumber.class)&&DWFiniteRect(rectOf(p[@"world_rect"]));
+}
+static inline BOOL currentOutputPlacement(NSDictionary *p) {
+    return currentDrawnPlacement(p)&&DWTyped(p[@"window"],NSNumber.class)&&DWTyped(p[@"output"],NSNumber.class);
+}
+static inline BOOL currentOutputPlacements(id value) {
+    if(![value isKindOfClass:NSArray.class])return NO;
+    for(id entry in value)if(!currentOutputPlacement(DWTyped(entry,NSDictionary.class)))return NO;
+    return YES;
+}
+static inline BOOL pinnedOf(NSDictionary *p) { return [DWTyped(p[@"pinned"],NSNumber.class)boolValue]||DWTyped(p[@"pinned"],NSDictionary.class)!=nil; }
+// When an animation that begins now began, on this output's clock. Upstream advances every animation before it draws, so the
+// first frame that shows one is already a tick in: the time of the last frame presented. This canvas draws on demand, so
+// that frame can be long past, and the animation would be over before it was seen: never more than one 60 Hz tick ago.
+static inline double began(DWCanvasOutput *state,double now) { return fmax(state.presented,now-1.0/60); }
+static inline BOOL pictured(IFCompositorElement *element) { return element.pixelBuffer||element.texture; }
+static inline CGRect geometryScreen(CGRect rect,IFCompositorSpace space,IFCompositorFrame *frame) {
+    if(space==IFCompositorSpaceCanvas)return CGRectMake((rect.origin.x-frame.cameraX)*frame.zoom,(rect.origin.y-frame.cameraY)*frame.zoom,rect.size.width*frame.zoom,rect.size.height*frame.zoom);
+    return rect;
+}

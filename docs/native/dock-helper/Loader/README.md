@@ -40,10 +40,10 @@ exposes that UUID read-only, while
 [`clock.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/kern/clock.c)
 shows that `clock_boottime` can change with calendar adjustment. No XNU implementation code is copied into Infinify.
 
-For a retired Dock, the launcher accepts only a committed schema-3 journal
+For a retired Dock, the launcher accepts only a committed schema-4 journal
 written by the recorded Dock process, same login UID and same
 `kern.bootsessionuuid`. The loader rechecks the journal's private file and
-directory, exact writer identity, positive old-process retirement and schema-3
+directory, exact writer identity, positive old-process retirement and schema-4
 header, then copies its bytes to
 the new private runtime as `recovery-source.json`. The sidecar binds the copy by
 SHA-256 and recorded writer identity; the payload validates its complete schema
@@ -67,9 +67,13 @@ The launcher keeps the previous ready record until the recovery loader reports
 authenticated readiness. A private `launch.pending.plist` marker blocks any
 retry after an interrupted or uncertain recovery. On success, the old record is
 archived byte-for-byte and the new ready record is promoted. The old runtime and
-journal remain untouched. Journals of any schema but 3 are refused: schema 3 is the one
-that retains the originals needed for safe connection handoff, and the
-launcher never reconstructs transforms from native bounds. A same-boot journal
+journal remain untouched. Journals of any schema but 4 are refused as recovery input: schema 4 records each window's original as its placement-1 layer
+(see [Payload](../Payload/README.md#the-original-is-the-layer)), which is what makes handoff exact, and the
+launcher never reconstructs transforms from native bounds. A retired journal whose schema number is a different integer (the
+absolute originals of schema 3) is not migrated and does not block: the launcher says so, archives the launch record and the journal
+under `retired-launch.*`, leaves the retired runtime untouched and starts fresh, as for a record of an earlier boot
+(`tests/e2e/native-launcher.sh` shows it, run in the guest because it needs a machine without a running Infinify). A journal with no
+integer schema number still blocks, preserved for inspection. A same-boot journal
 with a mismatched boot-session UUID, unresolved recovery, a live or uncertain
 prior Dock, or invalid payloads blocks startup and preserves all state. There is
 no fallback or automatic injection retry. The launcher runs only
@@ -109,7 +113,7 @@ argv. A private, adjacent `ABS_PAYLOAD.json` sidecar opts in the constructor wit
 the runtime, the nonce and, for a recovery, the recovery source digest and writer identity
 (the payload also accepts an exact-process `allowlist` key, which the loader never writes).
 No sidecar means no listener.
-The recovery form accepts only a committed same-boot schema-3 journal from the
+The recovery form accepts only a committed same-boot schema-4 journal from the
 positively retired Dock recorded by the launcher. It copies those exact bytes to
 the fresh runtime and binds their digest and writer identity in the sidecar. The
 payload validates the complete journal, then commits the new writer's journal

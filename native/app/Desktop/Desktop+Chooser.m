@@ -52,7 +52,7 @@ static NSTextField *label(NSString *text, NSRect rect) {
     [self fillRebind:NO];
     [self.chooser makeKeyAndOrderFront:nil];[NSApp activate];[self refreshChoices:nil];
 }
-- (BOOL)windowShouldClose:(NSWindow *)window { (void)window;if(!self.panels.count)stopped=1;return YES; }
+- (BOOL)windowShouldClose:(NSWindow *)window { (void)window;if(!self.panels.count)DWStopSignal=1;return YES; }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView { (void)tableView;return self.choices.count; }
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row {(void)tableView;(void)column;return self.choices[row][@"label"];}
 - (void)grantAccess:(id)sender {

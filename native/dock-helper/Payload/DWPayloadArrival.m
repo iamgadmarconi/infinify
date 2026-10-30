@@ -16,6 +16,7 @@
 // Arrival: the arrival veil and the arrival placement of a placed root's children, their timeouts and release, and the window
 // server's window-added handler. Adapted from Sunlight, see above.
 // Moved verbatim from native/privileged/payload.m (37b27b1), lines 979-1127. #imported by DWPayload.m in a fixed order; never compiled alone.
+// Edited since the move: the original is the placement-1 layer (getLayer), the absolute read only decides whether the window is already placed.
 
 // Arrival veil. The window server announces a window added to a Space (SkyLight notification 1325) as
 // the window appears, a few milliseconds before the shell can have placed it. A window that qualifies
@@ -77,7 +78,7 @@ static void v2ArrivalExpire(DW2Entry *e) {
     v2Restore(@"arrival placement timeout",YES,nil,&summary);
 }
 static BOOL v2ArrivalPlace(uint32_t wid) {
-    if(!v2ParentOf||!getTransform||!setTransform||!getBounds)return NO;
+    if(!v2ParentOf||!getTransform||!setTransform||!getLayer||!getBounds)return NO;
     // Cheapest first: every window anywhere is announced here, and a window without a parent (all but a child) ends this read.
     uint32_t parent=0;if(!v2ParentOf(wid,&parent)||!parent)return NO;
     int owner=0;struct dw2_identity who={0};uid_t uid=0;
@@ -95,9 +96,11 @@ static BOOL v2ArrivalPlace(uint32_t wid) {
     if(!finiteMatrix(placement))return NO;
     NSNumber *key=@(wid);
     DW2Entry *e=[DW2Entry new];e->who=who;e->owner=owner;e->state=DW2_HELD;e->bounds=bounds;
-    if(getTransform(mainConnection(),wid,&e->transform)||!finiteMatrix(e->transform))return NO;
+    // The original is the window's layer; the absolute matrix is read only to see whether it is already where the family puts it.
+    CGAffineTransform drawn=CGAffineTransformIdentity;
+    if(getLayer(mainConnection(),wid,&e->layer)||!finiteMatrix(e->layer)||getTransform(mainConnection(),wid,&drawn)||!finiteMatrix(drawn))return NO;
     // Already where the root's family puts it (an identity placement of the root): nothing to take.
-    if(v2SameTransform(e->transform,placement))return NO;
+    if(v2SameTransform(drawn,placement))return NO;
     if(getAlpha&&setAlpha){if(getAlpha(mainConnection(),wid,&e->alpha)||!isfinite(e->alpha))return NO;e->hasAlpha=YES;}
     if(!v2EntryCurrent(e))return NO;
     BOOL pruned=NO;
@@ -130,7 +133,7 @@ static void v2Veil(uint32_t wid) {
     int owner=0;struct dw2_identity who={0};uid_t uid=0;
     if(!v2Resolve(wid,&owner,&who,&uid) || uid!=getuid() || !v2InScope(&who) || who.pid==getpid() || who.pid==atomic_load(&v2VeilClient))return;
     DW2Entry *e=[DW2Entry new];e->who=who;e->owner=owner;e->state=DW2_HELD;
-    if(getTransform(mainConnection(),wid,&e->transform) || !finiteMatrix(e->transform) || getBounds(mainConnection(),wid,&e->bounds) || !v2FiniteRect(e->bounds)
+    if(getLayer(mainConnection(),wid,&e->layer) || !finiteMatrix(e->layer) || getBounds(mainConnection(),wid,&e->bounds) || !v2FiniteRect(e->bounds)
         || e->bounds.size.width<v2VeilMinimumExtent || e->bounds.size.height<v2VeilMinimumExtent
         || getAlpha(mainConnection(),wid,&e->alpha) || e->alpha!=1 || !v2EntryCurrent(e))return;
     e->hasAlpha=e->alphaTouched=e->veiled=e->veilBare=e->veilAlpha=YES;

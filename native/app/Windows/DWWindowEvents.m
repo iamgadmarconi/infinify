@@ -12,9 +12,9 @@
 #import "DWWindowEvents+Private.h"
 // Every Accessibility message goes through this one serial queue, a stopped instance's removals ahead of its successor's
 // registrations. yabai sends them from its event-loop thread, likewise not the thread its observers call back on.
-dispatch_queue_t worker(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.window-events",DISPATCH_QUEUE_SERIAL);});return queue; }
+dispatch_queue_t DWWindowEventsQueue(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.window-events",DISPATCH_QUEUE_SERIAL);});return queue; }
 // LaunchServices reads are serial too, but cannot hold up an application's AX work.
-dispatch_queue_t applicationWorker(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.application-events",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_UTILITY,0));});return queue; }
+dispatch_queue_t DWWindowEventsApplicationQueue(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.application-events",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_UTILITY,0));});return queue; }
 BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) {
     if(!scope)return YES;
     NSArray<NSNumber *> *born=scope[@(pid)];uint64_t seconds=0,microseconds=0;

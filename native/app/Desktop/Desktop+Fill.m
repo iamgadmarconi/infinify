@@ -39,7 +39,7 @@
 }
 - (BOOL)nativeRestoreDeferredCurrent:(NSDictionary *)deferred snapshot:(NSDictionary *)snapshot {
     NSDictionary *effect=deferred[@"effect"];LiveSource *source=self.sources[effect[@"window"]];
-    if(!deferred||self.cleaning||stopped||self.sessionInactive||self.native.ended||deferred[@"presenter"]!=self.native
+    if(!deferred||self.cleaning||DWStopSignal||self.sessionInactive||self.native.ended||deferred[@"presenter"]!=self.native
         ||[deferred[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch||!source||source.detached||source.nativeMouseOwnership
         ||source.nativeVisibilityWanted||![source.identity isEqual:deferred[@"identity"]]||!boundIdentity(source.identity,effect[@"identity"])
         ||![DWTyped(snapshot[@"native_resize"],NSDictionary.class)isEqual:deferred[@"transaction_state"]])return NO;

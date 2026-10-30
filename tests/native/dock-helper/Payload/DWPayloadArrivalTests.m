@@ -8,7 +8,7 @@
 static void arrivalCases(struct dw2_identity who) {
     static dispatch_queue_t suspended;
     dispatch_queue_t savedQueue=v2q;suspended=dispatch_queue_create("dw.arrival.test",DISPATCH_QUEUE_SERIAL);dispatch_suspend(suspended);v2q=suspended;
-    mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;getTransform=readTransform;setTransform=writeTransform;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
+    mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;getTransform=readTransform;setTransform=writeTransform;getLayer=readTransform;setLayer=writeTransform;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
     fixtureOnly=NO;allowlist=nil;v2ParentOf=fakeParentOf;perWindowNatives=YES;
     struct dw2_restore_reply summary={0};uint8_t status=255;
     // The root as the application made it (768,200, 520x452) and the window it opens (869,262, 223x202), the way a context menu is.
@@ -33,7 +33,7 @@ static void arrivalCases(struct dw2_identity who) {
     v2Veil(43);
     DW2Entry *child=v2Table[@43];
     assert(child && child->arrival && child->state==DW2_HELD && !child->veiled && !child->veilBare && !child->veilAlpha && child->hasAlpha && !child->alphaTouched && child->alpha==1);
-    assert(v2SameTransform(child->transform,childNative) && CGRectEqualToRect(child->bounds,CGRectMake(869,262,223,202)));
+    assert(v2SameTransform(child->layer,childNative) && CGRectEqualToRect(child->bounds,CGRectMake(869,262,223,202)));
     assert(v2SameTransform(perWindowTransform(43),childPlaced) && v2SameTransform(child->appliedTransform,childPlaced) && child->appliedTransformKnown);
     assert([nativeLog isEqualToArray:(@[@"T"])] && !alphaWrites && atomic_load(&v2JournalWrites)==writesBefore+1);
     assert(v2SameTransform(perWindowTransform(42),CGAffineTransformMake(2,0,0,2,-1796,-1024))); // the root itself is untouched

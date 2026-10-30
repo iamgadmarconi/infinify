@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1: this entry point is what stays of it after the split.
 // Infinify's entry point: the command line, the IPC/login-item/native-desktop dispatch before AppKit, and the run loop around Desktop.
 #import "Desktop.h"
 #import "DWDesktopSupport.h"
@@ -14,8 +15,8 @@
 #import "DWNativeFocus.h"
 #import "DWNativeResize.h"
 #import "DWChildProcess.h"
-volatile sig_atomic_t stopped;
-static void stopSignal(int s) { stopped = s; }
+volatile sig_atomic_t DWStopSignal;
+static void stopSignal(int s) { DWStopSignal = s; }
 // WIDTHxHEIGHT in points, digits only. The least is 960x480.
 static BOOL parseWindowSize(const char *text,NSSize *size) {
     char *end=NULL;unsigned long width=strtoul(text,&end,10);if(*end!='x'||!isdigit((unsigned char)end[1]))return NO;
@@ -58,7 +59,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(DWNativeLoginIsCompositor()){const char *login[]={"--login"};return DWNativeDesktopCommand(1,login);}
         argc=1;
     }
-    raiseOpenFileLimit();
+    DWRaiseOpenFileLimit();
     const char **launched=argv; // as given, for the onboarding window's Relaunch
     BOOL windowed=NO,logical=NO,manual=NO;const char *socket=NULL,*config=NULL,*chord=NULL;NSSize windowSize=NSMakeSize(1200,800);const char *filtered[argc+1];int count=0;
     BOOL undelivered=NO; // --no-hover-forwarding
@@ -186,13 +187,13 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // A launch held at the onboarding window runs it when its canvas opens (-onboard).
     if(!desktop.onboarding)[desktop runAutostart];
     // A pool per turn: what a poll, its controller calls and the events it pumps autorelease ends with the turn.
-    while(!stopped){@autoreleasepool{[desktop poll];DWDesktopPump(.08);}}
+    while(!DWStopSignal){@autoreleasepool{[desktop poll];DWDesktopPump(.08);}}
     // Stopped first: the pending quit reply is written, and no request can arrive during cleanup.
     [desktop.ipc stop];desktop.ipc=nil;[desktop cleanup];[desktop.chooser close];[desktop.onboarding close];[desktop putBackWindowSettings];
     // Relaunch: the same executable with the same arguments in this very process, once everything above has ended and the socket is free again.
     // The process keeps its place: under launchd it is still the login item's job, in a terminal still that terminal's. Not after a signal, which
     // asked for an end. The lines after execv are reached only if it failed.
-    if(desktop.relaunch&&stopped==1){execv(NSBundle.mainBundle.executablePath.fileSystemRepresentation,(char *const *)launched);perror("Infinify: relaunch");return 1;}
+    if(desktop.relaunch&&DWStopSignal==1){execv(NSBundle.mainBundle.executablePath.fileSystemRepresentation,(char *const *)launched);perror("Infinify: relaunch");return 1;}
     // The quit action, msg action quit, the exit chord and SIGTERM all end here, with status 0: launchd starts the login item again only after an end that is not this one.
     return 0;
 } }

@@ -17,6 +17,7 @@
 // write among them), process configuration, the window and connection records, session, frame-slot and table state, and the
 // optional window server calls with their resolution. This file defines the classes DW2Connection and DW2Entry (the connection and window records).
 // Moved verbatim from native/privileged/payload.m (37b27b1), lines 20-278. #imported by DWPayload.m in a fixed order; never compiled alone.
+// Edited since the move: getLayer/setLayer (dwReadLayer, dwWriteLayer) and the entry field layer replace the absolute original.
 
 static int (*mainConnection)(void);
 static CGError (*getOwner)(int, uint32_t, int *);
@@ -25,11 +26,16 @@ static CGError (*getOwner)(int, uint32_t, int *);
 // (x,y)). They are dwReadAbsolute and dwWriteAbsolute below, set at start; a regression replaces them with substitutes.
 static CGError (*getTransform)(int, uint32_t, CGAffineTransform *);
 static CGError (*setTransform)(int, uint32_t, CGAffineTransform);
-// The three SkyLight calls behind them, resolved at start. There is deliberately no SLSSetWindowTransform here: it is placement 0 (see
+// What a window's ORIGINAL is, and what a restore writes back: the placement-1 layer alone (dwReadLayer and dwWriteLayer below), normally
+// the identity. The absolute matrix above also contains placement 0 (the position, which follows the native frame) and any other
+// placement some other writer holds, such as the system's own open animation, so an absolute original captured while one of those
+// was non-natural could be restored to a window that is then left visibly displaced. A layer is exact whatever the other placements do.
+static CGError (*getLayer)(int, uint32_t, CGAffineTransform *);
+static CGError (*setLayer)(int, uint32_t, CGAffineTransform);
+// The two SkyLight calls behind them, resolved at start. There is deliberately no SLSSetWindowTransform here: it is placement 0 (see
 // "Placements" in docs/native/dock-helper/Payload/README.md), and nothing in this file writes placement 0.
 static CGError (*skyGetPlacement)(int, uint32_t, int, void *, CGAffineTransform *);
 static CGError (*skySetPlacement)(int, uint32_t, int, int, const CGAffineTransform *);
-static CGError (*skyGetCatenated)(int, uint32_t, CGAffineTransform *);
 static CGError (*getBounds)(int, uint32_t, CGRect *);
 static CGError (*getScreenRect)(int, uint32_t, CGRect *);
 // Optional alpha operations. Signatures as declared by yabai (MIT),
@@ -67,18 +73,24 @@ static BOOL finiteMatrix(CGAffineTransform t) {
 // death drew every window the helper had ever written at the top-left corner of the display until its application restarted.
 // A placement of 1 or more is a relative layer applied after placement 0, whose identity means "as placed by placement 0", so
 // the same death leaves the window where its native frame is. Everything here is therefore written at placement 1 (flags 0,
-// relative) and read back as the catenated (effective) transform. Observed on macOS 27.0.1 (26A434); not an upstream API: the
-// signatures are those the system SkyLight's disassembly shows (SLSSetWindowTransform is a tail call into
-// SLSSetWindowTransformAtPlacement(cid,wid,0,0,&t); SLSGetCatenatedWindowTransform is SLSGetWindowTransformAtPlacement(cid,wid,
-// 0x7fffff00,NULL,&t)), see docs/native/dock-helper/Payload/README.md "Placements".
+// relative) and read back as placement 0 composed with it. Observed on macOS 27.0.1 (26A434); not an upstream API: the signatures
+// are those the system SkyLight's disassembly shows (SLSSetWindowTransform is a tail call into SLSSetWindowTransformAtPlacement
+// (cid,wid,0,0,&t)), see docs/native/dock-helper/Payload/README.md "Placements". SLSGetCatenatedWindowTransform (all placements) is
+// deliberately not used: a window the system is animating open carries a further placement of another writer, which a catenated
+// readback would take for a request that did not take (the shell then logs "not placed" and retries until the animation ends).
 enum { DW_BASE_PLACEMENT=0, DW_LAYER_PLACEMENT=1 };
 // The window server stores 32-bit floats and composes two layers, so an absolute matrix read back after a layered write can differ
 // from the request by a rounding or two: a few ulps of the largest translation, far below anything drawn. v2SameTransform allows this.
 #define DW_LINEAR_TOLERANCE 1e-6f
 #define DW_TRANSLATION_TOLERANCE (1.0f/256)
-// The matrix every call site means: placement 0 composed with the layer, as the window server draws it.
+// The matrix every call site means: placement 0 composed with the layer (placement 0 first, as measured on the guest), which is what
+// dwWriteAbsolute sets and so what a readback has to confirm, whatever any other writer's placement holds.
 static CGError dwReadAbsolute(int cid,uint32_t wid,CGAffineTransform *absolute) {
-    return skyGetCatenated(cid,wid,absolute);
+    CGAffineTransform base=CGAffineTransformIdentity,layer=CGAffineTransformIdentity;
+    CGError status=skyGetPlacement(cid,wid,DW_BASE_PLACEMENT,NULL,&base);
+    if(!status)status=skyGetPlacement(cid,wid,DW_LAYER_PLACEMENT,NULL,&layer);
+    if(!status)*absolute=CGAffineTransformConcat(base,layer);
+    return status;
 }
 // Writes the absolute matrix A by leaving placement 0 as it is (T0, read now) and setting the layer L that composes with it to A:
 // A = L after T0, so L = A after T0^-1. For a window that is where its native frame is (T0 = [1,0,0,1,-x,-y]) and A = T0 (a
@@ -91,6 +103,14 @@ static CGError dwWriteAbsolute(int cid,uint32_t wid,CGAffineTransform absolute) 
     CGAffineTransform layer=CGAffineTransformConcat(CGAffineTransformInvert(base),absolute);
     if(fabs(layer.a-1)<DW_LINEAR_TOLERANCE&&fabs(layer.d-1)<DW_LINEAR_TOLERANCE&&fabs(layer.b)<DW_LINEAR_TOLERANCE&&fabs(layer.c)<DW_LINEAR_TOLERANCE
         &&fabs(layer.tx)<DW_TRANSLATION_TOLERANCE&&fabs(layer.ty)<DW_TRANSLATION_TOLERANCE)layer=CGAffineTransformIdentity;
+    return skySetPlacement(cid,wid,DW_LAYER_PLACEMENT,0,&layer);
+}
+// The placement-1 layer, as the window server holds it. Reading an untouched window gives the identity; a restore writes the layer
+// that was captured, verbatim, and the caller reads it back (v2SameTransform).
+static CGError dwReadLayer(int cid,uint32_t wid,CGAffineTransform *layer) {
+    return skyGetPlacement(cid,wid,DW_LAYER_PLACEMENT,NULL,layer);
+}
+static CGError dwWriteLayer(int cid,uint32_t wid,CGAffineTransform layer) {
     return skySetPlacement(cid,wid,DW_LAYER_PLACEMENT,0,&layer);
 }
 static NSDictionary *identity(uint32_t wid) {
@@ -155,7 +175,7 @@ static uint32_t fixtureWids[16], fixtureCount;
 @implementation DW2Connection
 - (void)dealloc { close(fd);pthread_mutex_destroy(&writeLock); }
 @end
-@interface DW2Entry : NSObject { @public struct dw2_identity who; int owner; CGAffineTransform transform; CGRect bounds; float alpha; BOOL hasAlpha, alphaTouched, fresh, alphaFresh; uint32_t state;
+@interface DW2Entry : NSObject { @public struct dw2_identity who; int owner; CGAffineTransform layer; CGRect bounds; float alpha; BOOL hasAlpha, alphaTouched, fresh, alphaFresh; uint32_t state;
     // A released original imported after its writer died needs the narrower
     // unchanged-geometry/reset guard on every retry, including after a crash.
     BOOL reattaching;
@@ -175,7 +195,7 @@ static uint32_t fixtureWids[16], fixtureCount;
     BOOL veiled, veilBare, veilAlpha, veilBareCleared, veilAlphaCleared;
     // Arrival placement (v2ArrivalPlace): a child of a placed root the helper itself placed when it opened, until a frame names it. Memory only.
     BOOL arrival;
-    CGAffineTransform veilPriorTransform; CGRect veilPriorBounds;
+    CGAffineTransform veilPriorLayer; CGRect veilPriorBounds;
     // Optional Space obligation. Original membership is immutable. A void
     // forward request remains uncertain until its target is actually observed.
     uint64_t originalSpace, pendingSpace; NSString *originalSpaceDisplay;
@@ -228,7 +248,7 @@ static _Atomic int32_t v2VeilClient;
 // A window narrower or shorter than this is never offered to the shell (DWWindowManager.m), so it is not veiled.
 static const CGFloat v2VeilMinimumExtent=40;
 // Only the explicit same-user (desktop) helper; allowlist and cooperative scopes are not veiled.
-static BOOL v2VeilAvailable(void) { return v2VeilRegistered&&!fixtureOnly&&!allowlist&&setAlpha&&getAlpha&&getBounds&&getTransform; }
+static BOOL v2VeilAvailable(void) { return v2VeilRegistered&&!fixtureOnly&&!allowlist&&setAlpha&&getAlpha&&getBounds&&getLayer; }
 // The one SkyLight handle of this translation unit. Every group of native symbols, required or optional, is resolved from it.
 static void *v2Sky(void) {
     static void *handle;static dispatch_once_t once;

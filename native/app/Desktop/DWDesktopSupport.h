@@ -6,7 +6,7 @@
 #import "DWAXLookup.h"
 #import "DWTypedValue.h"
 // The run stops when this is set: a signal, the quit action, a closed chooser. Defined in main.m.
-extern volatile sig_atomic_t stopped;
+extern volatile sig_atomic_t DWStopSignal;
 static inline NSArray *birth(pid_t pid) {
     uint64_t seconds=0,microseconds=0;
     if (!DWProcessBirth(pid,&seconds,&microseconds)) return nil;
@@ -28,7 +28,7 @@ static inline void DWDesktopPump(double seconds) {
     do {
         NSEvent *event=[NSApp nextEventMatchingMask:NSEventMaskAny untilDate:deadline inMode:NSDefaultRunLoopMode dequeue:YES];
         if(event){[NSApp sendEvent:event];CFRunLoopRunInMode(kCFRunLoopDefaultMode,0,true);}
-    } while(!stopped&&deadline.timeIntervalSinceNow>0);
+    } while(!DWStopSignal&&deadline.timeIntervalSinceNow>0);
 }
 
 static inline NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }

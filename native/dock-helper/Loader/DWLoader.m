@@ -278,7 +278,7 @@ static BOOL recovery_journal(const char *sourcePath,const char *runtime,const st
     NSArray *windows=journal[@"windows"],*released=journal[@"released_windows"];
     char bootUUID[37];
     if(!boot_session_uuid(bootUUID) || !dw_exact_keys(journal,keys)
-        || !json_integer(journal[@"v"],3,3) || !json_integer(journal[@"server_pid"],2,INT_MAX)
+        || !json_integer(journal[@"v"],4,4) || !json_integer(journal[@"server_pid"],2,INT_MAX)
         || !json_integer(journal[@"server_birth_sec"],1,UINT64_MAX) || !json_integer(journal[@"server_birth_usec"],0,999999)
         || !json_integer(journal[@"server_uid"],1,UINT32_MAX) || !dw_boot_uuid_valid(journal[@"boot_uuid"])
         || !json_integer(journal[@"generation"],0,UINT64_MAX-1)
@@ -430,7 +430,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     if(!read_nonce_file(nonceFile,dockInfo.pbi_uid,nonce)){fprintf(stderr,"nonce file must be a login-user-owned regular 0600 file containing 64 lowercase hex bytes and optional newline\n");return 1;}
     NSData *recoveryBytes=nil;NSDictionary *recoveryFields=nil;
     if(recoveryJournalPath && !recovery_journal(recoveryJournalPath,runtime,&dockInfo,(pid_t)retiredPID,retiredSec,retiredUsec,&recoveryBytes,&recoveryFields)) {
-        fprintf(stderr,"recovery journal is not a committed same-boot schema-3 record for a positively retired same-user Dock; refusing recovery\n");return 1;
+        fprintf(stderr,"recovery journal is not a committed same-boot schema-4 record for a positively retired same-user Dock; refusing recovery\n");return 1;
     }
     char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];
     if(snprintf(socketPath,sizeof(socketPath),"%s/" DW2_SOCKET,runtime)>=(int)sizeof(socketPath)){fprintf(stderr,"Unix socket path exceeds 103 bytes\n");return 1;}

@@ -76,7 +76,7 @@ static CGError writeTransform(int cid,uint32_t wid,CGAffineTransform value) {
         NSDictionary *saved=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[journalDirectory stringByAppendingPathComponent:@"v2-journal.json"]] options:0 error:NULL];
         NSDictionary *row=nil;for(NSDictionary *candidate in saved[@"windows"])if([candidate[@"wid"]unsignedIntValue]==wid)row=candidate;
         NSArray *nowBounds=@[@(nativeBounds.origin.x),@(nativeBounds.origin.y),@(nativeBounds.size.width),@(nativeBounds.size.height)];
-        assert(row && !row[@"veil_bare"] && [row[@"transform"]isEqual:matrix(nativeTransform)] && [row[@"bounds"]isEqual:nowBounds]);
+        assert(row && !row[@"veil_bare"] && [row[@"layer"]isEqual:matrix(nativeTransform)] && [row[@"bounds"]isEqual:nowBounds]);
     }
     if(requireArrivalPlacedBeforeTransform&&perTransform[@(wid)]){
         // An arrival placement: the window's original transform, bounds and alpha are on disk first, and nothing but the transform is owed.
@@ -84,7 +84,7 @@ static CGError writeTransform(int cid,uint32_t wid,CGAffineTransform value) {
         NSDictionary *row=nil;for(NSDictionary *candidate in saved[@"windows"])if([candidate[@"wid"]unsignedIntValue]==wid)row=candidate;
         CGRect nowBounds=perWindowBounds(wid);
         NSArray *nowBoundsRow=@[@(nowBounds.origin.x),@(nowBounds.origin.y),@(nowBounds.size.width),@(nowBounds.size.height)];
-        assert(row && !row[@"veil_bare"] && !row[@"veil_alpha"] && ![row[@"alpha_touched"]boolValue] && [row[@"transform"]isEqual:matrix(perWindowTransform(wid))]
+        assert(row && !row[@"veil_bare"] && !row[@"veil_alpha"] && ![row[@"alpha_touched"]boolValue] && [row[@"layer"]isEqual:matrix(perWindowTransform(wid))]
             && [row[@"bounds"]isEqual:nowBoundsRow] && [row[@"state"]isEqual:@"held"]);
     }
     (void)cid;(void)wid;transformWrites++;[nativeLog addObject:@"T"];

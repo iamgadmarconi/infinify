@@ -357,27 +357,6 @@ static uint64_t IFCStringFingerprint(NSString *s) {
 }
 @end
 
-IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompositorEffects effects) {
-    IFCLife life = {element.lifecycle, 0.0, NO, NO};
-    if (life.kind != IFCompositorLifecycleOpening && life.kind != IFCompositorLifecycleClosing &&
-        life.kind != IFCompositorLifecycleClosingAlphaOnly) {
-        life.kind = IFCompositorLifecycleNone;
-        return life;
-    }
-    double start = element.lifecycleStartTime;
-    double p;
-    if (isnan(start)) {
-        p = element.lifecycleProgress;
-    } else {
-        life.timed = YES;
-        p = IFCompositorAnimationProgress(time - start, effects.animationSpeed);
-    }
-    if (isnan(p)) p = 0.0;
-    life.progress = fmin(fmax(p, 0.0), 1.0);
-    life.finished = IFCompositorAnimationFinished(life.progress);
-    return life;
-}
-
 // MARK: - Frame
 
 @implementation IFCompositorFrame {
@@ -498,7 +477,3 @@ IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompositorEf
 }
 @end
 
-// Integer output size, as upstream's logical output size is integral.
-void IFCPixelSize(IFCompositorFrame *f, long *logicalW, long *logicalH, NSUInteger *pxW, NSUInteger *pxH) {
-    DWMetalPixelSize(f.size.width, f.size.height, f.scale, logicalW, logicalH, pxW, pxH);
-}

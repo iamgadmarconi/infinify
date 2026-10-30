@@ -319,7 +319,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 }
 - (void)requestNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt completed:(void (^)(NSString *))completed {
     if(atomic_load(&request->completed))return;
-    if(self.cleaning||stopped||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
+    if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){
         dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed))return;
             if(error){[self retryNativeExport:request index:index attempt:attempt error:error completed:completed];return;}
@@ -329,7 +329,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 }
 - (void)captureNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt content:(SCShareableContent *)content completed:(void (^)(NSString *))completed {
     if(atomic_load(&request->completed))return;
-    if(self.cleaning||stopped||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
+    if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
     NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
     for(NSDictionary *item in request->nativeItems){LiveSource *source=item[@"source"];NSDictionary *binding=nil;
         for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:item[@"window"]])binding=DWTyped(window[@"source"],NSDictionary.class);
@@ -346,7 +346,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
             NSString *failure=nil;NSArray *fresh=DWNativeExportPlan(asked,request->nativeFamilies,&failure);BOOL same=[fresh isEqual:request->nativeItems];
             dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed))return;
-                if(self.cleaning||stopped||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
+                if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
                 NSDictionary *current=[self call:@{@"op":@"snapshot"}];NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(NSDictionary *window in current[@"windows"])if(DWTyped(window[@"source"],NSDictionary.class))bindings[window[@"window"]]=window[@"source"];
                 for(NSDictionary *item in request->nativeItems){NSDictionary *binding=bindings[item[@"window"]];LiveSource *source=item[@"source"];
                     if(self.sources[item[@"window"]]!=source||source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,item[@"identity"])||!boundIdentity(item[@"identity"],binding[@"identity"])||![item[@"generation"]isEqual:binding[@"generation"]]){completed(@"native screenshot source changed before composition");return;}}
@@ -381,7 +381,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
             if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"export: native window=%s member=%s requested=%.0fx%.0f image=%zux%zu\n",logical.stringValue.UTF8String,[identity[@"wid"]stringValue].UTF8String,pixels.width,pixels.height,output.sdrImage?CGImageGetWidth(output.sdrImage):0,output.sdrImage?CGImageGetHeight(output.sdrImage):0);
             dispatch_async(dispatch_get_main_queue(),^{
                 if(atomic_load(&request->completed))return;
-                if(self.cleaning||stopped||source.detached||self.sources[logical]!=source||self.native!=request->presenter||self.native.ended){completed(@"native screenshot source or session ended during capture");return;}
+                if(self.cleaning||DWStopSignal||source.detached||self.sources[logical]!=source||self.native!=request->presenter||self.native.ended){completed(@"native screenshot source or session ended during capture");return;}
                 if(error){[self retryNativeExport:request index:index attempt:attempt error:error completed:completed];return;}
                 if(result->failure){completed(result->failure);return;}
                 if(!result->pixels||CVPixelBufferGetWidth(result->pixels)<pixels.width||CVPixelBufferGetHeight(result->pixels)<pixels.height){completed(@"native snapshot supplied fewer pixels than requested");return;}
@@ -397,7 +397,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 - (void)captureExportWindows:(NSArray<NSNumber *> *)windows index:(NSUInteger)index content:(SCShareableContent *)content request:(DWExportFrame *)request completed:(void (^)(NSString *))completed {
     (void)content; // Native exports use the separately audited family plan above.
     if(atomic_load(&request->completed))return;
-    if(self.cleaning||stopped){completed(@"screenshot cancelled during shutdown");return;}
+    if(self.cleaning||DWStopSignal){completed(@"screenshot cancelled during shutdown");return;}
     while(index<windows.count){
         NSNumber *window=windows[index++];LiveSource *source=self.sources[window];if(!source||source.error||!source.window)continue;
         CGRect bounds=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&bounds))continue;
@@ -412,7 +412,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
                 DWExportFrame *result=[DWExportFrame new];if(sample)result->sample=(CMSampleBufferRef)CFRetain(sample);result->failure=error.localizedDescription;
                 dispatch_async(dispatch_get_main_queue(),^{
                     if(atomic_load(&request->completed))return;
-                    if(source.detached||self.cleaning||stopped){completed(@"window closed or screenshot cancelled during capture");return;}
+                    if(source.detached||self.cleaning||DWStopSignal){completed(@"window closed or screenshot cancelled during capture");return;}
                     if(result->failure){completed(result->failure);return;}
                     CVPixelBufferRef image=result->sample&&CMSampleBufferIsValid(result->sample)?CMSampleBufferGetImageBuffer(result->sample):NULL;
                     if(!image){completed(@"snapshot supplied no valid pixels");return;}

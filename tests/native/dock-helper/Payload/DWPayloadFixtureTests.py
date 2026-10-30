@@ -165,7 +165,7 @@ class Host:
         return (self.run / 'host.log').read_text()
     def journal(self):
         journal = json.loads((self.run / 'v2-journal.json').read_text())
-        assert journal['v'] == 3, journal
+        assert journal['v'] == 4, journal
         assert isinstance(journal['released_windows'], list), journal
         return journal
     def wait_journal(self, state, timeout=4):
@@ -654,7 +654,7 @@ def crash_group():
     (host.run / 'v2.sock').unlink()
     # As if it had died while staging a journal write: the leftover must not stop
     # the next instance from writing its own.
-    (host.run / 'v2-journal.next').write_text('{"v":3,"state":"hol')
+    (host.run / 'v2-journal.next').write_text('{"v":4,"state":"hol')
     os.chmod(host.run / 'v2-journal.next', 0o600)
     second = Host('--windows', '8', run=host.run, nonce=host.nonce)
     after = second.journal()

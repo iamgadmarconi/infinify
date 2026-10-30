@@ -40,8 +40,8 @@ static CGDirectDisplayID displayMirror(CGDirectDisplayID display);
 #import "DWPayloadSublevelTests.m"
 #import "DWPayloadVeilTests.m"
 #import "DWPayloadArrivalTests.m"
-#import "DWPayloadRebaseTests.m"
 #import "DWPayloadPlacementTests.m"
+#import "DWPayloadLayerTests.m"
 int main(void) { @autoreleasepool {
     mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;
     fixtureOnly=NO;processUID=getuid();
@@ -107,7 +107,7 @@ int main(void) { @autoreleasepool {
     v2RetryScheduled=YES; // This regression drives each retry explicitly on its sole test thread.
     clearTables();v2WriterIdentity=@{@"server_pid":@(getpid()),@"server_birth_sec":@1000,@"server_birth_usec":@0,@"server_uid":@(getuid()),@"boot_uuid":@(bootUUID)};
     DW2Entry *entry=[DW2Entry new];entry->who=recorded;entry->owner=7;
-    entry->transform=CGAffineTransformMake(1,0,0,1,-25,-35);entry->bounds=CGRectMake(25,35,300,200);
+    entry->layer=CGAffineTransformMake(1,0,0,1,-25,-35);entry->bounds=CGRectMake(25,35,300,200);
     v2Table[@42]=entry;rows=nil;
     struct dw2_restore_reply summary={0};NSMutableData *report=[NSMutableData data];
     v2Restore(@"query regression",NO,report,&summary);
@@ -115,10 +115,10 @@ int main(void) { @autoreleasepool {
     assert(v2Table[@42]==entry && entry->state==DW2_RESTORING);
     NSDictionary *journal=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[@(directory)stringByAppendingPathComponent:@"v2-journal.json"]] options:0 error:NULL];
     assert([journal[@"state"]isEqual:@"restoring"] && [journal[@"windows"]count]==1);
-    assert([journal[@"windows"][0][@"transform"]isEqual:matrix(entry->transform)]);
+    assert([journal[@"windows"][0][@"layer"]isEqual:matrix(entry->layer)]);
     NSDictionary *diagnostic=journal[@"last_restore"][@"results"][0][@"diagnostic"];
-    assert([diagnostic[@"initial_identity"]isEqual:@"uncertain"] && diagnostic[@"transform_set_status"]==NSNull.null
-        && diagnostic[@"transform_get_status"]==NSNull.null && diagnostic[@"final_identity"]==NSNull.null);
+    assert([diagnostic[@"initial_identity"]isEqual:@"uncertain"] && diagnostic[@"layer_set_status"]==NSNull.null
+        && diagnostic[@"layer_get_status"]==NSNull.null && diagnostic[@"final_identity"]==NSNull.null);
     assert(v2LastRestoreValid(journal[@"last_restore"]));
     rows=@[];report=[NSMutableData data];v2Restore(@"proven absence",YES,report,&summary);
     assert(summary.count==1 && summary.pending==0 && summary.journal_persisted==1 && !v2Table.count);
@@ -127,7 +127,7 @@ int main(void) { @autoreleasepool {
     // A replacement after durable enrollment must receive neither transform nor
     // alpha. These substitutes exercise v2Apply's actual journal/write ordering.
     ownerValue=7;connectionStatus=0;rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];
-    getTransform=readTransform;setTransform=writeTransform;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
+    getTransform=readTransform;setTransform=writeTransform;getLayer=readTransform;setLayer=writeTransform;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
     nativeTransform=CGAffineTransformMake(1,0,0,1,-25,-35);
     struct dw2_record frame={.id=recorded,.flags=DW2_RECORD_HAS_ALPHA,.m={2,0,0,2,-50,-70},.alpha=.5f};uint8_t status=255;
     replaceOnSync=YES;v2Apply(&frame,1,&status);
@@ -167,9 +167,9 @@ int main(void) { @autoreleasepool {
     v2Restore(@"readback unavailable",NO,nil,&summary);
     diagnostic=v2LastRestore[@"results"][0][@"diagnostic"];
     assert(summary.pending==1 && transformWrites==1 && transformReads==1 && identityReads==1);
-    assert([diagnostic[@"initial_identity"]isEqual:@"current"] && [diagnostic[@"transform_set_status"]isEqual:@0]
-        && [diagnostic[@"transform_get_status"]isEqual:@1000] && diagnostic[@"actual_transform"]==NSNull.null
-        && diagnostic[@"transform_matches"]==NSNull.null && diagnostic[@"final_identity"]==NSNull.null);
+    assert([diagnostic[@"initial_identity"]isEqual:@"current"] && [diagnostic[@"layer_set_status"]isEqual:@0]
+        && [diagnostic[@"layer_get_status"]isEqual:@1000] && diagnostic[@"actual_layer"]==NSNull.null
+        && diagnostic[@"layer_matches"]==NSNull.null && diagnostic[@"final_identity"]==NSNull.null);
     assert(v2LastRestoreValid(v2LastRestore));
     // Diagnostic presence and shape cannot gate recovery; authoritative receipt
     // fields remain strict, and receipts without diagnostics remain valid.
@@ -186,15 +186,15 @@ int main(void) { @autoreleasepool {
     v2Restore(@"readback differs",YES,nil,&summary);
     diagnostic=v2LastRestore[@"results"][0][@"diagnostic"];
     assert(summary.pending==1 && transformWrites==1 && transformReads==1 && identityReads==1);
-    assert([diagnostic[@"actual_transform"]isEqual:matrix(nativeTransform)]
-        && [diagnostic[@"saved_transform"]isEqual:matrix(entry->transform)]
-        && [diagnostic[@"transform_matches"]isEqual:@NO] && diagnostic[@"final_identity"]==NSNull.null);
+    assert([diagnostic[@"actual_layer"]isEqual:matrix(nativeTransform)]
+        && [diagnostic[@"saved_layer"]isEqual:matrix(entry->layer)]
+        && [diagnostic[@"layer_matches"]isEqual:@NO] && diagnostic[@"final_identity"]==NSNull.null);
 
     ignoreTransformWrites=NO;replaceAfterTransform=YES;transformReads=identityReads=transformWrites=0;
     v2Restore(@"final identity changed",YES,nil,&summary);
     diagnostic=v2LastRestore[@"results"][0][@"diagnostic"];
     assert(summary.pending==1 && transformWrites==1 && transformReads==1 && identityReads==2);
-    assert([diagnostic[@"transform_matches"]isEqual:@YES] && [diagnostic[@"final_identity"]isEqual:@"gone"]);
+    assert([diagnostic[@"layer_matches"]isEqual:@YES] && [diagnostic[@"final_identity"]isEqual:@"gone"]);
     v2Restore(@"confirmed diagnostic replacement",YES,nil,&summary);
     assert(summary.pending==0 && !v2Table.count && transformWrites==1 && transformReads==1 && identityReads==3);
 
@@ -244,7 +244,7 @@ int main(void) { @autoreleasepool {
     nativeBounds=CGRectMake(25,35,350,250);v2Restore(@"released original",NO,nil,&summary);
     assert(!summary.pending && summary.journal_persisted && !v2Table.count && v2Released.count==1);
     assert(CGRectEqualToRect(v2Released[@42]->bounds,nativeBounds) && v2Released[@42]->alphaTouched && nativeAlpha==.8f);
-    journal=readJournal();assert([journal[@"v"]isEqual:@3] && [journal[@"state"]isEqual:@"empty"] && [journal[@"released_windows"]count]==1);
+    journal=readJournal();assert([journal[@"v"]isEqual:@4] && [journal[@"state"]isEqual:@"empty"] && [journal[@"released_windows"]count]==1);
     assert(v2WriterSame(journal,v2WriterIdentity) && !atomic_load(&v2Held) && !atomic_load(&v2Restoring));
     writes=transformWrites;clearTables();assert(v2LoadJournal(nil));
     assert(transformWrites==writes && !v2Table.count && v2Released.count==1); // Same writer never replays released rows.
@@ -255,11 +255,11 @@ int main(void) { @autoreleasepool {
     failNextSync=YES;v2Apply(&frame,1,&status);
     assert(status==DW2_JOURNAL && !v2Table.count && v2Released[@42]==releasedEntry && transformWrites==writes);
     v2Restore(@"journal retry",YES,nil,&summary);assert(summary.journal_persisted && !v2JournalStale);
-    v2Apply(&frame,1,&status);assert(status==DW2_APPLIED && !v2Released.count && v2Table[@42]->transform.tx==-40);
+    v2Apply(&frame,1,&status);assert(status==DW2_APPLIED && !v2Released.count && v2Table[@42]->layer.tx==-40);
     v2Restore(@"new original",NO,nil,&summary);assert(!summary.pending && v2Released[@42]->alpha==.7f);
     journal=readJournal();
 
-    // Strict schema and unique collections are authoritative: only schema 3 is
+    // Strict schema and unique collections are authoritative: only schema 4 is
     // accepted, so a journal that lacks the released-obligation collection is refused.
     NSMutableDictionary *bad=[journal mutableCopy];bad[@"v"]=@2;
     assert(!v2DecodeJournal([NSJSONSerialization dataWithJSONObject:bad options:0 error:NULL],[NSMutableDictionary dictionary],[NSMutableDictionary dictionary]));
@@ -284,19 +284,22 @@ int main(void) { @autoreleasepool {
     NSDictionary *currentWriter=v2WriterIdentity;v2WriterIdentity=otherBoot;assert(!v2LoadJournal(config));v2WriterIdentity=currentWriter;
     failNextSync=YES;writes=transformWrites;assert(!v2LoadJournal(config) && transformWrites==writes);clearTables();
 
-    // An off-canvas geometry change or non-reset transform must remain unresolved.
+    // A layer that is neither the original nor the identity must remain unresolved, and a resized window is no obstacle to
+    // converging once the layer is fine (the layer does not depend on the frame).
     // The new journal is already durable even when no reattachment is authorized.
-    nativeTransform=CGAffineTransformIdentity;nativeBounds.size.width=351;
+    nativeTransform=CGAffineTransformMake(1,0,0,1,-99,-88);
     assert(v2LoadJournal(config));assert(v2Table[@42]->reattaching && atomic_load(&v2Restoring)==1 && transformWrites==writes);
     assert([readJournal()[@"windows"][0][@"state"]isEqual:@"reattaching"] && v2WriterSame(readJournal(),currentWriter));
-    nativeBounds.size.width=350;nativeTransform=CGAffineTransformMake(1,0,0,1,-99,-88);
+    nativeBounds.size.width=351;
     v2Restore(@"divergent matrix",YES,nil,&summary);assert(summary.pending==1 && transformWrites==writes);
     nativeTransform=CGAffineTransformIdentity;nativeAlpha=.9f;
     v2Restore(@"divergent released alpha",YES,nil,&summary);assert(summary.pending==1 && transformWrites==writes);
     nativeAlpha=.7f;boundsStatus=1000;
-    v2Restore(@"unknown bounds",YES,nil,&summary);assert(summary.pending==1 && transformWrites==writes);boundsStatus=0;
+    // The frame is not part of the guard any more, so the layer (the original, idempotent) is written; unreadable bounds still leave the
+    // release uncertified and pending.
+    v2Restore(@"unknown bounds",YES,nil,&summary);assert(summary.pending==1);boundsStatus=0;nativeTransform=CGAffineTransformIdentity;writes=transformWrites;
     transformReadStatus=1000;v2Restore(@"unknown matrix",YES,nil,&summary);assert(summary.pending==1 && transformWrites==writes);transformReadStatus=0;
-    replaceAfterBounds=YES;v2Restore(@"replacement during guard",YES,nil,&summary);assert(summary.pending==1 && transformWrites==writes);ownerValue=7;
+    replaceAfterTransformRead=YES;v2Restore(@"replacement during guard",YES,nil,&summary);assert(summary.pending==1 && transformWrites==writes);ownerValue=7;
 
     // Reattachment is persisted before its first setter; a failed final fsync
     // cannot advertise readiness even after successful transform/alpha readback.
@@ -310,7 +313,7 @@ int main(void) { @autoreleasepool {
     // A second crash must use the newer committed original, not historical
     // recovery-source bytes. Here the latest release differs deliberately.
     requirePendingBeforeTransform=NO;nativeTransform.tx=-55;nativeBounds.origin.x=55;v2Apply(&frame,1,&status);assert(status==DW2_APPLIED);
-    v2Restore(@"latest committed original",NO,nil,&summary);assert(!summary.pending && v2Released[@42]->transform.tx==-55);
+    v2Restore(@"latest committed original",NO,nil,&summary);assert(!summary.pending && v2Released[@42]->layer.tx==-55);
     NSMutableDictionary *nextWriter=[currentWriter mutableCopy];nextWriter[@"server_pid"]=@789;nextWriter[@"server_birth_sec"]=@2000;
     v2WriterIdentity=nextWriter;nativeTransform=CGAffineTransformIdentity;clearTables();requirePendingBeforeTransform=YES;writes=transformWrites;
     assert(v2LoadJournal(config) && transformWrites==writes+1 && nativeTransform.tx==-55 && !v2Table.count && v2Released.count==1);
@@ -320,7 +323,7 @@ int main(void) { @autoreleasepool {
     assert(!unlinkat(directoryFD,"recovery-source.json",0));
 
     // The original same-runtime crash recovery also accepts only a retired
-    // schema-3 writer of this boot/user, preserving released-row guards.
+    // schema-4 writer of this boot/user, preserving released-row guards.
     old=[readJournal()mutableCopy];old[@"server_pid"]=@456;old[@"server_birth_sec"]=@50;old[@"server_birth_usec"]=@0;
     writeJSON(@"v2-journal.json",old);clearTables();nativeTransform=CGAffineTransformIdentity;requirePendingBeforeTransform=YES;
     assert(v2LoadJournal(nil) && nativeTransform.tx==-55 && !v2Table.count && v2Released.count==1);requirePendingBeforeTransform=NO;
@@ -329,7 +332,7 @@ int main(void) { @autoreleasepool {
     // cannot be evicted; affirmative disappearance permits one new admission.
     clearTables();DW2Entry *template=v2DecodeEntry(readJournal()[@"released_windows"][0],YES);assert(template);
     for(uint32_t wid=1;wid<=DW2_MAX_TABLE;wid++){
-        DW2Entry *retained=[DW2Entry new];retained->who=recorded;retained->who.wid=wid;retained->owner=7;retained->transform=template->transform;retained->bounds=nativeBounds;
+        DW2Entry *retained=[DW2Entry new];retained->who=recorded;retained->who.wid=wid;retained->owner=7;retained->layer=template->layer;retained->bounds=nativeBounds;
         v2Released[@(wid)]=retained;
     }
     NSMutableArray *retainedRows=[NSMutableArray array];for(uint32_t wid=1;wid<=DW2_MAX_TABLE;wid++)
@@ -345,7 +348,7 @@ int main(void) { @autoreleasepool {
     rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];ownerValue=7;transformReadStatus=1000;
     for(uint32_t wid=642;wid<=643;wid++){
         DW2Entry *popup=[DW2Entry new];popup->who=recorded;popup->who.wid=wid;popup->owner=7;
-        popup->transform=CGAffineTransformMake(1,0,0,1,-430,-367);popup->bounds=CGRectMake(430,367,75,46);v2Table[@(wid)]=popup;
+        popup->layer=CGAffineTransformMake(1,0,0,1,-430,-367);popup->bounds=CGRectMake(430,367,75,46);v2Table[@(wid)]=popup;
     }
     writes=transformWrites;restoreListReads=0;v2Restore(@"closed popup owner cache",NO,nil,&summary);
     assert(summary.count==2 && !summary.pending && summary.journal_persisted && !v2Table.count && !v2Released.count
@@ -361,12 +364,12 @@ int main(void) { @autoreleasepool {
     spaceCases(recorded);
     sublevelCases(recorded);
     veilCases(recorded);
-    rebaseCases(recorded);
     placementCases(recorded);
+    layerCases(recorded);
     arrivalCases(recorded);
     // Malformed private paths are refused without waiting for a FIFO writer.
     assert(!mkfifoat(directoryFD,"recovery-source.json",0600));BOOL absent=YES;
     assert(!v2ReadJournal("recovery-source.json",&absent) && !absent);assert(!unlinkat(directoryFD,"recovery-source.json",0));
     assert(!unlinkat(directoryFD,"v2-journal.json",0));close(directoryFD);directoryFD=-1;assert(!rmdir(directory));
-    puts("PASS: identity, repeated-frame, strict schema3 retained originals, guarded durable handoff/retry/crash-chain and bounded admission; no native window mutation");
+    puts("PASS: identity, repeated-frame, strict schema4 retained originals, guarded durable handoff/retry/crash-chain and bounded admission; no native window mutation");
 } }

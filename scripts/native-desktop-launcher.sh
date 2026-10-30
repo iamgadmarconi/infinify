@@ -279,13 +279,44 @@ native_archive_and_remove_prior_boot_record() {
   /bin/rm "$native_record" || fail 'the prior-boot record was archived but could not be removed from the active launch path.'
 }
 
+# The one journal schema this build writes and recovers. An older journal recorded each window's original as an absolute matrix, which
+# also contains whatever other placements held at the time; it is not migrated (nothing in this build can say what it meant), so it is
+# archived with its launch record and the start is fresh, rather than blocking every later start.
+native_journal_schema=4
+native_journal_refused=false
+native_refuse_unrecoverable_journal() {
+  native_archive_retired_record
+  if [ "$native_journal_refused" = absent ]; then
+    [ "$(native_digest "$native_record")" = "$native_record_sha256" ] || fail 'the launch record changed while archiving; preserve both copies and inspect them.'
+    /bin/rm "$native_record" || fail 'the retired launch record was archived but could not be removed from the active launch path.'
+    printf 'The retired helper runtime holds no journal and no recovery source. The helper writes its journal before it changes any window, so it changed none; nothing needs recovering. The launch record was archived under %s, the retired runtime was left untouched, and startup will be fresh.\n' "$native_archive_dir"
+    return 0
+  fi
+  /bin/cp "$native_journal" "$native_archive_dir/v2-journal.json" || fail 'could not preserve the retired helper journal.'
+  /bin/chmod 600 "$native_archive_dir/v2-journal.json" || fail 'could not secure the archived helper journal.'
+  private_file "$native_archive_dir/v2-journal.json" || fail 'archived helper journal is not a private regular file.'
+  [ "$(native_digest "$native_archive_dir/v2-journal.json")" = "$(native_digest "$native_journal")" ] || fail 'archived helper journal bytes changed; preserve the archive and inspect it.'
+  [ "$(native_digest "$native_record")" = "$native_record_sha256" ] || fail 'the launch record changed while archiving; preserve both copies and inspect them.'
+  /bin/rm "$native_record" || fail 'the retired launch record was archived but could not be removed from the active launch path.'
+  printf 'The retired helper journal is schema %s and this build recovers schema %s only (older journals are not migrated), so nothing was recovered from it. The launch record and the journal were archived under %s, the retired runtime was left untouched, and startup will be fresh without journal replay.\n' "$native_journal_version" "$native_journal_schema" "$native_archive_dir"
+}
+
 native_validate_retired_journal() {
   native_journal="$native_runtime/v2-journal.json"
+  # A helper that never changed a window never wrote a journal (it journals before every change), and a runtime with none of its
+  # journal, staging file or recovery import has nothing to recover; refusing it would block every later start for nothing.
+  native_journal_absent=true
+  # A lone socket (v2.sock, which the loader and payload create) is not state to recover: it does not count as an artifact here.
+  for native_artifact in v2-journal.json v2-journal.next recovery-source.json recovery.json recovery.next; do
+    if [ -e "$native_runtime/$native_artifact" ] || [ -L "$native_runtime/$native_artifact" ]; then native_journal_absent=false; fi
+  done
+  if [ "$native_journal_absent" = true ]; then native_journal_refused=absent; return 0; fi
   private_file "$native_journal" || fail 'the retired helper has no private committed v2 journal; preserve its state and inspect it.'
   native_journal_size=$(/usr/bin/stat -f '%z' "$native_journal") || fail 'could not inspect the retired helper journal.'
   native_decimal "$native_journal_size" && [ "$native_journal_size" -ge 1 ] && [ "$native_journal_size" -le 4194304 ] || fail 'the retired helper journal size is invalid; preserve it and inspect it.'
-  native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal is not a valid schema-3 journal.'
-  [ "$native_journal_version" = 3 ] || fail 'the retired helper journal has an unsupported schema; it has no retained original-window ledger for safe Dock recovery. Preserve it and inspect it; no automatic transform reconstruction is safe.'
+  native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no integer schema number; preserve it and inspect it.'
+  native_decimal "$native_journal_version" || fail 'the retired helper journal has an invalid schema number; preserve it and inspect it.'
+  if [ "$native_journal_version" != "$native_journal_schema" ]; then native_journal_refused=true; return 0; fi
   native_journal_pid=$(/usr/bin/plutil -extract server_pid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer server PID.'
   native_pid_valid "$native_journal_pid" && [ "$native_journal_pid" = "$native_old_dock_pid" ] || fail 'the retired helper journal does not identify its recorded Dock process.'
   native_journal_sec=$(/usr/bin/plutil -extract server_birth_sec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time.'
@@ -315,7 +346,7 @@ native_validate_retired_journal() {
     native_import_hash=$(/usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar") || fail 'the retained recovery sidecar has no source digest.'
     native_valid_hash "$native_import_hash" || fail 'the retained recovery sidecar has an invalid source digest.'
     [ "$(native_digest "$native_import_source")" = "$native_import_hash" ] || fail 'the retained historical recovery source differs from its sidecar digest.'
-    [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_import_source")" = 3 ] || fail 'the retained historical recovery source is not schema 3.'
+    [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_import_source")" = "$native_journal_schema" ] || fail "the retained historical recovery source is not schema $native_journal_schema."
     for native_pair in 'server_pid recovery_server_pid' 'server_birth_sec recovery_server_birth_sec' 'server_birth_usec recovery_server_birth_usec' 'server_uid recovery_server_uid'; do
       native_source_key=${native_pair%% *}
       native_sidecar_key=${native_pair#* }
@@ -387,7 +418,7 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
         fail 'could not prove the recorded Dock process is gone; preserve its launch record and runtime.'
       fi
       native_validate_retired_journal
-      native_recovery=true
+      if [ "$native_journal_refused" != false ]; then native_refuse_unrecoverable_journal; else native_recovery=true; fi
     fi
   fi
 fi

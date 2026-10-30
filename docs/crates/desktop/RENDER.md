@@ -1,5 +1,7 @@
 # Rendering contract, ABI 1
 
+Bare `src/…` paths on this page name `crates/desktop/src/` when that file exists there and otherwise name the upstream file the text cites; `tests/e2e/` and `tests/native/` are the repository's own, as [docs/README.md](../../README.md) says.
+
 DriftWM draws its own canvas: a background, every window with a shadow, a
 border, rounded corners and an opacity, stand-ins for windows that are gone,
 and the outlines of other outputs' viewports. The controller draws nothing. It

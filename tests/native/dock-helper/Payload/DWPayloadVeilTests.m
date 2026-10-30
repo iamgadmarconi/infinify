@@ -16,7 +16,7 @@ static void veilCases(struct dw2_identity who) {
     // Never resumed, and kept for the life of the process: a suspended queue must not be released.
     static dispatch_queue_t suspended;
     dispatch_queue_t savedQueue=v2q;suspended=dispatch_queue_create("dw.veil.test",DISPATCH_QUEUE_SERIAL);dispatch_suspend(suspended);v2q=suspended;
-    mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;getTransform=readTransform;setTransform=writeTransform;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
+    mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;getTransform=readTransform;setTransform=writeTransform;getLayer=readTransform;setLayer=writeTransform;getBounds=readBounds;getAlpha=readAlpha;setAlpha=writeAlpha;
     fixtureOnly=NO;allowlist=nil;ownerValue=7;connectionStatus=0;processPID=123;processUID=getuid();goneWID=0;boundsStatus=0;transformReadStatus=0;
     nativeLog=[NSMutableArray array];v2VeilRegistered=YES;atomic_store(&v2VeilOn,true);atomic_store(&v2VeilClient,999);
     struct dw2_restore_reply summary={0};uint8_t status=255;
@@ -39,7 +39,7 @@ static void veilCases(struct dw2_identity who) {
     assert(veiled && veiled->veiled && veiled->veilBare && veiled->state==DW2_HELD && veiled->alpha==1 && veiled->alphaTouched && veiled->hasAlpha);
     assert(alphaWrites==1 && nativeAlpha==0 && transformWrites==0 && atomic_load(&v2JournalWrites)==writesBefore+1 && atomic_load(&v2Held)==1);
     NSDictionary *saved=readJournal();assert([saved[@"windows"]count]==1 && [saved[@"windows"][0][@"alpha"]floatValue]==1 && [saved[@"windows"][0][@"alpha_touched"]isEqual:@YES]
-        && [saved[@"windows"][0][@"transform"]isEqual:matrix(CGAffineTransformMake(1,0,0,1,-25,-35))]);
+        && [saved[@"windows"][0][@"layer"]isEqual:matrix(CGAffineTransformMake(1,0,0,1,-25,-35))]);
     // Already known, or already released: no second record, no second write.
     v2Veil(42);assert(alphaWrites==1 && atomic_load(&v2JournalWrites)==writesBefore+1);
     v2VeilExpire(veiled);assert(!v2Table.count && v2Released[@42]);
@@ -129,7 +129,7 @@ static void veilCases(struct dw2_identity who) {
     struct dw2_record release={.id=who,.flags=DW2_RECORD_RESTORE};
     v2Apply(&release,1,&status);
     assert(status==DW2_APPLIED && [nativeLog isEqualToArray:(@[@"A:1.00"])] && nativeAlpha==1 && !transformWrites && !v2Table.count);
-    assert(v2Released[@42]->transform.tx==-90 && v2Released[@42]->transform.ty==-91 && !v2Released[@42]->veiled);
+    assert(v2Released[@42]->layer.tx==-90 && v2Released[@42]->layer.ty==-91 && !v2Released[@42]->veiled);
     assert([readJournal()[@"windows"]count]==0 && [readJournal()[@"released_windows"]count]==1);
     // A decline of a window nothing veiled is a no-op that is acknowledged.
     clearTables();[nativeLog removeAllObjects];v2Apply(&release,1,&status);assert(status==DW2_APPLIED && !nativeLog.count && !v2Table.count);
@@ -156,24 +156,24 @@ static void veilCases(struct dw2_identity who) {
     NSArray *(^boundsRow)(CGRect)=^NSArray *(CGRect r){return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)];};
     VEIL_RESET(1);v2Veil(42);
     CGAffineTransform original=nativeTransform,moved=CGAffineTransformMake(1,0,0,1,-90,-91);CGRect movedBounds=CGRectMake(90,91,320,210);
-    assert([readJournal()[@"windows"][0][@"veil_bare"]isEqual:@YES] && [readJournal()[@"windows"][0][@"transform"]isEqual:matrix(original)]);
+    assert([readJournal()[@"windows"][0][@"veil_bare"]isEqual:@YES] && [readJournal()[@"windows"][0][@"layer"]isEqual:matrix(original)]);
     nativeTransform=moved;nativeBounds=movedBounds;[nativeLog removeAllObjects];requireVeilPlacedBeforeTransform=YES;
     v2Apply(&frame,1,&status);requireVeilPlacedBeforeTransform=NO;
-    assert(status==DW2_APPLIED && [nativeLog isEqualToArray:(@[@"T",@"A:1.00"])] && v2SameTransform(v2Table[@42]->transform,moved) && CGRectEqualToRect(v2Table[@42]->bounds,movedBounds));
-    assert([readJournal()[@"windows"][0][@"transform"]isEqual:matrix(moved)] && [readJournal()[@"windows"][0][@"bounds"]isEqual:boundsRow(movedBounds)]);
+    assert(status==DW2_APPLIED && [nativeLog isEqualToArray:(@[@"T",@"A:1.00"])] && v2SameTransform(v2Table[@42]->layer,moved) && CGRectEqualToRect(v2Table[@42]->bounds,movedBounds));
+    assert([readJournal()[@"windows"][0][@"layer"]isEqual:matrix(moved)] && [readJournal()[@"windows"][0][@"bounds"]isEqual:boundsRow(movedBounds)]);
     [nativeLog removeAllObjects];v2Restore(@"quit after the window moved",NO,nil,&summary);
     assert(!summary.pending && v2SameTransform(nativeTransform,moved) && [nativeLog isEqualToArray:(@[@"T"])]); // not the announcement's, and alpha was not owed
     // A first frame whose record cannot be written changes nothing: the window stays veiled, with what it was read as, and is asked again.
     VEIL_RESET(1);v2Veil(42);nativeTransform=moved;nativeBounds=movedBounds;[nativeLog removeAllObjects];failNextSync=YES;
     v2Apply(&frame,1,&status);
     assert(status==DW2_JOURNAL && !nativeLog.count && nativeAlpha==0 && v2JournalStale);
-    veiled=v2Table[@42];assert(veiled && veiled->veiled && veiled->veilBare && veiled->veilAlpha && v2SameTransform(veiled->transform,original) && CGRectEqualToRect(veiled->bounds,CGRectMake(25,35,300,200)));
+    veiled=v2Table[@42];assert(veiled && veiled->veiled && veiled->veilBare && veiled->veilAlpha && v2SameTransform(veiled->layer,original) && CGRectEqualToRect(veiled->bounds,CGRectMake(25,35,300,200)));
     v2Restore(@"first frame journal retry",YES,nil,&summary);assert(summary.journal_persisted && !v2JournalStale);
     requireVeilPlacedBeforeTransform=YES;v2Apply(&frame,1,&status);requireVeilPlacedBeforeTransform=NO;
-    assert(status==DW2_APPLIED && v2SameTransform(v2Table[@42]->transform,moved) && !v2Table[@42]->veilBare);
+    assert(status==DW2_APPLIED && v2SameTransform(v2Table[@42]->layer,moved) && !v2Table[@42]->veilBare);
     // A window the application moved and nobody placed is released by taking its transform as it is, not by writing the stale one.
     VEIL_RESET(1);v2Veil(42);nativeTransform=moved;nativeBounds=movedBounds;[nativeLog removeAllObjects];v2VeilExpire(v2Table[@42]);
-    assert([nativeLog isEqualToArray:(@[@"A:1.00"])] && v2SameTransform(nativeTransform,moved) && v2SameTransform(v2Released[@42]->transform,moved) && !transformWrites);
+    assert([nativeLog isEqualToArray:(@[@"A:1.00"])] && v2SameTransform(nativeTransform,moved) && v2SameTransform(v2Released[@42]->layer,moved) && !transformWrites);
 
     // Replay of a writer that died with the window only veiled restores alpha and writes no transform (the window may have moved since);
     // after the first frame the journal says a transform is owed, and replay writes that one.

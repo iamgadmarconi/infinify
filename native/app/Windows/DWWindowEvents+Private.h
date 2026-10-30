@@ -42,8 +42,8 @@ static CFStringRef const windowNotifications[]={kAXUIElementDestroyedNotificatio
 enum { windowCount=3 };
 enum { applicationAppeared=1, applicationChanged=2, applicationActivated=4 };
 // The two serial queues (defined in DWWindowEvents.m: each is one queue for the process).
-dispatch_queue_t worker(void);
-dispatch_queue_t applicationWorker(void);
+dispatch_queue_t DWWindowEventsQueue(void);
+dispatch_queue_t DWWindowEventsApplicationQueue(void);
 @interface DWWindowEvents ()
 @property (weak) id<DWWindowEventSink> sink;
 @property NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope;

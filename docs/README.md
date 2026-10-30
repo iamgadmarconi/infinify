@@ -4,6 +4,8 @@ The documentation of Infinify, apart from the repository's [README.md](../README
 
 Paths in the crate documents under `docs/crates/<crate>/` that name `tests/`, `include/` or `examples/` files are written from the repository root (`crates/<crate>/tests/...`); the `tests/e2e/` and `tests/native/` paths are the repository's own.
 
+A bare `src/…` path in a crate document names that crate's own file (`crates/<crate>/src/…`) when the file exists there, and otherwise the upstream file the text cites.
+
 - [docs/parity/README.md](parity/README.md): the parity contract with DriftWM, and its inventory
 - [docs/native/README.md](native/README.md): the native code (`native/app`, `native/dock-helper`): user guide, module docs, testing
 

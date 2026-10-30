@@ -30,7 +30,7 @@
 // main thread. The window number of an Accessibility element is copyWindow's lookup below, with its provenance.
 // `titles`, when given, takes each listed window's Accessibility title as well: a run that cannot read the shareable windows has
 // no other. nil in every run that can, whose Accessibility traffic is then what it was.
-NSDictionary<NSNumber *,id> *windowSubroles(NSDictionary<NSNumber *,NSNumber *> *asked,NSMutableDictionary<NSNumber *,NSString *> *titles) {
+NSDictionary<NSNumber *,id> *DWWindowManagerSubroles(NSDictionary<NSNumber *,NSNumber *> *asked,NSMutableDictionary<NSNumber *,NSString *> *titles) {
     NSMutableDictionary<NSNumber *,id> *subroles=[NSMutableDictionary dictionary];
     AXError (*get)(AXUIElementRef,uint32_t *)=(AXError (*)(AXUIElementRef,uint32_t *))dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
     if(!AXIsProcessTrusted()||!get)return subroles;
@@ -67,7 +67,7 @@ static NSArray<NSNumber *> *preservationBirth(pid_t pid) {
        !process.pbi_start_tvsec||process.pbi_start_tvusec>=1000000)return nil;
     return @[@(process.pbi_start_tvsec),@(process.pbi_start_tvusec)];
 }
-NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *offered,NSInteger panelLevel,NSString *__autoreleasing *why) {
+NSArray<NSDictionary *> *DWWindowManagerPreservedWindows(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,NSSet<NSNumber *> *offered,NSInteger panelLevel,NSString *__autoreleasing *why) {
     NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
     if(!rows){if(why)*why=@"the all-window metadata for saved slots is unavailable";return nil;}
     NSMutableDictionary *births=[NSMutableDictionary dictionary],*bundles=[NSMutableDictionary dictionary],*candidates=[NSMutableDictionary dictionary],*asked=[NSMutableDictionary dictionary],*titles=[NSMutableDictionary dictionary];
@@ -89,7 +89,7 @@ NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,NSArray<
     }
     // AX can name a minimized window when the public list omits its title.
     // This is the existing read-only lookup, never a raise or a Space change.
-    if(asked.count)windowSubroles(asked,titles);
+    if(asked.count)DWWindowManagerSubroles(asked,titles);
     NSArray *current=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
     if(!current){if(why)*why=@"the saved-slot window metadata could not be revalidated";return nil;}
     NSMutableDictionary *owners=[NSMutableDictionary dictionary],*freshBirths=[NSMutableDictionary dictionary];
@@ -107,7 +107,7 @@ NSArray<NSDictionary *> *nativePreservedWindows(NSDictionary<NSNumber *,NSArray<
     return present.copy;
 }
 // A real window by that reading: a standard window or a dialog.
-BOOL toplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)kAXStandardWindowSubrole,(__bridge NSString *)kAXDialogSubrole,(__bridge NSString *)kAXSystemDialogSubrole]containsObject:subrole]; }
+BOOL DWWindowManagerIsToplevelSubrole(NSString *subrole) { return [@[(__bridge NSString *)kAXStandardWindowSubrole,(__bridge NSString *)kAXDialogSubrole,(__bridge NSString *)kAXSystemDialogSubrole]containsObject:subrole]; }
 // Restrict early admission to the native, unscaled presentation basis. This is
 // only an eligibility check: the helper still snapshots the actual original.
 static const char *canonicalNativeBasisRefusal(NSDictionary *basis) {
@@ -122,7 +122,7 @@ static const char *canonicalNativeBasisRefusal(NSDictionary *basis) {
     if([matrix[5]doubleValue]!=-bounds.origin.y)return "basis_translation_y";
     return NULL;
 }
-BOOL canonicalNativeBasis(NSDictionary *basis) { return canonicalNativeBasisRefusal(basis)==NULL; }
+BOOL DWWindowManagerIsCanonicalBasis(NSDictionary *basis) { return canonicalNativeBasisRefusal(basis)==NULL; }
 // Creation already supplies an exact AX element: no AXWindows enumeration or
 // global discovery queue is needed. Still only admit a visible, canonical
 // standard window, with two matching fresh native bases after its AX metadata.
@@ -202,11 +202,11 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
     BOOL afterStartup=self.completed;
     self.reading=YES;__weak DWWindowManager *weak=self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-        NSMutableDictionary *titles=[NSMutableDictionary dictionary];NSDictionary *roles=windowSubroles(asked,titles);
+        NSMutableDictionary *titles=[NSMutableDictionary dictionary];NSDictionary *roles=DWWindowManagerSubroles(asked,titles);
         NSMutableDictionary *verified=[NSMutableDictionary dictionary];
         if(afterStartup)for(NSNumber *wid in asked){NSDictionary *ticket=tickets[wid],*basis=ticket[@"basis"];
             if([levels[wid]integerValue]!=0||![roles[wid]isEqual:(__bridge NSString *)kAXStandardWindowSubrole]||
-               ![titles[wid]isKindOfClass:NSString.class]||!canonicalNativeBasis(basis)||CACurrentMediaTime()-[ticket[@"started"]doubleValue]>.1)continue;
+               ![titles[wid]isKindOfClass:NSString.class]||!DWWindowManagerIsCanonicalBasis(basis)||CACurrentMediaTime()-[ticket[@"started"]doubleValue]>.1)continue;
             NSDictionary *fresh=DWNativeWindowDiscoveryBasis(basis[@"identity"]);
             if([fresh isEqual:basis])verified[wid]=fresh;
         }
@@ -216,7 +216,7 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
             for(NSNumber *wid in tickets){NSMutableDictionary *ticket=tickets[wid];
                 if(manager.nativeMetadata[wid]!=ticket||![ticket[@"basis"]isEqual:manager.bases[wid]]||![ticket[@"since"]isEqual:manager.since[wid]])continue;
                 delay=MIN(delay,MAX(0,[ticket[@"since"]doubleValue]+still-now));
-                BOOL positive=[roles[wid]isKindOfClass:NSString.class]&&(toplevelSubrole(roles[wid])||[roles[wid]isEqual:(__bridge NSString *)kAXFloatingWindowSubrole]);
+                BOOL positive=[roles[wid]isKindOfClass:NSString.class]&&(DWWindowManagerIsToplevelSubrole(roles[wid])||[roles[wid]isEqual:(__bridge NSString *)kAXFloatingWindowSubrole]);
                 if(now-[ticket[@"started"]doubleValue]<=.1&&positive&&[titles[wid]isKindOfClass:NSString.class]){ticket[@"subrole"]=roles[wid];ticket[@"title"]=titles[wid];
                     if(manager.completed&&verified[wid]){early[wid]=ticket;earlyAsked[wid]=asked[wid];frames[wid]=verified[wid][@"native_bounds"];bases[wid]=verified[wid];}}
             }

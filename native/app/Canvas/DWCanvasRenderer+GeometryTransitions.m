@@ -45,10 +45,6 @@ static CGRect geometryRect(DWCanvasGeometry *geometry,double now) {
     return CGRectMake(a.origin.x+(b.origin.x-a.origin.x)*p,a.origin.y+(b.origin.y-a.origin.y)*p,
                       a.size.width+(b.size.width-a.size.width)*p,a.size.height+(b.size.height-a.size.height)*p);
 }
-CGRect geometryScreen(CGRect rect,IFCompositorSpace space,IFCompositorFrame *frame) {
-    if(space==IFCompositorSpaceCanvas)return CGRectMake((rect.origin.x-frame.cameraX)*frame.zoom,(rect.origin.y-frame.cameraY)*frame.zoom,rect.size.width*frame.zoom,rect.size.height*frame.zoom);
-    return rect;
-}
 static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFCompositorFrame *frame) {
     if(space==IFCompositorSpaceCanvas)return CGRectMake(rect.origin.x/frame.zoom+frame.cameraX,rect.origin.y/frame.zoom+frame.cameraY,rect.size.width/frame.zoom,rect.size.height/frame.zoom);
     return rect;

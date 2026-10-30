@@ -13,9 +13,10 @@
 // 36-55 and 73-85). The level lift is not taken: here the window is held at alpha 0 instead.
 // Private ABI declarations below are cross-checked against yabai (MIT),
 // https://github.com/asmvik/yabai commit dd845723416f5fe92af49fad5ebab00369e07edd; its notice is native/app/Resources/YABAI-NOTICE.txt.
-// Restoration: released originals pruned only on proof the window is gone, the retry schedule, and v2Restore, which puts back what
-// was captured at first touch behind fresh identity fences.
+// Restoration: released originals pruned only on proof the window is gone, the retry schedule, and v2Restore, which puts back the
+// placement-1 layer captured at first touch behind fresh identity fences.
 // Moved verbatim from native/privileged/payload.m (37b27b1), lines 644-789. #imported by DWPayload.m in a fixed order; never compiled alone.
+// Edited since the move: restores and verifies the placement-1 layer; the re-basing on the native origin is removed.
 
 // Live released originals remain obligations across connection death. Make room only by proving
 // a recorded instance is gone, never age. Returns whether the released table changed.
@@ -50,9 +51,9 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
         DW2Entry *e=v2Table[wid];
         if(retry && e->state!=DW2_RESTORING)continue;
         struct dw2_restore_result r={.id=e->who,.outcome=DW2_PENDING,.set_status=-1};
-        BOOL transformSet=NO,transformRead=NO,transformMatches=NO,alphaChecked=NO,alphaCurrent=NO,alphaSet=NO,alphaRead=NO,rebased=NO;
-        int transformSetStatus=0,transformGetStatus=0,alphaSetStatus=0,alphaGetStatus=0,finalIdentity=-1,originStatus=0;
-        CGAffineTransform actual=CGAffineTransformIdentity,target=e->transform;float alpha=-1;CGRect releasedBounds=CGRectZero,originBounds=CGRectZero;
+        BOOL layerSet=NO,layerRead=NO,layerMatches=NO,alphaChecked=NO,alphaCurrent=NO,alphaSet=NO,alphaRead=NO;
+        int layerSetStatus=0,layerGetStatus=0,alphaSetStatus=0,alphaGetStatus=0,finalIdentity=-1;
+        CGAffineTransform actual=CGAffineTransformIdentity;float alpha=-1;CGRect releasedBounds=CGRectZero;
         int observed=v2RestoreIdentityWithOwners(&e->who,e->owner,owners);
         BOOL admitted=observed==DW2_INSTANCE_CURRENT&&(!e->reattaching||v2ReattachCurrent(e));
         if(e->originalSpace&&!admitted){e->restoreSpaceQuiet=0;e->restoreSpaceSample=NO;}
@@ -65,21 +66,17 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
                 [report addObject:@{@"pid":@(r.id.pid),@"birth_sec":@(r.id.birth_sec),@"birth_usec":@(r.id.birth_usec),@"wid":@(r.id.wid),@"outcome":@"pending",@"set_status":@(-1)}];continue;}
             BOOL ok;
             if(e->veilBare) {
-                // Nothing but alpha was changed: the transform in force is the window's own, and moves with it. Adopt it as the original.
-                r.set_status=0;transformRead=YES;
-                ok=(transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0 && finiteMatrix(actual);
-                if(ok){e->transform=actual;transformMatches=YES;}
+                // Nothing but alpha was changed: the layer in force is the window's own. Adopt it as the original.
+                r.set_status=0;layerRead=YES;
+                ok=(layerGetStatus=getLayer(mainConnection(),e->who.wid,&actual))==0 && finiteMatrix(actual);
+                if(ok){e->layer=actual;layerMatches=YES;}
             } else {
-                // The original is re-based on the native origin read now (v2RestoreTransform), and that origin must still be the
-                // window's when the write has been read back below; a window that moved meanwhile is pending and is done again.
-                // Without a readable origin the captured original is written as the best that can be done and the window stays
-                // pending, so a later pass writes the re-based one.
-                originStatus=getBounds(mainConnection(),e->who.wid,&originBounds);
-                rebased=!originStatus&&v2FiniteRect(originBounds);
-                if(rebased)target=v2RestoreTransform(e->transform,e->bounds.origin,originBounds.origin);
-                transformSet=YES;r.set_status=transformSetStatus=setTransform(mainConnection(),e->who.wid,target);
-                ok=rebased && r.set_status==0 && (transformRead=YES,transformGetStatus=getTransform(mainConnection(),e->who.wid,&actual))==0
-                    && (transformMatches=v2SameTransform(actual,target));
+                // The original is the placement-1 layer captured at first touch, written back as it was and read back as the layer. It is
+                // relative to placement 0, so it does not depend on where the window is now, on its native frame having moved, or on what
+                // any other placement holds (the system's own animation, say): restoration is exact whatever the window did meanwhile.
+                layerSet=YES;r.set_status=layerSetStatus=setLayer(mainConnection(),e->who.wid,e->layer);
+                ok=r.set_status==0 && (layerRead=YES,layerGetStatus=getLayer(mainConnection(),e->who.wid,&actual))==0
+                    && (layerMatches=v2SameTransform(actual,e->layer));
             }
             if(e->alphaTouched) {
                 alphaChecked=YES;alphaCurrent=e->reattaching ? v2ReattachCurrent(e) : v2EntryCurrent(e);
@@ -100,17 +97,15 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
             // The retained release describes the geometry at restoration, not
             // the possibly resized geometry from first admission.
             ok=ok && spaceRestored && (!e->originalSpace||v2WindowSpace(e->who.wid)==e->originalSpace)
-                && !getBounds(mainConnection(),e->who.wid,&releasedBounds) && v2FiniteRect(releasedBounds)
-                && (!e->reattaching || CGRectEqualToRect(releasedBounds,e->bounds))
-                && (!rebased || CGPointEqualToPoint(releasedBounds.origin,originBounds.origin));
+                && !getBounds(mainConnection(),e->who.wid,&releasedBounds) && v2FiniteRect(releasedBounds);
             ok=ok && (finalIdentity=v2RestoreIdentity(&e->who,e->owner))==DW2_INSTANCE_CURRENT;
             r.outcome=v2SpaceRestoreSettled(e,releasedBounds,ok) ? DW2_RESTORED : DW2_PENDING;
         }
         if(r.outcome==DW2_PENDING){e->state=DW2_RESTORING;pending++;}
         else {
-            // The retained record says what is now on the window: the transform written, at the bounds read after it, so a later
-            // re-base starts from a pair that belongs together. A veil-only release adopted the transform in force above.
-            if(r.outcome==DW2_RESTORED){if(rebased)e->transform=target;e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;
+            // The retained record says what is now on the window: the layer written (a veil-only release adopted the one in force
+            // above), at the bounds read after it.
+            if(r.outcome==DW2_RESTORED){e->bounds=releasedBounds;e->reattaching=NO;e->appliedTransformKnown=NO;
                 // A veil's conditional alpha was settled by this release; its mark is not an original to guard later.
                 if(e->veilAlpha)e->alphaTouched=NO;
                 e->veiled=e->veilBare=e->veilAlpha=e->arrival=NO;v2Released[wid]=e;}
@@ -125,15 +120,11 @@ static void v2Restore(NSString *reason,BOOL retry,NSMutableData *results,struct 
             // checks. Null statuses mean not called, never success. This is
             // explanatory journal/log metadata, not protocol or restore state.
             receipt[@"diagnostic"]=@{@"initial_identity":v2RestoreIdentityName(observed),
-                @"transform_set_status":transformSet ? @(transformSetStatus) : (id)NSNull.null,
-                @"transform_get_status":transformRead ? @(transformGetStatus) : (id)NSNull.null,
-                @"saved_transform":matrix(e->transform),
-                @"origin_status":rebased||originStatus ? @(originStatus) : (id)NSNull.null,
-                @"native_origin":rebased ? @[@(originBounds.origin.x),@(originBounds.origin.y)] : (id)NSNull.null,
-                @"captured_origin":@[@(e->bounds.origin.x),@(e->bounds.origin.y)],
-                @"target_transform":rebased ? matrix(target) : (id)NSNull.null,
-                @"actual_transform":transformRead && !transformGetStatus && finiteMatrix(actual) ? matrix(actual) : (id)NSNull.null,
-                @"transform_matches":transformRead && !transformGetStatus ? @(transformMatches) : (id)NSNull.null,
+                @"layer_set_status":layerSet ? @(layerSetStatus) : (id)NSNull.null,
+                @"layer_get_status":layerRead ? @(layerGetStatus) : (id)NSNull.null,
+                @"saved_layer":matrix(e->layer),
+                @"actual_layer":layerRead && !layerGetStatus && finiteMatrix(actual) ? matrix(actual) : (id)NSNull.null,
+                @"layer_matches":layerRead && !layerGetStatus ? @(layerMatches) : (id)NSNull.null,
                 @"alpha":e->alphaTouched ? @{@"identity_current":alphaChecked ? @(alphaCurrent) : (id)NSNull.null,
                     @"set_status":alphaSet ? @(alphaSetStatus) : (id)NSNull.null,
                     @"get_status":alphaRead ? @(alphaGetStatus) : (id)NSNull.null,

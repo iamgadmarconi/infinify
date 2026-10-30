@@ -36,9 +36,8 @@ static CFArrayRef testWindows(CGWindowListOption option,CGWindowID wid){
     return CFRetain((__bridge CFArrayRef)@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowIsOnscreen:@YES},
         @{(id)kCGWindowNumber:@43,(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowIsOnscreen:@YES}]);
 }
-static CGError testCatenatedGet(int cid,uint32_t wid,CGAffineTransform *value){assert(cid==1);transformGets++;*value=effective(indexOf(wid));return 0;}
 static CGError testPlacementGet(int cid,uint32_t wid,int placement,void *flags,CGAffineTransform *value){
-    assert(cid==1&&!flags&&(placement==0||placement==1));*value=placement==0?naturalBase():layers[indexOf(wid)];return 0;
+    assert(cid==1&&!flags&&(placement==0||placement==1));transformGets++;*value=placement==0?naturalBase():layers[indexOf(wid)];return 0;
 }
 static CGError testPlacementSet(int cid,uint32_t wid,int placement,int flags,const CGAffineTransform *value){
     assert(cid==1&&flags==0&&placement==1); // never placement 0: a Dock death resets what the Dock wrote there to the display's corner
@@ -89,7 +88,7 @@ static void veilThenPlace(void){
     assertRestored();
 }
 int main(void){@autoreleasepool{
-    mainConnection=testConnection;getOwner=testOwner;connectionPID=testOwnerPID;skyGetPlacement=testPlacementGet;skySetPlacement=testPlacementSet;skyGetCatenated=testCatenatedGet;getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;
+    mainConnection=testConnection;getOwner=testOwner;connectionPID=testOwnerPID;skyGetPlacement=testPlacementGet;skySetPlacement=testPlacementSet;getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;getLayer=dwReadLayer;setLayer=dwWriteLayer;
     getBounds=testBounds;getAlpha=testAlphaGet;setAlpha=testAlphaSet;fixtureOnly=NO;
     v2WriterIdentity=@{@"server_pid":@(getpid()),@"server_birth_sec":@1000,@"server_birth_usec":@0,@"server_uid":@(getuid()),@"boot_uuid":@"48359692-C6EC-4E77-8BD8-B68CF839CB16"};
     v2RetryScheduled=YES;

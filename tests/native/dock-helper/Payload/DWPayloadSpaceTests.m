@@ -15,31 +15,30 @@ static void settledRestore(NSString *reason,BOOL retry,struct dw2_restore_reply 
         v2Restore(reason,YES,nil,summary);
     }
 }
-// What a restore of this entry writes at the native origin the window has now (v2RestoreTransform).
-static CGAffineTransform rebasedFor(DW2Entry *entry) { return v2RestoreTransform(entry->transform,entry->bounds.origin,nativeBounds.origin); }
 static void spaceRestoreSettlementCase(struct dw2_identity who) {
     clearTables();ownerValue=7;spaceMembership[@42]=@[@2];nativeBounds.origin=CGPointMake(10,20);
     rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];
     DW2Entry *entry=[DW2Entry new];entry->who=who;entry->owner=7;entry->bounds=nativeBounds;
-    entry->transform=CGAffineTransformMake(1,0,0,1,-10,-20);
+    entry->layer=CGAffineTransformMake(1,0,0,1,-10,-20);
     entry->alpha=.8;entry->hasAlpha=entry->alphaTouched=YES;
     entry->originalSpace=1;entry->originalSpaceDisplay=primaryUUID;entry->state=DW2_RESTORING;
     v2Table[@42]=entry;assert(v2Persist());
     struct dw2_restore_reply summary={0};unsigned moves=spaceWrites;
     v2Restore(@"Space inverse starts settling",YES,nil,&summary);
     assert(summary.pending==1&&v2Table[@42]==entry&&spaceWrites==moves+1
-        &&[spaceMembership[@42]isEqual:@[@1]]&&v2SameTransform(nativeTransform,entry->transform));
+        &&[spaceMembership[@42]isEqual:@[@1]]&&v2SameTransform(nativeTransform,entry->layer));
     assert([readJournal()[@"windows"][0][@"state"]isEqual:@"restoring"]);
     // The application changes native bounds and matrix after the first exact
     // readback. An immediate corrective setter must not hide this late change.
     uint64_t now=v2Now();assert(now>3000);entry->restoreSpaceStarted=now-2001;entry->restoreSpaceQuiet=now-501;
-    // The corrective write is the original re-based on where the window is now: it follows the reflowed origin (here 45 lower).
-    nativeBounds.origin.y+=45;nativeTransform.ty+=45;
+    // The layer is relative to the window's placement 0, so a reflowed origin (here 45 lower) changes nothing the helper owes; the
+    // changed bounds alone restart the quiet interval.
+    nativeBounds.origin.y+=45;
     v2Restore(@"late native reflow",YES,nil,&summary);
-    assert(summary.pending==1&&v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-10,-65))&&v2SameTransform(nativeTransform,rebasedFor(entry)));
+    assert(summary.pending==1&&v2SameTransform(nativeTransform,CGAffineTransformMake(1,0,0,1,-10,-20))&&v2SameTransform(nativeTransform,entry->layer));
     entry->restoreSpaceQuiet=v2Now()-501;nativeTransform.tx+=12;
     v2Restore(@"late matrix-only reflow",YES,nil,&summary);
-    assert(summary.pending==1&&v2SameTransform(nativeTransform,rebasedFor(entry)));
+    assert(summary.pending==1&&v2SameTransform(nativeTransform,entry->layer));
     entry->restoreSpaceQuiet=v2Now()-501;nativeAlpha=.4;
     v2Restore(@"late alpha change",YES,nil,&summary);assert(summary.pending==1&&nativeAlpha==entry->alpha);
     entry->restoreSpaceQuiet=v2Now()-501;boundsStatus=1000;
@@ -56,8 +55,8 @@ static void spaceRestoreSettlementCase(struct dw2_identity who) {
     decoded->restoreSpaceStarted=v2Now()-2001;decoded->restoreSpaceQuiet=v2Now()-501;
     v2Restore(@"stable original after reflow",YES,nil,&summary);
     assert(!summary.pending&&summary.journal_persisted&&spaceWrites==moves+1&&!v2Table.count
-        &&v2SameTransform(nativeTransform,decoded->transform)&&CGRectEqualToRect(v2Released[@42]->bounds,nativeBounds));
-    assert(v2SameTransform(decoded->transform,CGAffineTransformMake(1,0,0,1,-10,-65))); // the retained record says what was written, at the bounds it was written for
+        &&v2SameTransform(nativeTransform,decoded->layer)&&CGRectEqualToRect(v2Released[@42]->bounds,nativeBounds));
+    assert(v2SameTransform(decoded->layer,CGAffineTransformMake(1,0,0,1,-10,-20))); // the retained record says what was written, at the bounds it was written for
     nativeBounds.origin=CGPointMake(25,35);
     puts("PASS: Space restore retains journal through late bounds/matrix/alpha changes and crash, then releases only stable original properties");
 }
@@ -69,7 +68,7 @@ static void removedSpaceCases(struct dw2_identity who) {
     // while the exact recorded window already has its original singleton Space.
     clearTables();ownerValue=7;spaceMembership[@42]=@[@1];managedSpaces=complete;
     rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123}];
-    DW2Entry *entry=[DW2Entry new];entry->who=who;entry->owner=7;entry->bounds=nativeBounds;entry->transform=nativeTransform;
+    DW2Entry *entry=[DW2Entry new];entry->who=who;entry->owner=7;entry->bounds=nativeBounds;entry->layer=nativeTransform;
     entry->originalSpace=1;entry->originalSpaceDisplay=primaryUUID;entry->pendingSpace=128;entry->state=DW2_RESTORING;
     v2Table[@42]=entry;assert(v2Persist());NSDictionary *saved=readJournal()[@"windows"][0];
     struct dw2_restore_reply summary={0};unsigned moves=spaceWrites;
@@ -205,7 +204,7 @@ static void spaceCases(struct dw2_identity who) {
     // persisted, never-attempted A target through B's earlier journal write.
     clearTables();spaceMembership[@42]=@[@1];spaceMembership[@43]=@[@2];
     rows=@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123},@{(id)kCGWindowNumber:@43,(id)kCGWindowOwnerPID:@123}];
-    DW2Entry *prior=[DW2Entry new];prior->who=who;prior->who.wid=43;prior->owner=7;prior->bounds=nativeBounds;prior->transform=nativeTransform;
+    DW2Entry *prior=[DW2Entry new];prior->who=who;prior->who.wid=43;prior->owner=7;prior->bounds=nativeBounds;prior->layer=nativeTransform;
     prior->originalSpace=1;prior->originalSpaceDisplay=primaryUUID;prior->pendingSpace=2;v2Table[@43]=prior;assert(v2Persist());
     struct dw2_record records[2]={frame,frame};records[1].id.wid=43;uint64_t targets[2]={2,2};uint8_t statuses[2]={255,255};
     failSyncCountdown=3;v2ApplyWithSpaces(records,targets,2,statuses);

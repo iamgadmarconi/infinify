@@ -15,7 +15,7 @@
 // some programs still select() on descriptors below 1024. posix_spawn has no hook between fork and exec, so sh restores
 // it first. A relaunch (execv) carries the original in INFINIFY_ORIGINAL_NOFILE, which no command inherits.
 static rlim_t originalOpenFiles=0;
-void raiseOpenFileLimit(void) {
+void DWRaiseOpenFileLimit(void) {
     struct rlimit limit;if(getrlimit(RLIMIT_NOFILE,&limit))return;
     const char *carried=getenv("INFINIFY_ORIGINAL_NOFILE");if(carried&&strtoull(carried,NULL,10)){originalOpenFiles=(rlim_t)strtoull(carried,NULL,10);return;}
     int perProcess=0;size_t size=sizeof(perProcess);rlim_t ceiling=limit.rlim_max;
@@ -33,7 +33,7 @@ void raiseOpenFileLimit(void) {
 // and test switches; what the caller's env adds is applied after, so an [env] entry or INFINIFY_SOCKET still arrives.
 // `missing` runs on the main queue when sh exits as it does for a program it
 // cannot find (127) or cannot execute (126).
-NSString *execCommand(NSString *command,NSDictionary *env,void (^missing)(void)) {
+NSString *DWExecCommand(NSString *command,NSDictionary *env,void (^missing)(void)) {
     NSMutableDictionary<NSString *,NSString *> *environment=[NSProcessInfo.processInfo.environment mutableCopy];
     for(NSString *name in environment.allKeys)if([name isEqual:@"DRIFTWM_CONFIG"]||[name isEqual:@"RUST_LOG"]||[name hasPrefix:@"INFINIFY_"])[environment removeObjectForKey:name];
     for(NSString *name in env){if(DWTyped(env[name],NSString.class))environment[name]=env[name];else [environment removeObjectForKey:name];}

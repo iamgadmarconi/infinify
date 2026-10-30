@@ -27,7 +27,7 @@ static const NSInteger DWPolicyPress=9;
 @property BOOL sessionAwaitingCanvas; // preserve the loaded scene until an initially blocked launch opens its outputs
 @property BOOL desktopUp; // the desktop's canvas is open, on however many displays there are: with none there it has no panel and is still open
 @end
-// Explicit ivars: Desktop+Config.m takes these two by address (&_hotkeyHandler, &_exitHotkey); an ivar that
+// Explicit ivars: Desktop+Bindings.m takes these two by address (&_hotkeyHandler, &_exitHotkey); an ivar that
 // only auto-synthesis creates is invisible outside Desktop.m. The properties bind to them unchanged.
 @interface Desktop () {
     EventHotKeyRef _exitHotkey;
@@ -238,34 +238,40 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)returned;
 - (void)endFullscreens;
 @end
-// Desktop+Config.m
-@interface Desktop (Config)
+// Desktop+Actions.m
+@interface Desktop (Actions)
 - (NSNumber *)viewOutput;
 - (void)action:(NSString *)action output:(NSNumber *)output;
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held;
 - (dispatch_block_t)standInEnter;
 - (dispatch_block_t)nativeWindowControlKey:(DWNativeWindowControl)action;
 - (void)updateStandInKeyboard:(NSDictionary *)snapshot;
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
-- (void)watchCorners;
-- (void)publishState;
 - (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output;
 - (void)exec:(NSDictionary *)effect;
 - (void)reportLayout;
 - (NSDictionary *)nativeWindowControlIntent;
 - (void)launch:(NSString *)bundle;
-- (void)armCorners:(NSDictionary *)bindings;
-- (BOOL)fullscreenOn:(NSNumber *)output;
-- (void)broadcastState;
 - (void)holdCycle:(NSString *)action held:(BOOL)held;
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner;
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner tap:(NSDictionary *)tap;
+@end
+// Desktop+Bindings.m
+@interface Desktop (Bindings)
+- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
+- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
+- (void)watchCorners;
+- (void)armCorners:(NSDictionary *)bindings;
+- (BOOL)fullscreenOn:(NSNumber *)output;
 - (void)configureExitKey;
 - (void)stopExitKey;
 - (NSArray<NSString *> *)startKeys;
 - (void)stopKeys;
 - (NSArray<NSString *> *)refreshBindings;
+@end
+// Desktop+IPC.m
+@interface Desktop (IPC)
+- (void)publishState;
+- (void)broadcastState;
 - (NSData *)ipcLine:(NSData *)line subscribe:(BOOL *)subscribe event:(NSData *__autoreleasing *)event deferred:(void (^)(NSData *))deferred;
 - (NSData *)debugDecoration:(NSDictionary *)request;
 - (void)injected:(DesktopView *)view phase:(int)phase;

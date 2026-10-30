@@ -83,7 +83,7 @@ were driven by scripts that are not in the repository and are not reproduced by 
 Photos sources, drops onto Dock icons, a second display, tabs torn out of Safari or Chrome, spring-loaded folders, a physical
 trackpad or mouse, and the capture/replica desktop.
 
-The helper re-bases the restore on the native origin it reads, see [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper).
+The helper restores the placement-1 layer, which does not depend on the native origin, see [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper).
 
 ## Captured pictures: the capture desktop and additional-display replicas
 
@@ -207,7 +207,7 @@ test `sh tests/e2e/native-input-policy.sh` covers the packet policy only (the pa
 are offered to the consumer, the next press is native again); that the application and WindowServer accept the tagged release is
 a guest observation recorded in [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper).
 The takeover does not put the application's native frame back: WindowServer has already moved it (to where the window was drawn), and the
-helper's restore re-bases the window's original transform on the native origin it reads at the write, so a taken-over window is restored consistent
+helper restores the window's original placement-1 layer, which is relative to the native frame, so a taken-over window is restored consistent
 with its frame (COMPOSITOR-MODE.md section "Restore after a native-origin move"). A press on the empty strip of a toolbar group (Safari's address-field group,
 for example) is the window's, not the application's, so it is claimed as a title press and never becomes a takeover.
 

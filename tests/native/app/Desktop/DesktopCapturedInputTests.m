@@ -206,7 +206,7 @@ static int64_t fillEventInteger(CGEventRef packet,CGEventField field) {
     if(field==kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent||field==kCGMouseEventWindowUnderMousePointer)return 9;
     return CGEventGetIntegerValueField(packet,field);
 }
-static volatile sig_atomic_t stopped;
+static volatile sig_atomic_t DWStopSignal;
 static NSArray *asArray(id value) {return [value isKindOfClass:NSArray.class]?value:nil;}
 #include "native-chrome-geometry.inc"
 #include "captured-input-target-functions.inc"

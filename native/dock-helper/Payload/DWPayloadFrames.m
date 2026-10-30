@@ -16,6 +16,7 @@
 // Frames: the alpha a frame leaves a window at, and v2ApplyWithSpaces and v2Apply, which capture and journal every new window before
 // any change and apply each record behind identity fences.
 // Moved verbatim from native/privileged/payload.m (37b27b1), lines 475-486, 790-978. #imported by DWPayload.m in a fixed order; never compiled alone.
+// Edited since the move: the original captured is the placement-1 layer (getLayer), journalled as layer.
 
 // The alpha a frame leaves a window at: the record's own or, for a veiled window whose record carries none, its original.
 static BOOL v2FrameAlpha(DW2Entry *e,const struct dw2_record *r,float *alpha) {
@@ -93,7 +94,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
             if(!v2Released[key] && v2Table.count+v2Released.count>=DW2_MAX_TABLE && v2PruneReleased())changed=YES;
             if(v2Table.count+v2Released.count-(v2Released[key]?1:0)>=DW2_MAX_TABLE){status[i]=DW2_TABLE_FULL;continue;}
             e=[DW2Entry new];e->who=now;e->owner=owner;e->state=DW2_HELD;e->fresh=YES;
-            if(getTransform(mainConnection(),now.wid,&e->transform) || !finiteMatrix(e->transform) || getBounds(mainConnection(),now.wid,&e->bounds) || !v2FiniteRect(e->bounds)){status[i]=DW2_SNAPSHOT;continue;}
+            if(getLayer(mainConnection(),now.wid,&e->layer) || !finiteMatrix(e->layer) || getBounds(mainConnection(),now.wid,&e->bounds) || !v2FiniteRect(e->bounds)){status[i]=DW2_SNAPSHOT;continue;}
             // The original alpha is captured with the window, whether or not this
             // record changes it, so a later record can.
             if(getAlpha && setAlpha) {
@@ -122,9 +123,9 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
             // The first frame for a window the veil only hid. Its original was read at the announcement and the application may have moved or
             // resized the window since: read it again, and make the record say a transform is now owed, before anything is written.
             CGAffineTransform current=CGAffineTransformIdentity;CGRect bounds=CGRectZero;
-            if(getTransform(mainConnection(),now.wid,&current) || !finiteMatrix(current) || getBounds(mainConnection(),now.wid,&bounds) || !v2FiniteRect(bounds)){status[i]=DW2_SNAPSHOT;continue;}
-            e->veilPriorTransform=e->transform;e->veilPriorBounds=e->bounds;
-            e->transform=current;e->bounds=bounds;e->veilBare=NO;e->veilBareCleared=YES;changed=YES;
+            if(getLayer(mainConnection(),now.wid,&current) || !finiteMatrix(current) || getBounds(mainConnection(),now.wid,&bounds) || !v2FiniteRect(bounds)){status[i]=DW2_SNAPSHOT;continue;}
+            e->veilPriorLayer=e->layer;e->veilPriorBounds=e->bounds;
+            e->layer=current;e->bounds=bounds;e->veilBare=NO;e->veilBareCleared=YES;changed=YES;
         }
         if(wantsAlpha && e->veilAlpha && !e->veilAlphaCleared){e->veilAlpha=NO;e->veilAlphaCleared=YES;changed=YES;}
         e->arrival=NO; // the shell names this window in a frame: its placement is the shell's from here on
@@ -141,7 +142,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
                 if(e->fresh){NSNumber *key=@(e->who.wid);[v2Table removeObjectForKey:key];if(replacedReleases[key])v2Released[key]=replacedReleases[key];}
                 else {if(e->alphaFresh)e->alphaTouched=NO;
                     // The window stays veiled, with what the announcement read, and is asked again with the next frame.
-                    if(e->veilBareCleared){e->transform=e->veilPriorTransform;e->bounds=e->veilPriorBounds;e->veilBare=YES;}
+                    if(e->veilBareCleared){e->layer=e->veilPriorLayer;e->bounds=e->veilPriorBounds;e->veilBare=YES;}
                     if(e->veilAlphaCleared)e->veilAlpha=YES;
                     if(e->sublevelFresh)e->sublevelTouched=NO;
                     if(e->spaceFresh){e->originalSpace=0;e->originalSpaceDisplay=nil;}

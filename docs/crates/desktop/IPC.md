@@ -1,5 +1,7 @@
 # Actions, bookmarks and IPC, ABI 1
 
+Bare `src/…` paths on this page name `crates/desktop/src/` when that file exists there and otherwise name the upstream file the text cites; `tests/e2e/` and `tests/native/` are the repository's own, as [docs/README.md](../../README.md) says.
+
 Four ABI 1 commands make the controller scriptable in DriftWM's own
 words: `action` runs one upstream action string, `ipc` answers one upstream IPC
 request, `state_event` produces the lines of upstream's

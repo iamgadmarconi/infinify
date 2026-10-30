@@ -14,6 +14,7 @@
 #import "IFCompositor.h"
 
 #import <simd/simd.h>
+#import "DWMetalSupport.h"
 
 // Everything below moved verbatim from the former compositor.m, a main file,
 // where clang does not check nullability completeness. Two `nullable`s in
@@ -247,8 +248,26 @@ typedef struct {
     BOOL timed;                  // derived from `lifecycleStartTime`
 } IFCLife;
 
-// IFCompositorFrame.m.
-IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompositorEffects effects);
+static inline IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompositorEffects effects) {
+    IFCLife life = {element.lifecycle, 0.0, NO, NO};
+    if (life.kind != IFCompositorLifecycleOpening && life.kind != IFCompositorLifecycleClosing &&
+        life.kind != IFCompositorLifecycleClosingAlphaOnly) {
+        life.kind = IFCompositorLifecycleNone;
+        return life;
+    }
+    double start = element.lifecycleStartTime;
+    double p;
+    if (isnan(start)) {
+        p = element.lifecycleProgress;
+    } else {
+        life.timed = YES;
+        p = IFCompositorAnimationProgress(time - start, effects.animationSpeed);
+    }
+    if (isnan(p)) p = 0.0;
+    life.progress = fmin(fmax(p, 0.0), 1.0);
+    life.finished = IFCompositorAnimationFinished(life.progress);
+    return life;
+}
 
 @interface IFCompositorFrame ()
 - (uint64_t)ifc_fingerprint;
@@ -256,8 +275,10 @@ IFCLife IFCResolveLife(IFCompositorElement *element, double time, IFCompositorEf
 - (BOOL)ifc_backgroundAnimates;
 @end
 
-// Integer output size (IFCompositorFrame.m).
-void IFCPixelSize(IFCompositorFrame *f, long *logicalW, long *logicalH, NSUInteger *pxW, NSUInteger *pxH);
+// Integer output size, as upstream's logical output size is integral.
+static inline void IFCPixelSize(IFCompositorFrame *f, long *logicalW, long *logicalH, NSUInteger *pxW, NSUInteger *pxH) {
+    DWMetalPixelSize(f.size.width, f.size.height, f.scale, logicalW, logicalH, pxW, pxH);
+}
 
 // MARK: - Rasterisers (DWCompositorRasterizers.m)
 
@@ -376,8 +397,28 @@ typedef struct {
 
 // MARK: - Uniform helpers (IFCompositorRenderer+Draw.m)
 
-void IFCSetSource(IFCUniforms *u, CGRect source, double texW, double texH);
-IFCRectI IFCTransformRect(IFCRectI r, IFCompositorTransform t);
+// The sampled sub-rect `source` (texels) of a `texW` x `texH` texture: smithay's
+// tex_matrix, plus the centres of its outermost texels.
+static inline void IFCSetSource(IFCUniforms *u, CGRect source, double texW, double texH) {
+    texW = fmax(texW, 1.0);
+    texH = fmax(texH, 1.0);
+    double x0 = source.origin.x, y0 = source.origin.y;
+    double x1 = x0 + source.size.width, y1 = y0 + source.size.height;
+    u->src = simd_make_float4((float)(x0 / texW), (float)(y0 / texH), (float)((x1 - x0) / texW), (float)((y1 - y0) / texH));
+    double loX = x0 + 0.5, hiX = x1 - 0.5, loY = y0 + 0.5, hiY = y1 - 0.5;
+    if (loX > hiX) loX = hiX = (x0 + x1) / 2.0;
+    if (loY > hiY) loY = hiY = (y0 + y1) / 2.0;
+    u->uv_bounds = simd_make_float4((float)(loX / texW), (float)(loY / texH), (float)(hiX / texW), (float)(hiY / texH));
+}
+
+// elements.rs `WindowTransformElement::transform_rect`.
+static inline IFCRectI IFCTransformRect(IFCRectI r, IFCompositorTransform t) {
+    double x0 = t.originX + ((double)r.x - t.originX) * t.scaleX + t.offsetX;
+    double y0 = t.originY + ((double)r.y - t.originY) * t.scaleY + t.offsetY;
+    double x1 = t.originX + ((double)(r.x + r.w) - t.originX) * t.scaleX + t.offsetX;
+    double y1 = t.originY + ((double)(r.y + r.h) - t.originY) * t.scaleY + t.offsetY;
+    return IFCRectIMake(IFCRound(x0), IFCRound(y0), MAX(IFCRound(x1) - IFCRound(x0), 0L), MAX(IFCRound(y1) - IFCRound(y0), 0L));
+}
 
 // MARK: - Renderer internals
 

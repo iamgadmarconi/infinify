@@ -266,7 +266,7 @@
                     if(!member){DWReplicaRecovery *recovery=[owner admitRecovery:identity root:roots[logical] bounds:bounds starting:&starting];if(!recovery)continue;
                         member=[DWReplicaMember new];member.owner=owner;member.root=currentRoot;member.identity=identity;member.bounds=bounds;member.rootBounds=DWRectFromJSON(currentRoot[@"native_bounds"]);member.density=density;member.rate=rate;member.lastVisible=CACurrentMediaTime();member.frameTime=mach_absolute_time();recovery.attempt=member;
                         [owner.coldAttempts addObject:member];
-                        familyTrace(member,"create","none",0);
+                        DWReplicaFamilyTrace(member,"create","none",0);
                         DWCanvasAttachment *image=[DWCanvasAttachment new];image.key=[NSString stringWithFormat:@"%@:%@:%@:%@",identity[@"pid"],identity[@"birth_sec"],identity[@"birth_usec"],identity[@"wid"]];
                         image.unitRect=CGRectMake((bounds.origin.x-member.rootBounds.origin.x)/member.rootBounds.size.width,(bounds.origin.y-member.rootBounds.origin.y)/member.rootBounds.size.height,bounds.size.width/member.rootBounds.size.width,bounds.size.height/member.rootBounds.size.height);member.image=image;
                         SCStreamConfiguration *config=familyConfiguration(bounds,density,rate);
@@ -277,7 +277,7 @@
                         [member start];
                     }else if(member.started&&!member.updating&&(member.density!=density||member.rate!=rate)){
                         member.updating=YES;member.density=density;member.rate=rate;NSUInteger revision=++member.configuration;DWReplicaMember *updated=member;
-                        familyTrace(member,"configure","none",0);
+                        DWReplicaFamilyTrace(member,"configure","none",0);
                         [member.stream updateConfiguration:familyConfiguration(bounds,density,rate) completionHandler:^(NSError *failure){dispatch_async(dispatch_get_main_queue(),^{if(!atomic_load(&updated->alive)||updated.configuration!=revision)return;updated.updating=NO;if(failure)[updated fail:failure.localizedDescription code:"configuration_failed" error:failure.code];});}];
                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(atomic_load(&updated->alive)&&updated.updating&&updated.configuration==revision)[updated fail:@"Family capture configuration timed out" code:"configuration_timeout" error:0];});
                     }

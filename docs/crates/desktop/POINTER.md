@@ -68,7 +68,7 @@ would have without it.
   pending, which a renderer still draws (`source_presentable`) and `hit` skips
   (`source_interactive`). The JSON null reaches an Objective-C shell as
   `NSNull`, not as a dictionary: the native shell reads it as no hit
-  (`DWControllerHit`, `native/app/CompositorMode/DWControllerHit.h`), including on the
+  (`DWControllerHit`, `native/app/Desktop/DWControllerHit.h`), including on the
   renderer-ordered path, where an `NSNull` once raised in the event tap.
 - `forward` says the motion is the window's. It is true when `hit` is not
   null, the hit is not a pick target, and nothing

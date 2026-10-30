@@ -167,9 +167,10 @@ carries the window's position (`[1,0,0,1,-x,-y]` untransformed); `SLSSetWindowTr
 build drew Ghostty at `(601,417)` with its frame at `(494,399)`), and a native move of the frame while a transform is set moved the drawn rectangle
 with it on an owned fixture window moved through Accessibility (no shell running: placed rectangle `(125,820)` became `(162,843)` for a move of
 `(+37,+23)`). The frame moves for reasons the shell cannot all prevent (the application, the takeover,
-a toolbar re-layout), so the restore must not assume it did not (`docs/native/dock-helper/Payload/README.md`, "Restoring a window whose native frame moved"): the
-original is re-based on the origin read at the write; a plain original (scale 1) is written as `[1,0,0,1,-x,-y]` at that origin, which also heals a
-stale one. The takeover is **not** changed to put the native frame back. Reasons: (1) with the re-based restore the quit is consistent whatever the
+a toolbar re-layout), so the restore must not depend on where the frame is. It does not: the original the helper journals and writes back is the
+window's placement-1 layer, relative to placement 0, which follows the native frame by itself (`docs/native/dock-helper/Payload/README.md`, "The
+original is the layer"; until schema 4 it was the absolute matrix, re-based on the origin read at the write). The takeover is **not** changed to
+put the native frame back. Reasons: (1) with the layer restore the quit is consistent whatever the
 frame did (below); (2) putting the frame back is the shell's first native-origin write to a foreign window (the design says "production handoff does
 not write native origins"), and the fixture measurement above says a native move shifts the drawn picture, so it would need the shell to re-assert
 the transform in the same instant or show a one-frame jump of the window under the pointer (with the shell running, a parked Ghostty moved from
@@ -600,8 +601,8 @@ restoration therefore remains pending for at least two seconds and until native 
 has since been removed only when a complete display-Space inventory proves the target absent and the exact window is back on its original Space on
 the saved display. Native frame changes remain separately recorded; this does not establish whole-desktop native-frame restoration.
 
-The helper re-bases the original transform on the native origin it reads at the write (see "Restore after a native-origin move" above and
-[docs/native/dock-helper/Payload/README.md](../../dock-helper/Payload/README.md#restoring-a-window-whose-native-frame-moved)).
+The helper restores the window's original placement-1 layer, which does not depend on the native origin (see "Restore after a native-origin
+move" above and [docs/native/dock-helper/Payload/README.md](../../dock-helper/Payload/README.md#the-original-is-the-layer)).
 
 ## Known limits
 

@@ -441,10 +441,10 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         if(!self.desktop.native&&[birth(router.pid)isEqual:router.processBirth]&&[current[(id)kCGWindowOwnerPID]intValue]==router.pid&&current[(id)kCGWindowBounds])router.bounds=current[(id)kCGWindowBounds];
         // The button that went down in the source is the one that comes up.
         CGMouseButton button=(CGMouseButton)self.pressedButton;CGEventType type=button==kCGMouseButtonLeft?kCGEventLeftMouseUp:button==kCGMouseButtonRight?kCGEventRightMouseUp:kCGEventOtherMouseUp;
-        sig_atomic_t wasStopped=stopped;stopped=0;CGEventRef up=CGEventCreateMouseEvent(router.eventSource,type,CGPointZero,button);
+        sig_atomic_t wasStopped=DWStopSignal;DWStopSignal=0;CGEventRef up=CGEventCreateMouseEvent(router.eventSource,type,CGPointZero,button);
         if(self.desktop.native||[self.pressedTarget[@"native_member"]boolValue]){if(self.pressedTarget&&[self.desktop validateInputTarget:self.pressedTarget])[self.desktop postInput:up target:self.pressedTarget local:self.pressedLocal];}
         else [router post:up at:self.pressedLocal];
-        CFRelease(up);if(wasStopped)stopped=wasStopped;self.pressedSource=nil;self.pressedTarget=nil;self.pressedTablet=NO;self.pressedTabletDevice=nil;self.pressedPointerGrab=NO;}
+        CFRelease(up);if(wasStopped)DWStopSignal=wasStopped;self.pressedSource=nil;self.pressedTarget=nil;self.pressedTablet=NO;self.pressedTabletDevice=nil;self.pressedPointerGrab=NO;}
 }
 - (void)mouseUp:(NSEvent *)e { if(e.buttonNumber!=self.gestureButton)return;
     self.nativeTitleReleased=self.nativeTitlePress&&e.type==NSEventTypeLeftMouseUp;

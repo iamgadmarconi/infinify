@@ -106,7 +106,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     DWApplicationCatalogWatch *watch=self.applicationCatalogWatch;if(!watch)return;
     self.scanning=YES;self.applicationCatalogDirty=NO;uint64_t epoch=self.observationEpoch,revision=self.catalogRevision,collectionRevision=watch.revision;__weak DWWindowEvents *weak=self;
     NSArray<DWApplicationMetadata *> *known=[self applicationCatalogBindings];
-    dispatch_async(applicationWorker(),^{@autoreleasepool {
+    dispatch_async(DWWindowEventsApplicationQueue(),^{@autoreleasepool {
         NSArray<DWApplicationMetadata *> *running=[watch matches:collectionRevision]?canonicalApplications(watch.workspace.runningApplications,known):nil;
         dispatch_async(dispatch_get_main_queue(),^{DWWindowEvents *events=weak;if(!events)return;events.scanning=NO;
             if(events.stopped||!events.trusted)return;
@@ -132,7 +132,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
         DWApplicationMetadata *read=[DWApplicationMetadata new];read.watch=record;read.revision=record.revision;read.identityRevision=record.identityRevision;[reads addObject:read];}
     if(!reads.count)return;self.readingApplications=YES;uint64_t epoch=self.observationEpoch;__weak DWWindowEvents *weak=self;
     // One batch at a time, with one latest pending bit per live object. A notification storm cannot enqueue unbounded reads.
-    dispatch_async(applicationWorker(),^{@autoreleasepool {
+    dispatch_async(DWWindowEventsApplicationQueue(),^{@autoreleasepool {
         for(DWApplicationMetadata *read in reads)if([read.watch matches:read.revision]){
             NSRunningApplication *running=read.watch.running;read.pid=running.processIdentifier;read.terminated=running.terminated;read.regular=running.activationPolicy==NSApplicationActivationPolicyRegular;
             uint64_t seconds=0,microseconds=0;read.born=read.pid>0&&!read.terminated&&dw_focus_birth(read.pid,&seconds,&microseconds);read.seconds=seconds;read.microseconds=microseconds;
@@ -194,7 +194,7 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     if(self.stopped||!self.trusted||self.resolvingApplicationNotices||!self.applicationNotices.count)return;
     self.resolvingApplicationNotices=YES;NSArray<DWApplicationMetadata *> *notices=self.applicationNotices.copy;[self.applicationNotices removeAllObjects];
     NSArray<DWApplicationMetadata *> *known=[self applicationCatalogBindings];uint64_t epoch=self.observationEpoch,revision=self.catalogRevision;__weak DWWindowEvents *weak=self;
-    dispatch_async(applicationWorker(),^{@autoreleasepool {
+    dispatch_async(DWWindowEventsApplicationQueue(),^{@autoreleasepool {
         // Workspace notifications can contain fresh wrappers too. Coalesce equality on the worker; main uses only
         // exact object pointers. At most 64 notices wait here and 64 more wait for this single batch to finish.
         NSMutableDictionary<NSNumber *,NSMutableArray<DWApplicationMetadata *> *> *buckets=[NSMutableDictionary dictionary];

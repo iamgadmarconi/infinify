@@ -100,7 +100,7 @@ named by the owner cache) for the few frames before the client released it, and
 `DWPayloadRestoreIdentityTests.m` covers that sequence with substituted calls. Duplicate WIDs in
 an extended frame, or a nonzero target on a restoration record, are malformed.
 
-Before a Space write, schema-3 entries optionally persist
+Before a Space write, schema-4 entries optionally persist
 `original_space: {id, display, pending_target}`; an entry without that key has no Space obligation. The
 original singleton and display UUID never change. The void move API is accepted
 only after exact membership readback; an unobserved pending target cannot be

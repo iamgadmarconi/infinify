@@ -57,9 +57,11 @@ block or section):
                                 DWInputSources, DWPointerHover, DWTapKeys,
                                 DWTrackpadGestures
   native/app/System/            DWIPCServer, DWScreenshotWriter
-  native/app/Windows/           DWPanLaunch, DWWindowManager
+  native/app/Windows/           DWPanLaunch, DWWindowManager (.h, .m, +Discovery.m,
+                                +Private.h), DWWindowCandidate (.h, .m)
   (a file later cut into several keeps the original's provenance header in each
-  piece)
+  piece; DWWindowManager+Private.h and DWWindowCandidate.h carry no DriftWM text of
+  their own and name the file they were cut from)
   crates/core/config.reference.toml and the two proptest seed files
   crates/core/proptest-regressions/layout/fill.txt and snap.txt are byte copies
   of the baseline files and docs/crates/core/window-rules.md is the baseline page with six relative links
@@ -129,6 +131,8 @@ Each adapted file names the upstream paths it follows. Files derived from yabai:
   src/application.h, src/window.c, src/window.h, src/event_loop.c,
   src/window_manager.c: which notifications an application and a window are
   observed with, and what each one means).
+  native/app/Windows/DWWindowManager.m (with +Discovery.m) and DWWindowCandidate.m cite yabai for the
+  event-driven tracking (src/event_loop.c); DWPanLaunch and DWWindowManager.h carry no yabai text.
   native/app/CompositorMode/DWWindowServerFamily.h (src/window.c:872-897,
   src/misc/extern.h:9,66-72, src/window_manager.c:841-855), used by
   DWNativeFamily.m, DWNativeDisplaySpace.m and DWNativePlacementValidation.m.

@@ -112,8 +112,9 @@ inside Dock still requires scoped real-host evidence.
 
 ## Journal and strict recovery
 
-Schema-3 `v2-journal.json` preserves the current Dock writer identity and each
-first-touch identity, owner, original transform, alpha, alpha-restoration
+Schema-4 `v2-journal.json` preserves the current Dock writer identity and each
+first-touch identity, owner, original `layer` (the window's placement-1 transform, normally the identity; see
+"The original is the layer" below), alpha, alpha-restoration
 obligation and native bounds. Its `released_windows` table retains exact original
 records after a successful restore, because a later Dock replacement may reset
 WindowServer transforms again. When retiring a runtime, its current journal is
@@ -129,12 +130,12 @@ before setting it. Persistence uses exclusive no-follow mode-0600
 blocks unjournaled mutation and leaves `journal_pending=1` until a durable retry.
 
 Restoration re-resolves the exact identity, owner, UID and scope, sets the captured
-original transform (re-based on the native origin read at the write, below; written at placement 1, see "Placements") and alpha,
-and requires a readback equal after float rounding (a translation within 1/256 of a point, `v2SameTransform`). A real cross-display
+original layer (written at placement 1 and read back as the placement-1 layer, see "Placements") and alpha,
+and requires a readback equal after float rounding (`v2SameTransform`; a layer read back alone is exact). A real cross-display
 quit exposed late AppKit reflow after an immediate successful readback. Entries
 with a Space obligation remain pending for at least two seconds from the
 start of restoration and until native bounds, original membership and exact
-transform/owed alpha stay stable for 500 ms. Samples precede corrective writes;
+layer/owed alpha stay stable for 500 ms. Samples precede corrective writes;
 settlement checks run every 250 ms, and their transient timing evidence is never
 imported from a journal. This waits for native reflow without promising to restore
 the original native bounds. Confirmed restored or gone windows leave the table;
@@ -149,7 +150,7 @@ persistence obstruction permits autonomous retry without another request.
 
 On restart, the helper validates the entire committed journal before deleting any
 interrupted staging file or replaying it: exact schema/version and keys, integral
-bounded identities/counters, no duplicate windows, valid transform/bounds/alpha,
+bounded identities/counters, no duplicate windows, valid layer/bounds/alpha,
 consistent states, and valid restoration receipts. It refuses unknown or malformed
 journals and preserves their bytes. A replay restores only still-matching windows
 within the new helper's scope; changed or gone identities are left alone. An
@@ -165,38 +166,74 @@ before readiness. A process crash, machine failure or stalled helper cannot run
 in-process restoration; preserved journals require exact-identity reconciliation,
 not blind reinjection or deletion.
 
-### Restoring a window whose native frame moved
+### The original is the layer
 
-A WindowServer transform is the whole map from the screen into the window's own space, so it carries the window's position: a
-window that is not transformed reads `[1,0,0,1,-x,-y]` and is drawn at its native origin `(x,y)`. The original captured at
-first touch therefore says the origin the window had then. Written back unchanged after the native frame has moved, it draws
-the window at its old place while its native frame (hit testing, macOS tiling, the next session's original) is elsewhere.
+A window's original is its **placement-1 layer** (`SLSGetWindowTransformAtPlacement(cid, wid, 1, NULL, &t)`, `dwReadLayer`),
+captured at first touch and journalled as `layer`. Restoration writes exactly that layer back at placement 1 (`dwWriteLayer`) and
+verifies the **layer** on readback, never the catenated matrix. Schema 3 held the absolute catenated matrix instead, which is the
+sum of placement 0 (the position, following the native frame), the helper's layer and every other placement some other writer
+holds, and that had two failures:
 
-The native frame moves during a session for reasons the shell cannot all prevent (the application, a window-server drag the
-shell took over, a toolbar re-layout), so restoration does not write the captured transform as it is:
+- *Foreign placements.* Measured on the guest (vm1, 2026-10-30): a Finder window adopted while macOS still had its open-animation
+  contribution on another placement (catenated `[0.999,0,0,1,0.5,-201]`) was journalled with that as its original, restored to it
+  at quit (log: `native presentation: window 66 of process 392 not placed: the set failed or read back differently`), and after
+  `killall Dock` no state the reattachment guard accepted matched the entry, so the recovery readiness audit failed, the entry
+  stayed `reattaching` with `last_restore` pending, and the launcher's pending marker blocked every later start. The layer is
+  not affected by other placements, so the original of such a window is the identity, as for every other.
+- *A moved native frame.* A catenated original contains the position of the window when it was captured, so it had to be re-based
+  on the origin read at the write (`v2RestoreTransform`, with a before/after origin read and a stricter reattachment guard). A
+  layer is relative to placement 0, which follows the native frame by itself, so none of that is needed and it is gone: a window
+  the application or a drag moved meanwhile is natural where it now is, and restoration writes the same layer however far it moved.
 
-- **Plain original** (scale 1, no rotation: what an unmanaged window has): written as `[1,0,0,1,-x,-y]` at the origin read now.
-  A plain transform is native by definition, which also puts right an original that was captured already displaced (the stale
-  windows an earlier restore left behind).
-- **Any other original** keeps its linear part and its place relative to the frame: `t' = t - M*(origin_now - origin_captured)`
-  (`v2RestoreTransform`), where `origin_captured` is the first-touch `bounds` the journal already holds. Unmoved, it is exactly
-  the original; the journal needs no extra key.
-- **The origin is read before the write and again after it** (`SLSGetWindowBounds`, with the readback of the transform that
-  was already required). A window that moved between the two reads is not restored by that write: it stays `restoring` and
-  the next pass writes the origin it has then. Without a readable origin the captured original is written as the best that can be
-  done and the window stays pending, so the next pass writes the re-based one. The journal keeps the captured transform and
-  bounds until release, so a crash between a move and the release is re-based by the next helper the same way.
-- **After release** the retained record holds the transform that was written and the bounds read after it, so a later
-  re-base (a reattachment after the Dock was replaced) starts from a pair that belongs together. The reattachment guard is
-  strict (geometry unchanged, and the transform either the original, the identity reset or the re-based one).
-- A veil-only release (`veil_bare`) adopts the transform in force; the Space settlement samples compare against the
-  re-based transform at the bounds sampled.
-- The pending receipt's `diagnostic` carries `captured_origin`, `native_origin`, `origin_status` and `target_transform`; it is
-  informational, and a receipt is valid without it.
+What remains of the earlier rules:
 
-`DWPayloadRebaseTests.m` covers this with substituted calls (`rebaseCases`: unmoved, moved, stale plain, scaled and rotated
-originals, unreadable origin, a move between write and read, crash recovery, reattachment); its fixtures pair an original of
-`[1,0,0,1,-25,-35]` with a window at `(25,35)`. These are not native evidence.
+- **Reattachment guard** (a released original taken up again after the Dock was replaced): the window's identity is current, and its layer
+  either still the original or the identity the death of the writer's connection reset it to. Anything else was written by someone
+  since and is not undone. Where the window is does not matter (a layer is relative to placement 0), so a released window moved
+  after its release converges too; the retained bounds are refreshed at each release and are not a fence. A window already natural (layer identity) after the death therefore converges to restored at once and
+  leaves no entry behind; the entries never stay pending for want of a catenated match.
+- A veil-only release (`veil_bare`) adopts the layer in force; the Space settlement samples compare the layer.
+- The absolute shims (`getTransform`, `setTransform`, below) are what frames use to place windows. An arrival placement also reads the
+  absolute matrix once, to see whether the window is already where its root's family puts it. The shim read is placement 0 composed
+  with placement 1, not the catenated read of every placement, so a window the system is animating open (a further placement of
+  another writer) reads back as applied as soon as its own layer took, instead of as not applied until the animation ends; the guest
+  showed that difference (below).
+- The pending receipt's `diagnostic` carries `saved_layer`, `actual_layer`, `layer_set_status`, `layer_get_status` and
+  `layer_matches`; it is informational, and a receipt is valid without it.
+- A window an earlier build left with placement 0 reset to the corner (`[1,0,0,1,0,0]`) keeps whatever placement 0 says: the helper
+  never writes placement 0, so restoration cannot move it. Only its application's restart does (see "Placements").
+
+**Schema 4 and older journals.** The payload accepts only `v: 4`; a journal of an older schema, or one with the old `transform` field,
+is refused whole and untouched. There is no migration: the launcher (`scripts/native-desktop-launcher.sh`) reads the retired helper
+journal's `v` first and, when it is not 4, prints that nothing was recovered, archives the launch record and the journal under
+`retired-launch.*` in its state directory, leaves the retired runtime alone and starts fresh, so an old journal never blocks later
+starts (`tests/e2e/native-launcher.sh`). The loader refuses a recovery journal that is not `v: 4`.
+
+`DWPayloadLayerTests.m` covers this on the modelled window server of `DWPayloadPlacementTests.m` (placement 0 following the native
+frame, the helper's layer, an extra placement of another writer): adoption with a non-natural foreign placement, a native move while
+held, a non-identity original layer, a layer the server does not take, a Dock reset of a held entry and of a released one, a foreign
+layer written since, and the refusal of previous-schema journals. These are not native evidence.
+
+**What the guest showed for the layer original** (vm1, macOS 27.0.1 26A434, 2026-10-30, Finder windows only; the reader was a small
+tool reading placements 0 and 1, `SLSGetCatenatedWindowTransform` and `SLSGetWindowBounds` from an ordinary process; evidence in
+`target/lane-helper/guest.txt` of the working tree that made this change, not in the repository):
+
+- An untouched Finder window reads placement 1 = identity with status 0 (so the original can always be read). `open ~` while Infinify
+  ran: the window server's open animation was visible as a catenated transform with placements 0 and 1 natural
+  (`[1.02041,0,0,1.02041,-10.2041,-212.245]` falling to `[1,0,0,1,0,-201]` over about 8 back-to-back samples; the failing smoke's
+  `[0.999,0,0,1,0.5,-201]` is one of its samples, `[0.999001,0,0,0.998573,0.499501,-200.214]`). The helper adopted the window during that
+  animation (10 samples with a foreign contribution while the window was adopted) and the journal row read `layer [1,0,0,1,0,0]`, state
+  `held`, schema `v 4`, never the catenated matrix. At zoom 0.5 the window read placement 1 `[2,0,0,2,-1556,-529]`; after `quit-native`
+  placement 1 was the identity and the catenated transform `[1,0,0,1,0,-201]` on every layer-0 window (4 of 4), and the log had no
+  "not placed" line. (With the first version's catenated read, 5 reopen cycles that overlapped the animation logged three "not placed"
+  lines at placement time and none at quit; with the placement-0-composed-with-1 read, a run with the same overlap logged none.)
+- `killall Dock` during a session with two placed windows (`[2,0,0,2,..]`): 8 s later both read layer identity and natural, Infinify
+  reported the helper lost. After `quit-native` and a new start the launcher took the retired Dock's schema-4 journal (two `held` rows),
+  the loader recovered it, the payload's `last_restore` read `connection handoff`, `restored`, `restored`, readiness was established and
+  no `launch.pending.plist` existed. A released window from an earlier session (the guest's failing case) likewise ended
+  `restored` at the handoff.
+- `quit-native`, then `killall Dock` with Infinify not running: all 5 layer-0 windows natural afterwards, and the next start was not
+  blocked.
 
 The owned-fixture native evidence is `DWPayloadFixtureTests.py --native-move` (opt-in, needs Accessibility for the test process).
 The whole-desktop evidence is in the shell's README section "Restore after a native-origin move".
@@ -222,9 +259,10 @@ placement-0 write was silently ignored (status 0, no effect).
 
 **What is written instead.** A placement of 1 or more is a layer applied after placement 0 whose identity means "as placement 0
 has it". A reset layer is therefore harmless: the window is where its native frame is. Every helper write is now
-`SLSSetWindowTransformAtPlacement(cid, wid, 1, 0, &layer)` (flags 0, relative) and every read is
-`SLSGetCatenatedWindowTransform` (the disassembly: `SLSGetWindowTransformAtPlacement` with placement `0x7fffff00`), the effective
-matrix. `DWPayloadState.m` keeps its call sites' meaning, an absolute matrix (the whole map from the screen into the window's space), in
+`SLSSetWindowTransformAtPlacement(cid, wid, 1, 0, &layer)` (flags 0, relative) and the absolute read is placement 0 composed with
+placement 1 (the first version of this change read `SLSGetCatenatedWindowTransform`, the disassembly of which is
+`SLSGetWindowTransformAtPlacement` with placement `0x7fffff00`, the matrix of every placement; see "The original is the layer" for why
+that was narrowed). `DWPayloadState.m` keeps its call sites' meaning, an absolute matrix (the whole map from the screen into the window's space), in
 two functions, `dwReadAbsolute` and `dwWriteAbsolute`, which `getTransform` and `setTransform` point to:
 
 - `dwWriteAbsolute(A)` reads placement 0 (`T0`, which follows the native frame) and writes the layer `L = A after T0^-1`
@@ -232,12 +270,12 @@ two functions, `dwReadAbsolute` and `dwWriteAbsolute`, which `getTransform` and 
   part unchanged). A layer within 1/256 pt of the identity is written as exactly the identity, so a natural window's restore writes
   `identity` at placement 1. Placement 0 is never written; `SLSSetWindowTransform` is not even resolved, and a missing
   placement symbol refuses the helper's start rather than falling back to it.
-- `dwReadAbsolute` is the catenated read. The window server composes the layers in float, so a request read back after a layered
+- `dwReadAbsolute` reads placements 0 and 1 and composes them (placement 0 first). The window server composes the layers in float, so a request read back after a layered
   write can differ by a rounding: `v2SameTransform` (every readback check, the repeated-frame skip, reattachment and the Space
   settlement) accepts a translation within 1/256 pt and a linear part within 1e-6.
-- Originals, the journal (schema 3, unchanged), the re-base of a restore on the native origin, recovery replay and the retained
-  original are all in absolute terms and are unchanged; they are now natural placement-0 values for a window nobody had touched.
-  There is no optional transaction or list-batch transform path in the tree (`SLSTransactionSetWindowTransform`,
+- Originals are not absolute: they are the placement-1 layer (`dwReadLayer`, `dwWriteLayer`), journalled in schema 4, see "The
+  original is the layer". (The first version of this change kept absolute originals and the journal at schema 3; that is what the
+  foreign-placement failure above showed to be wrong.) There is no optional transaction or list-batch transform path in the tree (`SLSTransactionSetWindowTransform`,
   `SLSSetWindowTransforms` are not used), so none had to be moved.
 
 **What the guest showed** (real TextEdit, Safari and Finder windows, build of this change, read from an ordinary process with
@@ -269,7 +307,9 @@ build (the layer carries the difference) and restored to natural, but that is on
 `placementCases`), not run on the guest, and they return to the corner at the next Dock death: only the application's restart fixes
 them. Whether the composition order holds for a placement 0 that is not a translation was not observed. While a new window
 animates open (TextEdit, the first ~250 ms) the catenated read differs from placement 0 composed with placement 1 (both identity or
-natural): some further placement, the application's or the window server's, contributes. A frame in that interval would read back
-as not applied and be repeated (not observed in the helper's counters); the window was at alpha 0 through most of it in the poll above. Other writers of placement 1 (Mission Control, Stage Manager, tiling animations) were not looked for:
+natural): some further placement, the application's or the window server's, contributes (measured in "The original is the layer" above). With
+the catenated read this version started with, a frame in that interval read back as not applied and the shell logged "not placed ...
+the set failed or read back differently" until the animation ended; the absolute read is now placement 0 composed with placement 1, which
+does not see it. Other writers of placement 1 (Mission Control, Stage Manager, tiling animations) were not looked for:
 placement 1 read identity on every window at rest. The in-app Dock reload path and the launch daemon, a second display, Spaces and
 the owner's Mac were not exercised for this change.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Split from native/app/Windows/DWWindowManager.h at 37b27b1, moved verbatim.
+// Split from native/desktop/window-manager.h at 37b27b1, moved verbatim.
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 // One window the manager offers: what the shell binds it by and names it with. Read from the shareable windows where the
 // run can capture; in native presentation or an `--only-pid` run without Screen Recording access from the window list (pid, number, frame),
