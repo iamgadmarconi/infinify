@@ -1058,6 +1058,13 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig {
+            // Infinify: the saved seeds live under tests/ (upstream: proptest-regressions/ at the crate root).
+            failure_persistence: Some(Box::new(
+                proptest::test_runner::FileFailurePersistence::SourceParallel("tests/proptest-regressions"),
+            )),
+            ..ProptestConfig::default()
+        })]
         /// The walk's ordering: it lands on an enumerated stop strictly
         /// beyond its origin, clear of every window it wasn't already over,
         /// and skips no such stop on the way. The stops' own coordinates are

@@ -821,6 +821,13 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig {
+            // Infinify: the saved seeds live under tests/ (upstream: proptest-regressions/ at the crate root).
+            failure_persistence: Some(Box::new(
+                proptest::test_runner::FileFailurePersistence::SourceParallel("tests/proptest-regressions"),
+            )),
+            ..ProptestConfig::default()
+        })]
         #[test]
         fn result_within_bounds_only_keeps_unresolvable_overlaps(
             current in any_rect(),

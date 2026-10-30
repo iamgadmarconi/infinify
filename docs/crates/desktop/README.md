@@ -1,7 +1,7 @@
 # Desktop controller ABI v1
 
 `driftwm-desktop` builds an `rlib` and `libdriftwm_desktop.a`. Include
-[`crates/desktop/include/driftwm_desktop.h`](../../../crates/desktop/include/driftwm_desktop.h) from the native shell.
+[`crates/desktop/src/driftwm_desktop.h`](../../../crates/desktop/src/driftwm_desktop.h) from the native shell.
 The shell that links it is the Objective-C desktop in
 [`native/app`](../../native/README.md): `./scripts/build-app.sh`
 builds this crate (`cargo build -p driftwm-desktop --release`) and links the

@@ -1,6 +1,6 @@
 # Documentation
 
-The documentation of Infinify, apart from the repository's [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the licence texts stay next to what needs them (`LICENSE`, `NOTICE`, `native/app/Resources`, `crates/core/SMITHAY-LICENSE.txt`).
+The documentation of Infinify, apart from the repository's [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the licence texts stay next to what needs them (`LICENSE`, `NOTICE`, `SMITHAY-LICENSE.txt`, `native/app/Resources`); `docs/crates/core/config.reference.toml` is upstream's reference config, which the core crate's config tests read.
 
 Paths in the crate documents under `docs/crates/<crate>/` that name `tests/`, `include/` or `examples/` files are written from the repository root (`crates/<crate>/tests/...`); the `tests/e2e/` and `tests/native/` paths are the repository's own.
 

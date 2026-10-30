@@ -62,8 +62,8 @@ block or section):
   (a file later cut into several keeps the original's provenance header in each
   piece; DWWindowManager+Private.h and DWWindowCandidate.h carry no DriftWM text of
   their own and name the file they were cut from)
-  crates/core/config.reference.toml and the two proptest seed files
-  crates/core/proptest-regressions/layout/fill.txt and snap.txt are byte copies
+  docs/crates/core/config.reference.toml and the two proptest seed files
+  crates/core/tests/proptest-regressions/layout/fill.txt and snap.txt are byte copies
   of the baseline files and docs/crates/core/window-rules.md is the baseline page with six relative links
   made absolute and one re-pointed (see docs/crates/core/PORT.md); the oracle copies under
   crates/canvas/tests/upstream, crates/desktop/tests/upstream and
@@ -180,7 +180,7 @@ Smithay 0.7.0 (https://github.com/Smithay/smithay, git
 a166cf4c94b5aedc332a65aa1dd753e8148829c3, src/utils/geometry.rs,
 src/backend/input/mod.rs, src/input/keyboard/modifiers_state.rs). MIT licence,
 Copyright (c) 2017 Victor Berger and Victoria Brekenfeld (also
-crates/core/SMITHAY-LICENSE.txt):
+SMITHAY-LICENSE.txt):
 
   MIT License
 

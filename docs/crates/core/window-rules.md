@@ -110,7 +110,7 @@ Every rule field — its type, default, accepted values, and per-field caveats
 (which fields `decoration = "none"` ignores, the blur GPU/VRAM cost, the one-shot
 `size`, how layer-shell surfaces opt into chrome) — is documented in the generated
 [config reference](https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/docs/config.md#window-rules), whose canonical source is
-[`config.reference.toml`](../../../crates/core/config.reference.toml). This page is the recipe and
+[`config.reference.toml`](config.reference.toml). This page is the recipe and
 semantics guide; the reference is the field dictionary.
 
 Layer-shell surfaces interpret chrome fields differently — see

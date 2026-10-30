@@ -13,7 +13,7 @@
 //   smithay::input::keyboard::{Keysym, ModifiersState, keysyms, xkb}
 //   smithay::utils::{Coordinate, Logical, Point, Rectangle, Size, Transform}
 //
-// Third-party origin (full list and licences: docs/crates/core/PORT.md, SMITHAY-LICENSE.txt):
+// Third-party origin (full list and licences: docs/crates/core/PORT.md, SMITHAY-LICENSE.txt at the repository root):
 //
 //   Smithay 0.7.0, MIT, Copyright (c) 2017 Victor Berger and Victoria Brekenfeld
 //     repository: https://github.com/Smithay/smithay

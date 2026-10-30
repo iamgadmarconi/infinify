@@ -1335,7 +1335,7 @@ mod tests {
     fn every_config_field_is_documented() {
         use std::collections::BTreeSet;
 
-        const REFERENCE: &str = include_str!("../../config.reference.toml");
+        const REFERENCE: &str = include_str!("../../../../docs/crates/core/config.reference.toml");
         // Deprecated, migration-only — intentionally undocumented.
         const ALLOWLIST: &[&str] = &[
             "navigation.animation_speed",

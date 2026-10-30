@@ -20,7 +20,7 @@
 use driftwm_core::config::{ACTION_NAMES, Config};
 use std::collections::{BTreeMap, BTreeSet};
 
-const REFERENCE: &str = include_str!("../config.reference.toml");
+const REFERENCE: &str = include_str!("../../../docs/crates/core/config.reference.toml");
 
 /// Rebuild a plain TOML config from the reference by uncommenting every
 /// documented default and keeping the uncommented `[section]` headers.

@@ -18,7 +18,7 @@ ported file's header says "See docs/crates/core/PORT.md"; this is that file, kep
 - Licence: GPL-3.0-or-later, as upstream. The licence text is the `LICENSE` file
   at the repository root (upstream's file, unchanged).
 - Third-party code and licences: see [Third-party material](#third-party-material).
-  Smithay's licence text is `crates/core/SMITHAY-LICENSE.txt`.
+  Smithay's licence text is `SMITHAY-LICENSE.txt` at the repository root.
 - Edition 2024, `rust-version` 1.88 as upstream. The crate is a member of the
   repository workspace and has no `Cargo.lock` of its own.
 
@@ -42,14 +42,16 @@ upstream change of each ported file into the ported text.
 
 ```
 Cargo.toml                    package (version, authors, repository mirror upstream's)
-SMITHAY-LICENSE.txt           Smithay's MIT licence text (verbatim, Smithay 0.7.0)
-config.reference.toml         upstream copy (config tests read it)
+config.reference.toml         upstream copy (config tests read it); now docs/crates/core/config.reference.toml at the repository root
 docs/window-rules.md          upstream copy, six links made absolute and one re-pointed (a test reads it); now docs/crates/core/window-rules.md at the repository root
-proptest-regressions/layout/{fill,snap}.txt   upstream copies (saved proptest seeds)
+tests/proptest-regressions/layout/{fill,snap}.txt   upstream copies (saved proptest seeds; upstream keeps them in proptest-regressions/ at the crate root)
 src/lib.rs                    crate root (new)
 src/canvas.rs                 ported
 src/config/*.rs               ported (six files)
 src/layout/*.rs               ported (five files)
+
+Smithay's MIT licence text (verbatim, Smithay 0.7.0) is `SMITHAY-LICENSE.txt` at the repository root.
+The crate directory holds only `Cargo.toml`, `src/` and `tests/`.
 src/input/mod.rs              new: declares gestures
 src/input/gestures.rs         ported (one function)
 src/platform.rs               the stand-ins for Smithay/xkb types (new)
@@ -101,10 +103,10 @@ header; what remains is the entry under [Deviations](#deviations).
 | `src/config/toml.rs` | `6e67a2e41ba1c39a7a71fea7b340b32bfafc0ca1994af248ebdaaf39df2d024b` | changed, see Deviations |
 | `src/config/defaults.rs` | `c2569a8d2db92dc3326238698c18b3c461dfc39835c4ae98d6b512856002dcd4` | one import path |
 | `src/layout/mod.rs` | `30e14c74317edb70c7d93e8a0c5e873f2a31ef518bef29eef5deb931d3d99030` | identical |
-| `src/layout/snap.rs` | `66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae` | identical |
+| `src/layout/snap.rs` | `66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae` | seed path, see Deviations |
 | `src/layout/cluster.rs` | `4190c07d8f09cc70fdee19e1745297713f1ff8e06ab2db4337c0e316ea351a1a` | `Side::opposite` removed |
 | `src/layout/auto_placement.rs` | `d99fa9d5ca4a5e9d84e6ef6d6672e6ea531186f40187d88082b63285e8999806` | identical |
-| `src/layout/fill.rs` | `5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3` | identical |
+| `src/layout/fill.rs` | `5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3` | seed path, see Deviations |
 | `src/input/gestures.rs` | `6a07e9e9a620b45bd5a52aa59136887775d609d00ad94b9c53d93c89ac3323d3` | an extract, see Deviations |
 | `crates/core/tests/canvas_navigation_test.rs` | `231937c6c83cb17c24ac419f575cdd4de3474c60d87d27c1cf405a1198c0becf` | crate paths |
 | `crates/core/tests/canvas_transforms_test.rs` | `6c8ec536dda510c849e8472bf4f5bdc88f371b402a810ebe3a142c58d2c6bb0f` | crate paths, two `#[rustfmt::skip]` |
@@ -122,10 +124,10 @@ change what a test reads):
 
 | File (same path upstream) | SHA-256 of upstream original | Here |
 |---|---|---|
-| `config.reference.toml` | `a0e1e00eb1ce16bc797e97a1ad918af7fddef1d710fe8246e1fae55f867e4e84` | byte-identical |
+| `config.reference.toml` | `a0e1e00eb1ce16bc797e97a1ad918af7fddef1d710fe8246e1fae55f867e4e84` | byte-identical; now `docs/crates/core/config.reference.toml` at the repository root |
 | `docs/window-rules.md` | `2f69aa604ba0b060f560d656ab464323b3bf52f9e4a55a601aec277b852a7502` | six relative links made absolute and one re-pointed; the page is now `docs/crates/core/window-rules.md` at the repository root, see Deviations |
-| `proptest-regressions/layout/fill.txt` | `3a48dbe099971bfcf69ecb6f5ca09d98fd93150cb00584f262dca36dae0bece1` | byte-identical |
-| `proptest-regressions/layout/snap.txt` | `052ed99ab594e71bdadef03b8b3c33d861870db653871873889724fdd72358d6` | byte-identical |
+| `proptest-regressions/layout/fill.txt` | `3a48dbe099971bfcf69ecb6f5ca09d98fd93150cb00584f262dca36dae0bece1` | byte-identical; now `tests/proptest-regressions/layout/fill.txt` |
+| `proptest-regressions/layout/snap.txt` | `052ed99ab594e71bdadef03b8b3c33d861870db653871873889724fdd72358d6` | byte-identical; now `tests/proptest-regressions/layout/snap.txt` |
 
 The two seed files are read by proptest and a header would change their hash;
 the reference config and the rules page are read by tests. Their origin is
@@ -146,7 +148,7 @@ New files with no upstream original (each says so in its own header):
 `src/lib.rs`, `src/input/mod.rs`, `src/platform.rs`,
 `src/platform/input/keyboard/keysyms.rs` (generated), `crates/core/tests/platform_keysym_test.rs`,
 `crates/core/tests/config_path_test.rs`, `Cargo.toml`,
-`SMITHAY-LICENSE.txt`, this file.
+`SMITHAY-LICENSE.txt` (at the repository root), this file.
 
 ## Deviations
 
@@ -166,6 +168,7 @@ this is the complete list.
 | `src/config/toml.rs` | new `pub const CONFIG_DIR_NAME: &str = "infinify";`, and `config_path` joins `format!("{CONFIG_DIR_NAME}/config.toml")` where upstream joins `"driftwm/config.toml"`; `set_config_path`, `CONFIG_PATH_OVERRIDE` and its branch in `config_path` removed |
 | `src/layout/{mod,snap,auto_placement,fill}.rs` | none |
 | `src/layout/cluster.rs` | `impl Side { fn opposite }` removed |
+| `src/layout/fill.rs`, `src/layout/snap.rs` | the `proptest!` block opens with a `#![proptest_config]` whose `failure_persistence` is `SourceParallel("tests/proptest-regressions")`, so the saved seeds are read from `tests/proptest-regressions/layout/` instead of `proptest-regressions/layout/` at the crate root; the cases, strategies and default case count are unchanged |
 | `src/input/gestures.rs` | an extract: `direction_from_vector` only (upstream lines 86-113, body unmodified), `pub(crate)` widened to `pub`; imports reduced to `crate::platform::utils::{Logical, Point}` and `crate::config::Direction`; lines 1-85 removed (see Removed) |
 | `crates/core/tests/canvas_navigation_test.rs` | 2 imports `driftwm::` read `driftwm_core::`; 1 import `smithay::` reads `driftwm_core::platform::` |
 | `crates/core/tests/canvas_transforms_test.rs` | 1 import `driftwm::` reads `driftwm_core::`; 1 import and 4 inline type paths `smithay::` read `driftwm_core::platform::`; two `#[rustfmt::skip]`, each with a two-line comment, on the `let delta_canvas…` statements |
@@ -174,7 +177,7 @@ this is the complete list.
 | `crates/core/tests/config_toml_test.rs` | the same |
 | `crates/core/tests/window_rules_test.rs` | the same; four `let combo = …Keysym::from(…KEY_q);` statements are wrapped over three lines (rustfmt, see below); the three `window_rule_has_criteria_*` tests removed |
 | `crates/core/tests/snap_test.rs` | `use driftwm::layout::snap::*;` reads `use driftwm_core::layout::snap::*;` |
-| `docs/window-rules.md` | six relative links point at the upstream repository at the pinned commit instead: `ipc.md#state-file`, `config.md#window-rules`, `config.md#background`, `config.md#decorations`, `session.md#restore_windows` (all under `docs/`) and `../extras/scripts/driftwm-decal` (`extras/scripts/driftwm-decal`), each as `https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/<path>`. The pages they name are not in this repository. A seventh link, to `config.reference.toml`, was relative to the crate (`../config.reference.toml`); the page now lives at `docs/crates/core/window-rules.md` and the link reads `../../../crates/core/config.reference.toml`. The TOML fences are untouched |
+| `docs/window-rules.md` | six relative links point at the upstream repository at the pinned commit instead: `ipc.md#state-file`, `config.md#window-rules`, `config.md#background`, `config.md#decorations`, `session.md#restore_windows` (all under `docs/`) and `../extras/scripts/driftwm-decal` (`extras/scripts/driftwm-decal`), each as `https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/<path>`. The pages they name are not in this repository. A seventh link, to `config.reference.toml`, was relative to the crate (`../config.reference.toml`); the page and the reference config now live side by side in `docs/crates/core/` and the link reads `config.reference.toml`. The TOML fences are untouched |
 
 ### Removed (left out)
 
@@ -462,7 +465,7 @@ Not deviations. Listed because a macOS consumer has to decide what they mean.
 - `BTN_LEFT`/`BTN_RIGHT`/`BTN_MIDDLE` are the Linux evdev codes
   (`0x110`–`0x112`). Keysyms are X11/xkb keysym values.
 - `ModifiersState::iso_level5_shift` is the `mod3` modifier, as in Smithay.
-- `config.reference.toml` and `docs/window-rules.md` (now `docs/crates/core/window-rules.md` at the repository root) are upstream's text. They
+- `config.reference.toml` and `docs/window-rules.md` (now `docs/crates/core/config.reference.toml` and `docs/crates/core/window-rules.md` at the repository root) are upstream's text. They
   say `~/.config/driftwm/config.toml`, `driftwm --check-config` and
   `driftwm msg …`, and the `[env]` comment of the reference config still names
   upstream's Wayland toolkit defaults, which this crate no longer sets. They
@@ -499,10 +502,11 @@ system dependency. `proptest` pulls `libc`/`rustix` (through `tempfile`,
   `src/config/*.rs`, `src/layout/*.rs`, and `crates/core/tests/{canvas_*,config_*,window_rules,snap}_test.rs`
   (table above), less the tests named under Deviations. `tests/config_docs_test.rs`
   was removed with `docs/config.md`.
-- Saved proptest cases: `proptest-regressions/layout/fill.txt` (for
-  `src/layout/fill.rs`) and `proptest-regressions/layout/snap.txt` (for
+- Saved proptest cases: `tests/proptest-regressions/layout/fill.txt` (for
+  `src/layout/fill.rs`) and `tests/proptest-regressions/layout/snap.txt` (for
   `src/layout/snap.rs`), both byte-identical copies. proptest reads them at the
-  test file's path under `proptest-regressions/`.
+  test file's path under `tests/proptest-regressions/` (the `#![proptest_config]`
+  deviation above).
 - This crate's own tests: `crates/core/tests/platform_keysym_test.rs` (key names through
   `parse_key_combo`, `[keybindings]` and `pass_keys`: case, aliases, `XF86_`,
   numeric forms, rejected names including NUL), `crates/core/tests/config_path_test.rs`
@@ -518,7 +522,7 @@ system dependency. `proptest` pulls `libc`/`rustix` (through `tempfile`,
 
 Everything here is under licences compatible with GPL-3.0-or-later. The
 repository's `NOTICE` file carries the attributions; Smithay's licence text is
-`crates/core/SMITHAY-LICENSE.txt`.
+`SMITHAY-LICENSE.txt` at the repository root.
 
 - **Smithay** ([Smithay/smithay](https://github.com/Smithay/smithay); MIT,
   © 2017 Victor Berger and Victoria Brekenfeld): the `Point`, `Size`,
