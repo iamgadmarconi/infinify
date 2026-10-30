@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // DWReplicaMember implementation and the capture lifecycle trace.
-// Split from native/app/CompositorMode/DWNativeReplicaFamilies.m (0b3f028; native/desktop/native-replica-family.m at 37b27b1), moved verbatim.
+// Split from native/desktop/native-replica-family.m at 37b27b1, moved verbatim.
 #import "DWNativeReplicaFamilies+Private.h"
 // Explicit diagnostic only: bounded lifecycle records, never titles, pixels or
 // unrestricted error text. It does not change capture or validation decisions.

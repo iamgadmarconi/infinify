@@ -8,7 +8,7 @@
 // Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
 // NSApplication exists).
 // DWApplicationCatalogWatch: the KVO record of NSWorkspace.runningApplications.
-// Split from native/app/Windows/DWWindowEvents.m (0b3f028; native/desktop/window-events.m at 37b27b1), moved verbatim.
+// Split from native/desktop/window-events.m at 37b27b1, moved verbatim.
 #import <AppKit/AppKit.h>
 #include <os/lock.h>
 // NSRunningApplication.h explicitly recommends KVO of NSWorkspace.runningApplications instead of polling. The

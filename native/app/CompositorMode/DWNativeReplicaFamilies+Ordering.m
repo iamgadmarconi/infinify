@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // DWNativeReplicaFamilies: the native back-to-front ordering of captured members.
-// Split from native/app/CompositorMode/DWNativeReplicaFamilies.m (0b3f028; native/desktop/native-replica-family.m at 37b27b1), moved verbatim.
+// Split from native/desktop/native-replica-family.m at 37b27b1, moved verbatim.
 #import "DWNativeReplicaFamilies+Private.h"
 @implementation DWNativeReplicaFamilies (Ordering)
 - (NSArray<NSDictionary *> *)orderedRun:(NSArray<NSDictionary *> *)tokens range:(NSRange)range {

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1.
 // A canvas panel's view: pointer, press, scroll and touch handling over one panel's outputs.
 #import <AppKit/AppKit.h>
 #import "DWPointerHover.h"
@@ -80,4 +81,9 @@
 - (NSDictionary *)inputIntentForHit:(NSDictionary *)hit output:(NSNumber *)output;
 - (void)beginResize:(NSNumber *)window edges:(NSString *)edges snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output;
 - (void)releasePressed;
+- (CGPoint)screenPoint:(NSEvent *)e;
+@end
+// Implemented in DesktopView+Scroll.m; called from DesktopView.m.
+@interface DesktopView (Scroll)
+- (void)pan:(CGPoint)delta output:(NSNumber *)output event:(NSEvent *)e source:(NSString *)source;
 @end

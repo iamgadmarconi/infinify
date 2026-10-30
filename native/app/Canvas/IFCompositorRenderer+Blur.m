@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/compositor.m at 37b27b1, moved verbatim.
 //
 // Infinify compositor — frosted-glass blur behind windows (blur.rs). See
 // IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md. The cached-background

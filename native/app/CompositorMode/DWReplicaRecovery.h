@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // DWReplicaRecovery: negative capture history of one native child.
-// Split from native/app/CompositorMode/DWNativeReplicaFamilies.m (0b3f028; native/desktop/native-replica-family.m at 37b27b1), moved verbatim.
+// Split from native/desktop/native-replica-family.m at 37b27b1, moved verbatim.
 #import <Foundation/Foundation.h>
 @class DWReplicaMember;
 // Main-owned negative capture history, never identity or input authority. Keep

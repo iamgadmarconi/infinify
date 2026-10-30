@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/compositor.m at 37b27b1, moved verbatim.
 //
 // Infinify compositor — the on-screen layer: redraw gating, the drawable pool
 // and presentation statistics. See IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md

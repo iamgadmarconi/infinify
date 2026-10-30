@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // Desktop config: loading, bindings, hot keys and corners, actions, exec, stand-in keyboard, IPC and autostart.
 #import "Desktop+Private.h"
 #import "DWInputSources.h"

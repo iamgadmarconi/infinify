@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // Desktop: init/dealloc, the controller boundary (call:), the shared reply tail, status notes, scene load/save and the poll.
 #import "Desktop.h"
 #import "Desktop+Private.h"

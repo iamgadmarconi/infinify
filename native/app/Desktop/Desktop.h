@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1.
 // Infinify's desktop shell: the canvas panels, window capture, input routing and run lifecycle around the Rust controller.
 #import <AppKit/AppKit.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>

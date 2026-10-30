@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // Desktop navigation and sizing: resize and navigation coordinators, focus, camera frames, edge pan, size transactions.
 #import "Desktop+Private.h"
 #import "DWDebugTrace.h"

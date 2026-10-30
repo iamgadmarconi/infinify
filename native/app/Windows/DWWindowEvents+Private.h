@@ -8,7 +8,7 @@
 // Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
 // NSApplication exists).
 // DWWindowEvents's internal interface: the shared constants, the class extension and the category interfaces of the DWWindowEvents*.m files.
-// Split from native/app/Windows/DWWindowEvents.m (0b3f028; native/desktop/window-events.m at 37b27b1), moved verbatim.
+// Split from native/desktop/window-events.m at 37b27b1, moved verbatim.
 #import "DWWindowEvents.h"
 #include <signal.h>
 #include <errno.h>

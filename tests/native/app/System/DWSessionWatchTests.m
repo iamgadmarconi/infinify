@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Session-watch admission cases: DWSessionWatch with a private notification center and substituted public session and display queries.
-// Split from tests/native/app/Windows/DWWindowManagerTests.m (0b3f028; native/desktop/window-discovery-regression.m at 37b27b1), moved verbatim.
+// Split from native/desktop/window-discovery-regression.m at 37b27b1, moved verbatim.
 // #imported by DWWindowManagerTests.m after its fixtures (check, fixtureNow, fixtureTime); never compiled alone.
 // Startup admission uses a private notification center and substituted public
 // queries; no host session/display or NSWorkspace singleton is inspected.

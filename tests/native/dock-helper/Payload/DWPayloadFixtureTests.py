@@ -867,7 +867,7 @@ def main():
         }
         args = sys.argv[1:]
         if args and (len(args) != 1 or args[0] not in choices):
-            raise SystemExit('usage: fixture_test.py [--release-window | --native-move | --enrollment | --inspect | --startup | --client-restore | --recovery | --client-and-recovery]')
+            raise SystemExit('usage: DWPayloadFixtureTests.py [--release-window | --native-move | --enrollment | --inspect | --startup | --client-restore | --recovery | --client-and-recovery]')
         groups = choices[args[0]] if args else (frames_group, lease_group, stream_group, client_restore_group, crash_group, startup_refusal_group, inspect_group, allowlist_group, release_window_group, enrollment_group)
         for group in groups:
             group()

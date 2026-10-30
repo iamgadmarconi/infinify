@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/compositor.m at 37b27b1, moved verbatim.
 //
 // Infinify compositor — the Metal shaders (kIFCMSL) and the per-device pipelines
 // and samplers built from them. See IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md

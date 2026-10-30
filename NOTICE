@@ -37,7 +37,7 @@ block or section):
                                 passthrough, pointer_policy, render,
                                 resize_transaction, rules, settings, sizes,
                                 storage, taps, view_actions, window_actions
-  native/app/main.m            the process entry point (and the Desktop/ files
+  native/app/main.m             the process entry point (and the Desktop/ files
                                 cut from the former main.m)
   native/app/Canvas/            IFBackground.h, IFBackgroundProgram.m,
                                 IFBackground+Private.h,
@@ -66,7 +66,10 @@ block or section):
   made absolute and one re-pointed (see docs/crates/core/PORT.md); the oracle copies under
   crates/canvas/tests/upstream, crates/desktop/tests/upstream and
   crates/desktop/tests/resize_upstream are upstream excerpts, each directory
-  with a SHA256SUMS.
+  with a SHA256SUMS. Their provenance READMEs are
+  docs/crates/canvas/tests/upstream/README.md,
+  docs/crates/desktop/tests/upstream/README.md and
+  docs/crates/desktop/tests/resize_upstream/README.md.
 
 Sunlight
 --------
@@ -132,6 +135,10 @@ Each adapted file names the upstream paths it follows. Files derived from yabai:
   The SkyLight signatures checked against yabai (SLSGetWindowBounds,
   SLSMainConnectionID, SLSDisableUpdate and SLSReenableUpdate) live in
   native/app/CompositorMode/DWNativeWindowServer.m.
+  native/app/CompositorMode/DWNativePresenter.m (with its +Acknowledgement.m,
+  +Families.m, +Frames.m, +Withholding.m and +Private.h files and
+  DWNativePresenterGroup.m) cites the same commit for the two window-server
+  queries it resolves by name.
   native/app/Navigation/DWNativeFocus.m brings a window that is on another desktop forward with the
   calls and the event record of window_manager_focus_window_with_raise and
   window_manager_make_key_window (src/window_manager.c:1269-1335,
@@ -157,7 +164,7 @@ too). ISC licence, Copyright (c) 2026 joshuarli:
 
 Cantrip
 -------
-native/app/main.m and native/app/CompositorMode/DWNativeReplicaInput.m reference the
+native/app/Desktop/Router.h and Router.m and native/app/CompositorMode/DWNativeReplicaInput.m reference the
 per-window posting fields and signatures of https://github.com/ArcaneArts/Cantrip
 at commit 4da10af479701c8007074c65f9eb6a2db03c8ffc (macos/skylight.rs). No code
 is copied.

@@ -8,7 +8,7 @@
 // Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
 // NSApplication exists).
 // DWObservedApplication implementation.
-// Split from native/app/Windows/DWWindowEvents.m (0b3f028; native/desktop/window-events.m at 37b27b1), moved verbatim.
+// Split from native/desktop/window-events.m at 37b27b1, moved verbatim.
 #import "DWObservedApplication.h"
 @implementation DWObservedApplication
 - (void)dealloc { if(_element)CFRelease(_element);if(_observer)CFRelease(_observer);if(_windows)CFRelease(_windows);if(_asked)CFRelease(_asked); }

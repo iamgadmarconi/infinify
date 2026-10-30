@@ -8,7 +8,7 @@
 // Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
 // NSApplication exists).
 // DWWindowEvents core: construction, the poll, window-server notifications, coalesced delivery, stop.
-// Split from native/app/Windows/DWWindowEvents.m (0b3f028; native/desktop/window-events.m at 37b27b1), moved verbatim.
+// Split from native/desktop/window-events.m at 37b27b1, moved verbatim.
 #import "DWWindowEvents+Private.h"
 // Every Accessibility message goes through this one serial queue, a stopped instance's removals ahead of its successor's
 // registrations. yabai sends them from its event-loop thread, likewise not the thread its observers call back on.

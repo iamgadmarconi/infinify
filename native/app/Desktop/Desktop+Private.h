@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1.
 // Desktop's shell-internal interface: class extensions, the category interfaces of Desktop+*.m,
 // and the static helpers more than one Desktop/DesktopView file shares.
 #import "Desktop.h"
@@ -178,22 +179,10 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 @end
 // Desktop+Windows.m
 @interface Desktop (Windows) <DWWindowHost>
-- (void)setNativeMinimized:(NSDictionary *)effect;
-- (void)updateNativeVisibility;
-- (void)requestVisibility:(LiveSource *)source;
-- (void)observeVisibility:(DWWindowObservation *)observation source:(LiveSource *)source;
 - (void)requestWindowObservation;
-- (void)forgetNativeFamily:(LiveSource *)source;
-- (void)fillRebind:(BOOL)keep;
-- (void)attachChoice:(id)sender;
-- (void)grantAccess:(id)sender;
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world;
 - (void)detach:(LiveSource *)source;
 - (void)track:(LiveSource *)source info:(NSDictionary *)info;
-- (NSDictionary *)visibilityBinding:(LiveSource *)source;
-- (BOOL)visibilityTicketCurrent:(NSDictionary *)ticket source:(LiveSource *)source;
-- (void)closeWindow:(NSDictionary *)effect;
-- (void)refreshChoices:(id)sender;
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world placed:(BOOL)placed;
 - (void)follow:(NSDictionary *)reply;
 - (BOOL)grabbed:(LiveSource *)source;
@@ -204,6 +193,24 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)track:(LiveSource *)source;
 - (void)track:(LiveSource *)source info:(NSDictionary *)w observation:(DWWindowObservation *)observation;
 - (BOOL)destroyed:(LiveSource *)source info:(NSDictionary *)info;
+@end
+// Desktop+Visibility.m
+@interface Desktop (Visibility)
+- (void)setNativeMinimized:(NSDictionary *)effect;
+- (void)updateNativeVisibility;
+- (void)requestVisibility:(LiveSource *)source;
+- (void)observeVisibility:(DWWindowObservation *)observation source:(LiveSource *)source;
+- (void)forgetNativeFamily:(LiveSource *)source;
+- (NSDictionary *)visibilityBinding:(LiveSource *)source;
+- (BOOL)visibilityTicketCurrent:(NSDictionary *)ticket source:(LiveSource *)source;
+- (void)closeWindow:(NSDictionary *)effect;
+@end
+// Desktop+Chooser.m
+@interface Desktop (Chooser)
+- (void)fillRebind:(BOOL)keep;
+- (void)attachChoice:(id)sender;
+- (void)grantAccess:(id)sender;
+- (void)refreshChoices:(id)sender;
 @end
 // Desktop+Capture.m
 @interface Desktop (Capture)

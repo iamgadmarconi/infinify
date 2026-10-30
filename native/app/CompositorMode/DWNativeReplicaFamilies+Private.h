@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // DWNativeReplicaFamilies's internal interface: the shared helpers, the class extension and the category interfaces of the DWNativeReplicaFamilies*.m files.
-// Split from native/app/CompositorMode/DWNativeReplicaFamilies.m (0b3f028; native/desktop/native-replica-family.m at 37b27b1), moved verbatim.
+// Split from native/desktop/native-replica-family.m at 37b27b1, moved verbatim.
 #import "DWNativeReplicaFamilies.h"
 #import "DWNativeFamily.h"
 #import "DWNativePresenter.h"

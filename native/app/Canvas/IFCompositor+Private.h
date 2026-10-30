@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/compositor.m at 37b27b1.
 //
 // Infinify compositor — internal declarations shared by the compositor's
 // implementation files; not API. See IFCompositor.h and docs/native/app/Canvas/COMPOSITOR-NOTES.md

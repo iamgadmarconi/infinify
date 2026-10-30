@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // Desktop native Fill handoff and deferred native restore.
 #import "Desktop+Private.h"
 #import "DWDebugTrace.h"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1.
 // Process, window-list, pointer, screen and JSON helpers shared across the desktop shell, and the run's stop flag.
 #import <AppKit/AppKit.h>
 #import <signal.h>

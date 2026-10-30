@@ -27,8 +27,8 @@ if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
   echo 'Privileged helper requires Apple Silicon macOS 26+.' >&2; exit 1
 fi
 mkdir -p "$out"
-# Sources import each other by bare name; each helper module directory is a header search path.
-helper_includes='-Inative/dock-helper/Client -Inative/dock-helper/Daemon -Inative/dock-helper/Loader -Inative/dock-helper/Payload'
+# Sources import each other by bare name; each helper module directory is a header search path (scripts/native-includes.sh).
+. scripts/native-includes.sh
 xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra -Werror $helper_includes \
   native/dock-helper/Loader/DWDoctor.m -framework Foundation -o "$out/doctor"
 # Apple arm64e payload is for Dock. The arm64 build is for our ordinary fixture

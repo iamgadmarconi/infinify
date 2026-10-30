@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // The private SkyLight route to one process's window (per-window input router).
 #import "Router.h"
 #import <dlfcn.h>

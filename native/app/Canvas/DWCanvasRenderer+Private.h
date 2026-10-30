@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/canvas-renderer.m at 37b27b1.
 // Adapted from DriftWM, https://github.com/malbiruk/driftwm @
 // 352333a8fa1b22171492d4b71a54102045c9a19d: src/ipc/mod.rs (cmd_screenshot,
 // resolve_screenshot_region, window_visual_rect, snap_rect_to_rect, union_rect:

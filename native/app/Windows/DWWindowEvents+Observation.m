@@ -8,7 +8,7 @@
 // Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
 // NSApplication exists).
 // DWWindowEvents: the Accessibility observers - observe, list, resolve, watch, unwatch, remove and notified.
-// Split from native/app/Windows/DWWindowEvents.m (0b3f028; native/desktop/window-events.m at 37b27b1), moved verbatim.
+// Split from native/desktop/window-events.m at 37b27b1, moved verbatim.
 #import "DWWindowEvents+Private.h"
 // Signature provenance: yabai, same commit, src/misc/extern.h:8, as in DWWindowManager.m.
 typedef AXError (*GetWindow)(AXUIElementRef,uint32_t *);

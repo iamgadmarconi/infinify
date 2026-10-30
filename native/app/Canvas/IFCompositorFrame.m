@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/compositor.m at 37b27b1, moved verbatim.
 //
 // Infinify compositor — the frame description: the public value helpers, chrome
 // style, elements, lifecycle resolution and frames. See IFCompositor.h and

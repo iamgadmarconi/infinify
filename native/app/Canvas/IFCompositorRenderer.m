@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/compositor.m at 37b27b1, moved verbatim.
 //
 // Infinify compositor — the renderer: deferred release, per-element caches,
 // frame encoding, closing snapshots and offscreen export. See IFCompositor.h

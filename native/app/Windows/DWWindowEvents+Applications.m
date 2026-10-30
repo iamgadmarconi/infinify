@@ -8,7 +8,7 @@
 // Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
 // NSApplication exists).
 // DWWindowEvents: the application catalog, its scan and reads, the NSWorkspace notices.
-// Split from native/app/Windows/DWWindowEvents.m (0b3f028; native/desktop/window-events.m at 37b27b1), moved verbatim.
+// Split from native/desktop/window-events.m at 37b27b1, moved verbatim.
 #import "DWWindowEvents+Private.h"
 @implementation DWWindowEvents (Applications)
 - (DWApplicationWatch *)watchApplication:(NSRunningApplication *)running {

@@ -122,6 +122,8 @@ static AXError closePress(AXUIElementRef element,CFStringRef action) {
 #define DWWindowEvents DiscoveryEvents
 #define CACurrentMediaTime fixtureTime
 #import "DWWindowManager.m"
+#import "DWWindowManager+Discovery.m"
+#import "DWWindowCandidate.m"
 #undef AXUIElementCreateApplication
 #undef AXUIElementSetMessagingTimeout
 #undef AXUIElementGetPid
@@ -143,7 +145,7 @@ static AXError closePress(AXUIElementRef element,CFStringRef action) {
 #undef AXIsProcessTrusted
 #undef dispatch_async
 
-#import "../System/DWSessionWatchTests.m"
+#import "DWSessionWatchTests.m"
 
 BOOL DWInScope(NSDictionary *scope,pid_t pid) { return !scope||[scope[@(pid)]isEqual:@[@100,@20]]; }
 bool dw_focus_minimized(DWFocusIdentity identity,bool *minimized) { (void)identity;(void)minimized;check(NO,@"discovery-only observations do not request visibility AX reads");return false; }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // DesktopView as DriftWM's pointer-policy host (DWPointerHover.h): hover, cursor and policy presses.
 #import "Desktop+Private.h"
 #import "DesktopView.h"

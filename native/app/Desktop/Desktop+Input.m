@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Desktop input taps: the native input tap, its configuration and cancellation, lost input.
-// Split from native/app/Desktop/Desktop+Input.m (0b3f028; native/desktop/main.m at 37b27b1), moved verbatim.
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 #import "Desktop+Private.h"
 #import <unistd.h>
 #import "DWDebugTrace.h"

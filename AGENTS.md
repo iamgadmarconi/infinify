@@ -26,6 +26,8 @@ Do not commit generated build products, local scene saves, or runtime credential
 - A file that defines a class is named exactly after its primary class (`DWWindowManager.h/.m`); a category is
   `Class+Category.m`; a class's internal interface is `Class+Private.h`. A C-function-only module is
   `DW<Descriptive>.h/.m`. Prefixes: `DW` for the shell, `IF` for the compositor and background modules.
+- A translation unit that is cut into textual fragments (`#import`ed `.m` files that are never compiled alone, as in
+  `native/dock-helper/Payload`) names each fragment for its area; a fragment may define several small classes.
 - Tests mirror the layout: `tests/native/<same path as the module>/<Module>Tests.m` (`.c`, `.py`), fixture programs are
   `<What>Fixture.*`, end-to-end scripts are `tests/e2e/<name>.sh` (kebab-case, like every shell script).
 - The header search path for native compiles is defined once, in `scripts/native-includes.sh`; a new module directory or

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // Desktop capture: window streams, capture demand and recovery, screenshots and one-shot native export.
 #import "Desktop+Private.h"
 #include <stdatomic.h>

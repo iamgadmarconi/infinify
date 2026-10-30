@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Original implementation over the client library of native/dock-helper/Client (DWHelperClient.h,
 // DWHelperProtocol.h). The two window-server queries are resolved by name, with the signatures
-// native/dock-helper/Payload/DWPayload.m uses, cross-checked there against yabai
+// native/dock-helper/Payload/DWPayloadState.m uses, cross-checked there against yabai
 // dd845723416f5fe92af49fad5ebab00369e07edd (src/misc/extern.h), https://github.com/asmvik/yabai;
 // see native/app/Resources/YABAI-NOTICE.txt. Nothing here changes a window: every change is the
 // helper's, asked for through its socket.

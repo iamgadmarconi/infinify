@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Desktop native chrome buttons and titles: the AX button map, green-button admission, the session-stage title press, pick-mode motion.
-// Split from native/app/Desktop/Desktop+Input.m (0b3f028; native/desktop/main.m at 37b27b1), moved verbatim.
+// Split from native/desktop/main.m at 37b27b1, moved verbatim.
 #import "Desktop+Private.h"
 #import <unistd.h>
 #import "DWDebugTrace.h"

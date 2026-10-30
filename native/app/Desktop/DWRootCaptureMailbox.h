@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Split from native/desktop/main.m at 37b27b1.
 // The worker-to-main mailbox of one root capture stream, and the stream's crop contract.
 #import <Foundation/Foundation.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
