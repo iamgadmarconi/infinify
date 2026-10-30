@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Actual forward/restore implementation with native substitutes. This checks
-// outcomes and native-call counts, never native compositing.
+// outcomes and native-call counts, never native compositing. The transform substitutes sit below the payload's own absolute-matrix
+// functions (dwReadAbsolute, dwWriteAbsolute): a placement 0 that is natural at the window's frame, a placement 1 layer, and their
+// composition, so every transform below is written at placement 1 and read back catenated, as in production.
 #import <AppKit/AppKit.h>
 #import <libproc.h>
 #include <assert.h>
@@ -11,7 +13,10 @@ static int testProcess(int pid,int flavor,uint64_t argument,void *buffer,int siz
 #import "payload.m"
 #undef CGWindowListCopyWindowInfo
 #undef proc_pidinfo
-static CGAffineTransform transforms[2];
+// The placement 1 layer of each window; placement 0 is natural at the frame testBounds reports, [1,0,0,1,-25,-35].
+static CGAffineTransform layers[2];
+static CGAffineTransform naturalBase(void){return CGAffineTransformMake(1,0,0,1,-25,-35);}
+static CGAffineTransform effective(unsigned i){return CGAffineTransformConcat(naturalBase(),layers[i]);}
 static float alphas[2];
 static int owners[2];
 static unsigned transformSets,transformGets,alphaSets,alphaGets,identityGets;
@@ -31,8 +36,14 @@ static CFArrayRef testWindows(CGWindowListOption option,CGWindowID wid){
     return CFRetain((__bridge CFArrayRef)@[@{(id)kCGWindowNumber:@42,(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowIsOnscreen:@YES},
         @{(id)kCGWindowNumber:@43,(id)kCGWindowOwnerPID:@123,(id)kCGWindowLayer:@0,(id)kCGWindowIsOnscreen:@YES}]);
 }
-static CGError testTransformGet(int cid,uint32_t wid,CGAffineTransform *value){assert(cid==1);transformGets++;*value=transforms[indexOf(wid)];return 0;}
-static CGError testTransformSet(int cid,uint32_t wid,CGAffineTransform value){assert(cid==1);transformSets++;[events addObject:[NSString stringWithFormat:@"T%u",wid]];if(!ignoreTransform)transforms[indexOf(wid)]=value;return 0;}
+static CGError testCatenatedGet(int cid,uint32_t wid,CGAffineTransform *value){assert(cid==1);transformGets++;*value=effective(indexOf(wid));return 0;}
+static CGError testPlacementGet(int cid,uint32_t wid,int placement,void *flags,CGAffineTransform *value){
+    assert(cid==1&&!flags&&(placement==0||placement==1));*value=placement==0?naturalBase():layers[indexOf(wid)];return 0;
+}
+static CGError testPlacementSet(int cid,uint32_t wid,int placement,int flags,const CGAffineTransform *value){
+    assert(cid==1&&flags==0&&placement==1); // never placement 0: a Dock death resets what the Dock wrote there to the display's corner
+    transformSets++;[events addObject:[NSString stringWithFormat:@"T%u",wid]];if(!ignoreTransform)layers[indexOf(wid)]=*value;return 0;
+}
 static CGError testBounds(int cid,uint32_t wid,CGRect *value){assert(cid==1);indexOf(wid);*value=CGRectMake(25,35,300,200);return 0;}
 static CGError testAlphaGet(int cid,uint32_t wid,float *value){
     assert(cid==1);alphaGets++;*value=alphas[indexOf(wid)];if(replaceOnAlphaRead){replaceOnAlphaRead=NO;owners[indexOf(wid)]++;}return failAlphaRead?1000:0;
@@ -41,14 +52,15 @@ static CGError testAlphaSet(int cid,uint32_t wid,float value){assert(cid==1);alp
 static void resetState(void){
     assert(unlinkat(directoryFD,"v2-journal.json",0)==0||errno==ENOENT);
     v2Table=[NSMutableDictionary dictionary];v2Released=[NSMutableDictionary dictionary];v2JournalStale=NO;
-    for(unsigned i=0;i<2;i++){transforms[i]=CGAffineTransformMake(1,0,0,1,-25,-35);alphas[i]=1;owners[i]=7;}
+    for(unsigned i=0;i<2;i++){layers[i]=CGAffineTransformIdentity;alphas[i]=1;owners[i]=7;}
     transformSets=transformGets=alphaSets=alphaGets=identityGets=0;
     ignoreTransform=failAlphaRead=replaceOnAlphaRead=NO;
 }
 static struct dw2_record recordFor(uint32_t wid){return (struct dw2_record){.id={.pid=123,.wid=wid,.birth_sec=100,.birth_usec=20},.m={2,0,0,2,-50,-70},.flags=DW2_RECORD_HAS_ALPHA,.alpha=.5f};}
 static void assertRestored(void){
     struct dw2_restore_reply result={0};v2Restore(@"forward test",NO,nil,&result);assert(!result.pending&&!v2Table.count&&result.journal_persisted);
-    for(unsigned i=0;i<2;i++)assert(v2SameTransform(transforms[i],CGAffineTransformMake(1,0,0,1,-25,-35))&&alphas[i]==1);
+    // Natural again, with the layer exactly the identity.
+    for(unsigned i=0;i<2;i++)assert(v2SameTransform(effective(i),naturalBase())&&CGAffineTransformIsIdentity(layers[i])&&alphas[i]==1);
 }
 // Two windows an application just opened, veiled by the helper, then placed by one frame whose records carry no alpha: for each,
 // its transform reaches the window server before its original alpha does.
@@ -77,7 +89,7 @@ static void veilThenPlace(void){
     assertRestored();
 }
 int main(void){@autoreleasepool{
-    mainConnection=testConnection;getOwner=testOwner;connectionPID=testOwnerPID;getTransform=testTransformGet;setTransform=testTransformSet;
+    mainConnection=testConnection;getOwner=testOwner;connectionPID=testOwnerPID;skyGetPlacement=testPlacementGet;skySetPlacement=testPlacementSet;skyGetCatenated=testCatenatedGet;getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;
     getBounds=testBounds;getAlpha=testAlphaGet;setAlpha=testAlphaSet;fixtureOnly=NO;
     v2WriterIdentity=@{@"server_pid":@(getpid()),@"server_birth_sec":@1000,@"server_birth_usec":@0,@"server_uid":@(getuid()),@"boot_uuid":@"48359692-C6EC-4E77-8BD8-B68CF839CB16"};
     v2RetryScheduled=YES;

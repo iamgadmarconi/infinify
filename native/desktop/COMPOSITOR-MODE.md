@@ -326,6 +326,10 @@ resolution is its poll (about 0.5 ms) and the window list's 3 ms, and nothing th
   reload path (a `Dock payload reloaded; reconnecting` session) was not exercised here, and the guests' procedure (`quit-native`, `deploy`,
   `killall Dock`) does this to every window left open across it. Whether the owner's Mac does the same when the Dock restarts after
   Infinify has quit is not known.
+  *Cause and fix (a later change):* the window server resets the entries a dead connection wrote, and `SLSSetWindowTransform` is
+  placement 0, whose entry carries the window's position, so identity there is the corner. The helper now writes placement 1 (a
+  relative layer whose reset is harmless) and reads the catenated transform; `native/privileged/README.md`, "Placements", has the
+  evidence and what was not run.
 
 ## Child windows, hits and cursors in additional display views
 

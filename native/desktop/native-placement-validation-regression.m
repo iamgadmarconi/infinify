@@ -117,7 +117,8 @@ static void *validationSymbol(void *handle,const char *name) {
     if(!strcmp(name,"SLSGetWindowOwner"))return (void *)owner;
     if(!strcmp(name,"SLSConnectionGetPID"))return (void *)connectionPID;
     if(!strcmp(name,"SLSGetWindowBounds"))return (void *)bounds;
-    if(!strcmp(name,"SLSGetWindowTransform"))return (void *)transform;
+    if(!strcmp(name,"SLSGetCatenatedWindowTransform"))return (void *)transform;
+    if(!strcmp(name,"SLSGetWindowTransform"))return NULL; // placement 0 alone is not what is drawn: the reader must not use it
     if(!strcmp(name,"SLSGetScreenRectForWindow"))return (void *)screen;
     if(!strcmp(name,"SLSGetWindowAlpha"))return (void *)alpha;
     if(!strcmp(name,"SLSFindWindowAndOwner"))return (void *)hit;

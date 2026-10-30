@@ -19,8 +19,16 @@
 
 static int (*mainConnection)(void);
 static CGError (*getOwner)(int, uint32_t, int *);
+// The window transform is read and written through getTransform and setTransform, which keep the meaning every call site was written
+// for: one absolute matrix, the whole map from the screen into the window's own space ([1,0,0,1,-x,-y] for an untransformed window at
+// (x,y)). They are dwReadAbsolute and dwWriteAbsolute below, set at start; a regression replaces them with substitutes.
 static CGError (*getTransform)(int, uint32_t, CGAffineTransform *);
 static CGError (*setTransform)(int, uint32_t, CGAffineTransform);
+// The three SkyLight calls behind them, resolved at start. There is deliberately no SLSSetWindowTransform here: it is placement 0 (see
+// "Placements" in README.md), and nothing in this file writes placement 0.
+static CGError (*skyGetPlacement)(int, uint32_t, int, void *, CGAffineTransform *);
+static CGError (*skySetPlacement)(int, uint32_t, int, int, const CGAffineTransform *);
+static CGError (*skyGetCatenated)(int, uint32_t, CGAffineTransform *);
 static CGError (*getBounds)(int, uint32_t, CGRect *);
 static CGError (*getScreenRect)(int, uint32_t, CGRect *);
 // Optional alpha operations. Signatures as declared by yabai (MIT),
@@ -51,6 +59,38 @@ static BOOL finiteMatrix(CGAffineTransform t) {
     for (int i=0;i<6;i++) if (!isfinite(m[i]) || fabs(m[i]) > 1000000) return NO;
     double determinant=t.a*t.d-t.b*t.c;
     return isfinite(determinant) && fabs(determinant) >= 1e-8;
+}
+// Placements. The window server keeps a transform per window per placement, and each entry remembers the connection that last
+// wrote it: when that connection dies (the Dock, on every killall Dock, crash and restart) it resets the entry to identity.
+// SLSSetWindowTransform is placement 0, whose entry encodes the window's position ([1,0,0,1,-x,-y] when untransformed), so a Dock
+// death drew every window the helper had ever written at the top-left corner of the display until its application restarted.
+// A placement of 1 or more is a relative layer applied after placement 0, whose identity means "as placed by placement 0", so
+// the same death leaves the window where its native frame is. Everything here is therefore written at placement 1 (flags 0,
+// relative) and read back as the catenated (effective) transform. Observed on macOS 27.0.1 (26A434); not an upstream API: the
+// signatures are those the system SkyLight's disassembly shows (SLSSetWindowTransform is a tail call into
+// SLSSetWindowTransformAtPlacement(cid,wid,0,0,&t); SLSGetCatenatedWindowTransform is SLSGetWindowTransformAtPlacement(cid,wid,
+// 0x7fffff00,NULL,&t)), see README.md "Placements".
+enum { DW_BASE_PLACEMENT=0, DW_LAYER_PLACEMENT=1 };
+// The window server stores 32-bit floats and composes two layers, so an absolute matrix read back after a layered write can differ
+// from the request by a rounding or two: a few ulps of the largest translation, far below anything drawn. v2SameTransform allows this.
+#define DW_LINEAR_TOLERANCE 1e-6f
+#define DW_TRANSLATION_TOLERANCE (1.0f/256)
+// The matrix every call site means: placement 0 composed with the layer, as the window server draws it.
+static CGError dwReadAbsolute(int cid,uint32_t wid,CGAffineTransform *absolute) {
+    return skyGetCatenated(cid,wid,absolute);
+}
+// Writes the absolute matrix A by leaving placement 0 as it is (T0, read now) and setting the layer L that composes with it to A:
+// A = L after T0, so L = A after T0^-1. For a window that is where its native frame is (T0 = [1,0,0,1,-x,-y]) and A = T0 (a
+// restore of an untransformed window) L is the identity, which is written as exactly the identity. Placement 0 is never written.
+static CGError dwWriteAbsolute(int cid,uint32_t wid,CGAffineTransform absolute) {
+    CGAffineTransform base=CGAffineTransformIdentity;
+    CGError status=skyGetPlacement(cid,wid,DW_BASE_PLACEMENT,NULL,&base);
+    if(status)return status;
+    if(!finiteMatrix(base))return kCGErrorFailure;
+    CGAffineTransform layer=CGAffineTransformConcat(CGAffineTransformInvert(base),absolute);
+    if(fabs(layer.a-1)<DW_LINEAR_TOLERANCE&&fabs(layer.d-1)<DW_LINEAR_TOLERANCE&&fabs(layer.b)<DW_LINEAR_TOLERANCE&&fabs(layer.c)<DW_LINEAR_TOLERANCE
+        &&fabs(layer.tx)<DW_TRANSLATION_TOLERANCE&&fabs(layer.ty)<DW_TRANSLATION_TOLERANCE)layer=CGAffineTransformIdentity;
+    return skySetPlacement(cid,wid,DW_LAYER_PLACEMENT,0,&layer);
 }
 static NSDictionary *identity(uint32_t wid) {
     int owner=0, pid=0;
@@ -367,10 +407,15 @@ static int v2RestoreIdentityWithOwners(const struct dw2_identity *recorded,int r
 static int v2RestoreIdentity(const struct dw2_identity *recorded,int recordedOwner) {
     return v2RestoreIdentityWithOwners(recorded,recordedOwner,v2RestoreOwners());
 }
-// The window server keeps transforms as 32-bit floats, so a request is applied when
-// it reads back equal after the same rounding.
+// The window server keeps transforms as 32-bit floats, so a request is applied when it reads back equal after the same rounding,
+// give or take the rounding of composing the layer with placement 0 (DW_*_TOLERANCE above; the linear part of a plain placement 0
+// passes through exactly, so only a translation can differ, by less than 1/256 of a point).
+static BOOL v2NearFloat(double a,double b,float tolerance) {
+    float x=(float)a,y=(float)b;return x==y || fabsf(x-y)<=tolerance;
+}
 static BOOL v2SameTransform(CGAffineTransform a,CGAffineTransform b) {
-    return (float)a.a==(float)b.a && (float)a.b==(float)b.b && (float)a.c==(float)b.c && (float)a.d==(float)b.d && (float)a.tx==(float)b.tx && (float)a.ty==(float)b.ty;
+    return v2NearFloat(a.a,b.a,DW_LINEAR_TOLERANCE) && v2NearFloat(a.b,b.b,DW_LINEAR_TOLERANCE) && v2NearFloat(a.c,b.c,DW_LINEAR_TOLERANCE)
+        && v2NearFloat(a.d,b.d,DW_LINEAR_TOLERANCE) && v2NearFloat(a.tx,b.tx,DW_TRANSLATION_TOLERANCE) && v2NearFloat(a.ty,b.ty,DW_TRANSLATION_TOLERANCE);
 }
 static BOOL v2FiniteRect(CGRect r);
 // What a restore writes. A window server transform is the whole map from the screen into the window's own space, so it carries
@@ -1652,8 +1697,11 @@ static int startServer(const char *directory, const char *nonce, const uint32_t 
     void *sky=v2Sky();
     if(!sky)return -__LINE__;
     mainConnection=dlsym(sky,"SLSMainConnectionID");getOwner=dlsym(sky,"SLSGetWindowOwner");
-    getTransform=dlsym(sky,"SLSGetWindowTransform");setTransform=dlsym(sky,"SLSSetWindowTransform");getScreenRect=dlsym(sky,"SLSGetScreenRectForWindow");getBounds=dlsym(sky,"SLSGetWindowBounds");
-    if(!mainConnection||!getOwner||!getTransform||!setTransform||!getScreenRect||!getBounds)return -__LINE__;
+    skyGetPlacement=dlsym(sky,"SLSGetWindowTransformAtPlacement");skySetPlacement=dlsym(sky,"SLSSetWindowTransformAtPlacement");skyGetCatenated=dlsym(sky,"SLSGetCatenatedWindowTransform");
+    getScreenRect=dlsym(sky,"SLSGetScreenRectForWindow");getBounds=dlsym(sky,"SLSGetWindowBounds");
+    // No fallback to SLSGetWindowTransform / SLSSetWindowTransform: a placement-0 write is the Dock-death corner bug.
+    if(!mainConnection||!getOwner||!skyGetPlacement||!skySetPlacement||!skyGetCatenated||!getScreenRect||!getBounds)return -__LINE__;
+    getTransform=dwReadAbsolute;setTransform=dwWriteAbsolute;
     getAlpha=dlsym(sky,"SLSGetWindowAlpha");setAlpha=dlsym(sky,"SLSSetWindowAlpha");connectionPID=dlsym(sky,"SLSConnectionGetPID");
     v2RegisterNotify=dlsym(sky,"SLSRegisterConnectionNotifyProc");
     copyWindowSpaces=dlsym(sky,"SLSCopySpacesForWindows");copySpaceDisplay=dlsym(sky,"SLSCopyManagedDisplayForSpace");

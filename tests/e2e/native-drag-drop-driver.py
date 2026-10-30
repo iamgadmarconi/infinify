@@ -55,8 +55,8 @@ sky.SLSGetScreenRectForWindow.argtypes = [C.c_int, C.c_uint32, C.POINTER(Rect)]
 sky.SLSGetScreenRectForWindow.restype = C.c_int
 sky.SLSGetWindowBounds.argtypes = [C.c_int, C.c_uint32, C.POINTER(Rect)]
 sky.SLSGetWindowBounds.restype = C.c_int
-sky.SLSGetWindowTransform.argtypes = [C.c_int, C.c_uint32, C.POINTER(Affine)]
-sky.SLSGetWindowTransform.restype = C.c_int
+sky.SLSGetCatenatedWindowTransform.argtypes = [C.c_int, C.c_uint32, C.POINTER(Affine)]
+sky.SLSGetCatenatedWindowTransform.restype = C.c_int
 sky.SLSGetWindowOwner.argtypes = [C.c_int, C.c_uint32, C.POINTER(C.c_int)]
 sky.SLSGetWindowOwner.restype = C.c_int
 sky.SLSConnectionGetPID.argtypes = [C.c_int, C.POINTER(C.c_int)]
@@ -206,7 +206,7 @@ def independent_snapshot(wid):
     transform = Affine()
     bounds = Rect()
     screen = Rect()
-    check(sky.SLSGetWindowTransform(connection, wid, C.byref(transform)) == 0, f'WindowServer transform read for {wid}')
+    check(sky.SLSGetCatenatedWindowTransform(connection, wid, C.byref(transform)) == 0, f'WindowServer transform read for {wid}')
     check(sky.SLSGetWindowBounds(connection, wid, C.byref(bounds)) == 0, f'WindowServer own bounds read for {wid}')
     check(sky.SLSGetScreenRectForWindow(connection, wid, C.byref(screen)) == 0, f'WindowServer screen rect read for {wid}')
     row = next((row for row in window_rows(0) if row['wid'] == wid), None)

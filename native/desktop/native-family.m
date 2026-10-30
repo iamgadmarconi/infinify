@@ -42,9 +42,10 @@ NSDictionary *DWNativeWindowDiscoveryBasis(NSDictionary *identity){
     if([before[(id)kCGWindowOwnerPID]intValue]!=pid)return discoveryBasisRefused(pid,wid,"pid_mismatch_before");
     if(![before[(id)kCGWindowIsOnscreen]boolValue])return discoveryBasisRefused(pid,wid,"offscreen_before");
     // Getter ABI: yabai dd845723416f5fe92af49fad5ebab00369e07edd,
-    // src/osax/payload.m:54,606; native/privileged/payload.m loads the same getter.
+    // src/osax/payload.m:54,606 (SLSGetWindowTransform, same signature). The effective transform is SLSGetCatenatedWindowTransform: the helper
+    // writes placement 1 (native/privileged/README.md, "Placements"), which SLSGetWindowTransform (placement 0) does not show.
     static int (*connection)(void);static CGError (*transform)(int,uint32_t,CGAffineTransform *);static dispatch_once_t once;
-    dispatch_once(&once,^{void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW|RTLD_LOCAL);if(!sky)return;connection=dlsym(sky,"SLSMainConnectionID");transform=dlsym(sky,"SLSGetWindowTransform");});
+    dispatch_once(&once,^{void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW|RTLD_LOCAL);if(!sky)return;connection=dlsym(sky,"SLSMainConnectionID");transform=dlsym(sky,"SLSGetCatenatedWindowTransform");});
     CGRect bounds=CGRectZero,afterBounds=CGRectZero;CGAffineTransform matrix=CGAffineTransformIdentity;
     if(!connection||!transform)return discoveryBasisRefused(pid,wid,"getter_unavailable");
     if(!DWNativeBounds(wid,&bounds))return discoveryBasisRefused(pid,wid,"bounds_before");

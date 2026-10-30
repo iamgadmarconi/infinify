@@ -49,8 +49,8 @@ sky = C.CDLL('/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight')
 sky.SLSMainConnectionID.restype = C.c_int
 sky.SLSGetScreenRectForWindow.argtypes = [C.c_int, C.c_uint32, C.POINTER(Rect)]
 sky.SLSGetScreenRectForWindow.restype = C.c_int
-sky.SLSGetWindowTransform.argtypes = [C.c_int, C.c_uint32, C.POINTER(Transform)]
-sky.SLSGetWindowTransform.restype = C.c_int
+sky.SLSGetCatenatedWindowTransform.argtypes = [C.c_int, C.c_uint32, C.POINTER(Transform)]
+sky.SLSGetCatenatedWindowTransform.restype = C.c_int
 cg = C.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
 cf = C.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
 cg.CGWindowListCopyWindowInfo.argtypes = [C.c_uint32, C.c_uint32]; cg.CGWindowListCopyWindowInfo.restype = C.c_void_p
@@ -122,7 +122,7 @@ def alpha(wid):
 def transform(wid):
     """The actual transform, read over this test's independent server connection."""
     value = Transform()
-    assert sky.SLSGetWindowTransform(sky.SLSMainConnectionID(), wid, C.byref(value)) == 0
+    assert sky.SLSGetCatenatedWindowTransform(sky.SLSMainConnectionID(), wid, C.byref(value)) == 0
     return [getattr(value, name) for name, _ in Transform._fields_]
 
 def near(seen, target, tolerance=1.0):

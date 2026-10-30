@@ -158,7 +158,7 @@ class Rect(C.Structure): _fields_ = [('origin', Point), ('size', Size)]
 class Affine(C.Structure): _fields_ = [(k, C.c_double) for k in ('a', 'b', 'c', 'd', 'tx', 'ty')]
 sky = C.CDLL('/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight')
 sky.SLSMainConnectionID.restype = C.c_int
-sky.SLSGetWindowTransform.argtypes = [C.c_int, C.c_uint32, C.POINTER(Affine)]; sky.SLSGetWindowTransform.restype = C.c_int
+sky.SLSGetCatenatedWindowTransform.argtypes = [C.c_int, C.c_uint32, C.POINTER(Affine)]; sky.SLSGetCatenatedWindowTransform.restype = C.c_int
 for name in ('SLSGetScreenRectForWindow', 'SLSGetWindowBounds'):
     getattr(sky, name).argtypes = [C.c_int, C.c_uint32, C.POINTER(Rect)]; getattr(sky, name).restype = C.c_int
 cg = C.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
@@ -204,8 +204,8 @@ def alpha(wid):
         if row['wid'] == wid: return row['alpha']
     fail(f'window {wid} in the window list', 'not listed')
 def transform(wid):
-    affine = Affine(); status = sky.SLSGetWindowTransform(sky.SLSMainConnectionID(), wid, C.byref(affine))
-    if status: fail(f'SLSGetWindowTransform({wid})', status)
+    affine = Affine(); status = sky.SLSGetCatenatedWindowTransform(sky.SLSMainConnectionID(), wid, C.byref(affine))
+    if status: fail(f'SLSGetCatenatedWindowTransform({wid})', status)
     return [getattr(affine, k) for k, _ in Affine._fields_]
 def original(wid): return {'transform': transform(wid), 'alpha': alpha(wid)}
 def displays():

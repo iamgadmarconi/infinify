@@ -84,7 +84,7 @@ static void watch(double total,double every,const char *label){
 }
 int main(int argc,char **argv){
   void *h=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW);
-  if(h){mainConn=dlsym(h,"SLSMainConnectionID");sbounds=dlsym(h,"SLSGetWindowBounds");sxform=dlsym(h,"SLSGetWindowTransform");sscreen=dlsym(h,"SLSGetScreenRectForWindow");salpha=dlsym(h,"SLSGetWindowAlpha");}
+  if(h){mainConn=dlsym(h,"SLSMainConnectionID");sbounds=dlsym(h,"SLSGetWindowBounds");sxform=dlsym(h,"SLSGetCatenatedWindowTransform");sscreen=dlsym(h,"SLSGetScreenRectForWindow");salpha=dlsym(h,"SLSGetWindowAlpha");}
   t0=now();
   int i=1;
   for(;i<argc;i++){

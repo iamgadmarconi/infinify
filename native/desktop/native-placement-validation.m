@@ -34,7 +34,8 @@ static BOOL DWPlacementLoadAPI(void) {
         placementReadAPI.owner=dlsym(handle,"SLSGetWindowOwner");
         placementReadAPI.connectionPID=dlsym(handle,"SLSConnectionGetPID");
         placementReadAPI.bounds=dlsym(handle,"SLSGetWindowBounds");
-        placementReadAPI.transform=dlsym(handle,"SLSGetWindowTransform");
+        // The effective (catenated) transform, which is what is drawn: the helper writes placement 1, not placement 0 (native/privileged/README.md, "Placements").
+        placementReadAPI.transform=dlsym(handle,"SLSGetCatenatedWindowTransform");
         placementReadAPI.screen=dlsym(handle,"SLSGetScreenRectForWindow");
         placementReadAPI.alpha=dlsym(handle,"SLSGetWindowAlpha");
         placementReadAPI.hit=dlsym(handle,"SLSFindWindowAndOwner");

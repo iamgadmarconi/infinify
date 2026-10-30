@@ -608,8 +608,8 @@ before setting it. Persistence uses exclusive no-follow mode-0600
 blocks unjournaled mutation and leaves `journal_pending=1` until a durable retry.
 
 Restoration re-resolves the exact identity, owner, UID and scope, sets the captured
-original transform (re-based on the native origin read at the write, below) and alpha, and requires exact float
-readback. A real cross-display
+original transform (re-based on the native origin read at the write, below; written at placement 1, see "Placements") and alpha,
+and requires a readback equal after float rounding (a translation within 1/256 of a point, `v2SameTransform`). A real cross-display
 quit exposed late AppKit reflow after an immediate successful readback. Entries
 with a Space obligation remain pending for at least two seconds from the
 start of restoration and until native bounds, original membership and exact
@@ -679,6 +679,79 @@ originals, unreadable origin, a move between write and read, crash recovery, rea
 
 The owned-fixture native evidence is `fixture_test.py --native-move` (opt-in, needs Accessibility for the test process).
 The whole-desktop evidence is in the shell's README section "Restore after a native-origin move".
+
+## Placements: why transforms are written at placement 1
+
+Established on the disposable guest vm1 (macOS 27.0.1 26A434, SIP off) on 2026-10-30; nothing here was run on another build or on
+the owner's Mac. The problem and the placement semantics below are what the investigation measured (probe payloads loaded into the
+Dock; its notes are not in this repository); "What the guest showed" is this change's own run.
+
+**The problem.** After `quit-native` had restored every window correctly, `killall Dock` drew every window the helper had ever
+written at the top-left corner of the display (`SLSGetWindowTransform` = `[1,0,0,1,0,0]`, `SLSGetWindowBounds` still the native
+origin) until its application was restarted, and the next helper session took that state as the window's original. The window
+server keeps one transform entry per window **per placement**; each entry remembers the connection that last wrote it, and when
+that connection dies (here the Dock: `killall`, `kill -9` and `abort()` behaved alike) the window server resets its entries to
+identity. `SLSSetWindowTransform` is placement 0 (its disassembly is a tail call into
+`SLSSetWindowTransformAtPlacement(cid, wid, 0, 0, &t)`), and the placement-0 entry encodes the window's position: untransformed it
+reads `[1,0,0,1,-x,-y]`, so identity there means "drawn at (0,0)". No repair from outside the Dock's connection restored such a
+window (Accessibility position and size writes, the application's own `setFrame`, hide/unhide, minimize, fullscreen, `AXRaise`,
+`SLSMoveWindow`, `SLSTransactionResetWindow`, `SLSResetWindows`, a window-server drag, Mission Control, screen lock); only a
+placement-0 write from a Dock connection did, and that claims the entry again for the next death. A second connection's
+placement-0 write was silently ignored (status 0, no effect).
+
+**What is written instead.** A placement of 1 or more is a layer applied after placement 0 whose identity means "as placement 0
+has it". A reset layer is therefore harmless: the window is where its native frame is. Every helper write is now
+`SLSSetWindowTransformAtPlacement(cid, wid, 1, 0, &layer)` (flags 0, relative) and every read is
+`SLSGetCatenatedWindowTransform` (the disassembly: `SLSGetWindowTransformAtPlacement` with placement `0x7fffff00`), the effective
+matrix. `payload.m` keeps its call sites' meaning, an absolute matrix (the whole map from the screen into the window's space), in
+two functions, `dwReadAbsolute` and `dwWriteAbsolute`, which `getTransform` and `setTransform` point to:
+
+- `dwWriteAbsolute(A)` reads placement 0 (`T0`, which follows the native frame) and writes the layer `L = A after T0^-1`
+  (`CGAffineTransformConcat(CGAffineTransformInvert(T0), A)`; for a plain `T0 = [1,0,0,1,-x,-y]` this is `A.t - M*T0.t`, linear
+  part unchanged). A layer within 1/256 pt of the identity is written as exactly the identity, so a natural window's restore writes
+  `identity` at placement 1. Placement 0 is never written; `SLSSetWindowTransform` is not even resolved, and a missing
+  placement symbol refuses the helper's start rather than falling back to it.
+- `dwReadAbsolute` is the catenated read. The window server composes the layers in float, so a request read back after a layered
+  write can differ by a rounding: `v2SameTransform` (every readback check, the repeated-frame skip, reattachment and the Space
+  settlement) accepts a translation within 1/256 pt and a linear part within 1e-6.
+- Originals, the journal (schema 3, unchanged), the re-base of a restore on the native origin, recovery replay and the retained
+  original are all in absolute terms and are unchanged; they are now natural placement-0 values for a window nobody had touched.
+  There is no optional transaction or list-batch transform path in the tree (`SLSTransactionSetWindowTransform`,
+  `SLSSetWindowTransforms` are not used), so none had to be moved.
+
+**What the guest showed** (real TextEdit, Safari and Finder windows, build of this change, read from an ordinary process with
+`SLSGetWindowTransformAtPlacement` for placements 0 and 1, `SLSGetCatenatedWindowTransform`, `SLSGetWindowBounds` and
+`SLSGetScreenRectForWindow`):
+
+- Session at zoom 0.5: the five placed windows read placement 0 = `[1,0,0,1,-x,-y]` (unchanged), placement 1 = `[2,0,0,2,..]`, and
+  catenated equal to placement 0 composed with placement 1 on every one of them (the order assumed above; only a translation-only
+  placement 0 was observed). After `quit-native`: placement 1 identity and catenated `[1,0,0,1,-x,-y]` on all eight windows
+  (five placed, three untouched). Then `killall Dock` with Infinify not running: all eight unchanged, and the screenshot shows
+  the windows where they were. (The investigation measured the unchanged build leaving three such windows at `[1,0,0,1,0,0]`
+  after that step.)
+- `killall Dock` during a session: six reads, the first about 1.5 s after the kill and then every 1.5 s, all show the three polled
+  windows natural (placement 1 identity, catenated `[1,0,0,1,-x,-y]`, drawn at their native rectangle), not at the corner; an
+  earlier read was not taken. Infinify reported "native presentation lost (no heartbeat
+  was answered for a whole lease)" and was left waiting for a helper; the guest has no launch daemon, so nothing reloaded the
+  payload. After `quit-native` and a manual `run-native` the same windows were placed again with the same layers.
+- Ordinary acceptance points in that session: a new TextEdit window read `alpha=0.00` from its first on-screen sample (bounds
+  set, 51.7 ms after the first sample) and `alpha=1.00` only at 199.8 ms, when it was already drawn at the placed rectangle
+  (the 3 ms poll of `kCGWindowListOptionAll`; before that sample its bounds were 0x0 and it was off screen); a real HID title drag of
+  (-300,+150) moved a window's drawn rectangle from (881,518) to (581,668), exactly that; a real right click opened the context
+  menu at the drawn window (native frame (615,433), drawn at (728,797) for a click at (728,800)); real clicks on two drawn
+  windows focused them in turn (TextEdit's front window and Infinify's focus both followed); `quit-native` put every window back to natural.
+- `native/privileged/fixture_test.py` (51 cases) and `--native-move` pass on the guest; the cooperative host (an ordinary process
+  writing its own windows) writes placement 1 as well.
+
+**Not established.** Windows already broken by an earlier build (placement 0 = identity) are drawn natural by a session of this
+build (the layer carries the difference) and restored to natural, but that is only modelled (`restore_identity_test.m`,
+`placementCases`), not run on the guest, and they return to the corner at the next Dock death: only the application's restart fixes
+them. Whether the composition order holds for a placement 0 that is not a translation was not observed. While a new window
+animates open (TextEdit, the first ~250 ms) the catenated read differs from placement 0 composed with placement 1 (both identity or
+natural): some further placement, the application's or the window server's, contributes. A frame in that interval would read back
+as not applied and be repeated (not observed in the helper's counters); the window was at alpha 0 through most of it in the poll above. Other writers of placement 1 (Mission Control, Stage Manager, tiling animations) were not looked for:
+placement 1 read identity on every window at rest. The in-app Dock reload path and the launch daemon, a second display, Spaces and
+the owner's Mac were not exercised for this change.
 
 ## Focused fixture validation
 
