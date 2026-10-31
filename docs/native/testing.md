@@ -20,7 +20,7 @@ Run the regression a change touches, not the whole set. The scripts build what t
 | `tests/e2e/native-daemon.sh` | The launch daemon's and the Dock reloader's decisions |
 | `tests/e2e/native-display-space-cache.sh`, `tests/e2e/native-placement-validation.sh`, `tests/e2e/native-presenter-readiness.sh`, `tests/e2e/native-view-transfer.sh`, `tests/e2e/native-family-recovery.sh`, `tests/e2e/root-capture-mailbox.sh` | The presenter and its verifiers with substituted reads: display queries, placement validation, ACK readiness, view transfer, family recovery, the capture mailbox |
 | `tests/e2e/native-focus.sh`, `tests/e2e/native-frame-restore.sh` | The shipped focus adapter's refusals through its C ABI, and the resize adapter's frame regression |
-| `tests/e2e/native-decorations.sh` | The title-region classifier over Accessibility shapes recorded in the guest (Chrome tab strip, TextEdit, Finder), AX calls substituted |
+| `tests/e2e/native-decorations.sh` | The title-region classifier over Accessibility shapes recorded in the guest (Chrome tab strip, Chrome with vertical tabs, TextEdit, Finder) and Aside's tab-sidebar window as dumped on its owner's Mac, AX calls substituted (179 checks) |
 | `tests/e2e/native-input-policy.sh` | The adapter's packet policy, including the native-drag takeover |
 | `tests/e2e/native-launcher.sh` | The bundled launcher's modes against a signed stand-in bundle built from `tests/native/dock-helper/Loader/NativeLauncherFixture.c` (it skips itself where an Infinify process is running) |
 | `tests/e2e/privileged-regression.sh` | The Dock helper payload and its C client |

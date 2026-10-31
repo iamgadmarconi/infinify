@@ -95,7 +95,8 @@ DriftWM is a compositor: it is the session, not an app one launches. A normal ru
     zooms the *native* frame, which the canvas does not draw. On a window whose
     own title bar the canvas does not recognise (an Electron window with a
     hidden title bar, for one: `native title cache … reason=missing_top_toolbar`;
-    Chromium's tab strip is recognised since the caption audit, see
+    Chromium's tab strip, and the top row of its vertical tab sidebar
+    layout, are recognised since the caption audit, see
     NATIVE-DRAG-ROUTING.md) the click goes to
     the application and the native frame jumps to the display while the drawn
     copy stays where it is, then is adopted: the owner's "double-clicking the

@@ -142,7 +142,9 @@ static CGRect decorationGroupExtent(AXUIElementRef item,CGRect frame,uint32_t wi
 // Only elements that start above the traffic lights' bottom are walked; the toolbar and the web content start below it and are only
 // measured, and anything measured that reaches into the row rejects the audit. Web content, a toolbar or a scroll area inside the row,
 // several tab groups, an unreadable or foreign element, or an exhausted budget keeps the window's rejection exactly as before.
-typedef struct{CGRect own,lights;uint32_t wid;AXError(*getWindow)(AXUIElementRef,uint32_t *);CFTimeInterval deadline;int budget;NSMutableArray *controls,*below;NSUInteger tabGroups;CGRect tabGroup;}DecorationCaption;
+// vertical: the second pass for Chromium's vertical tab strip (see decorationVerticalCaption). It lets one AXToolbar into the row (its items become
+// controls, whole) and walks into the one AXTabGroup instead of taking it whole; sidebar keeps that group's element (retained) for the later audit.
+typedef struct{CGRect own,lights;uint32_t wid;AXError(*getWindow)(AXUIElementRef,uint32_t *);CFTimeInterval deadline;int budget;NSMutableArray *controls,*below;NSUInteger tabGroups,toolbars;CGRect tabGroup,toolbar;BOOL vertical;AXUIElementRef sidebar;}DecorationCaption;
 static NSString *decorationCaptionWalk(AXUIElementRef element,int depth,DecorationCaption *c){
     if(--c->budget<0)return @"caption_node_budget";if(CACurrentMediaTime()>=c->deadline)return @"caption_deadline";if(depth>8)return @"caption_depth";
     uint32_t window=0;CGRect frame;
@@ -150,10 +152,29 @@ static NSString *decorationCaptionWalk(AXUIElementRef element,int depth,Decorati
     if(frame.size.width<=0||frame.size.height<=0)return nil;
     if(CGRectGetMinY(frame)>=CGRectGetMaxY(c->lights)){[c->below addObject:DWRectJSON(frame)];return nil;}
     id role=decorationAttribute(element,kAXRoleAttribute,NULL);if(![role isKindOfClass:NSString.class])return @"caption_role";
-    if([role isEqual:@"AXWebArea"]||[role isEqual:(__bridge NSString *)kAXScrollAreaRole]||[role isEqual:(__bridge NSString *)kAXToolbarRole]
+    BOOL toolbar=[role isEqual:(__bridge NSString *)kAXToolbarRole];
+    if([role isEqual:@"AXWebArea"]||[role isEqual:(__bridge NSString *)kAXScrollAreaRole]||(toolbar&&!c->vertical)
         ||[role isEqual:(__bridge NSString *)kAXSplitGroupRole]||[role isEqual:(__bridge NSString *)kAXTextAreaRole])return @"caption_content_or_toolbar_in_row";
-    if([role isEqual:(__bridge NSString *)kAXTabGroupRole]){if(c->tabGroups++)return @"caption_multiple_tab_groups";c->tabGroup=frame;[c->controls addObject:DWRectJSON(frame)];return nil;}
-    if(![role isEqual:(__bridge NSString *)kAXGroupRole]){[c->controls addObject:DWRectJSON(frame)];return nil;}
+    if(toolbar){
+        // Chromium's toolbar item is native over its whole rectangle, never by the extent of its children: the omnibox group's padding (a press 2 points
+        // inside its left edge, measured on Chrome 156) is the omnibox's, so decorationGroupExtent is not used here.
+        if(c->toolbars++)return @"caption_multiple_toolbars";c->toolbar=frame;
+        id items=decorationAttribute(element,kAXChildrenAttribute,NULL);
+        if(![items isKindOfClass:NSArray.class]||![items count]||[items count]>64)return @"caption_toolbar_items";
+        for(id value in items){
+            if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID()||--c->budget<0||CACurrentMediaTime()>=c->deadline)return @"caption_toolbar_items";
+            AXUIElementRef item=(__bridge AXUIElementRef)value;CGRect itemFrame;uint32_t itemWindow=0;
+            if(AXUIElementSetMessagingTimeout(item,.02)||c->getWindow(item,&itemWindow)||itemWindow!=c->wid||!decorationFrameRead(item,&itemFrame,YES)
+                ||!CGRectContainsRect(CGRectInset(frame,-1,-1),itemFrame))return @"caption_toolbar_item_geometry";
+            if(itemFrame.size.width>0&&itemFrame.size.height>0)[c->controls addObject:DWRectJSON(itemFrame)];
+        }
+        return nil;
+    }
+    if([role isEqual:(__bridge NSString *)kAXTabGroupRole]){
+        if(c->tabGroups++)return @"caption_multiple_tab_groups";c->tabGroup=frame;
+        if(!c->vertical){[c->controls addObject:DWRectJSON(frame)];return nil;}
+        if(!c->sidebar)c->sidebar=(AXUIElementRef)CFRetain(element);
+    }else if(![role isEqual:(__bridge NSString *)kAXGroupRole]){[c->controls addObject:DWRectJSON(frame)];return nil;}
     id children=decorationAttribute(element,kAXChildrenAttribute,NULL);
     if(children&&![children isKindOfClass:NSArray.class])return @"caption_children";
     if([children count]>64)return @"caption_children_unbounded";
@@ -171,12 +192,135 @@ static NSString *decorationCaptionWalk(AXUIElementRef element,int depth,Decorati
     }
     return nil;
 }
+// Chromium's vertical tab strip (Chrome 156 "Show Tabs Vertically"; Aside's tab sidebar is the same toolkit and the same tree shape) moves the
+// tabs into a sidebar on the window's left, full height, with the traffic lights in its top. The AXToolbar is then in the top row, to the
+// right of it, which the horizontal rule rejects. Measured on Chrome 156 with Infinify not running (native frame moved by a real HID drag;
+// docs/native/app/CompositorMode/NATIVE-DRAG-ROUTING.md): everything in the row from the window's top to the toolbar's bottom drags the window
+// except the controls (the toolbar items over their whole rectangles, the sidebar header's buttons, the lights) and two strips of the
+// sidebar, its left margin and, right of the header, the resize handle's 10 points (the handle's own AXSlider frame is the last 5 of them).
+// Below the row only the empty space under the tabs and the New Tab button drags; the gap between two tabs does not (Chrome hit-tests it as a
+// tab and a drag from it moves the tab). The row is the region; that empty space is one additional region, taken only from the one container
+// group whose frame is measured to be it, and dropped, never guessed, when the tree is any other shape or the budget runs out.
+enum{DecorationBandIgnore,DecorationBandControl,DecorationBandMixed,DecorationBandControlsOnly};
+typedef struct{uint32_t wid;AXError(*getWindow)(AXUIElementRef,uint32_t *);CFTimeInterval deadline;int budget;CGFloat rowBottom;NSMutableArray *candidates,*obstacles;BOOL failed;}DecorationBand;
+static BOOL decorationProbe(AXUIElementRef element,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CGRect *frame,NSString **role){
+    uint32_t window=0;if(AXUIElementSetMessagingTimeout(element,.02)||getWindow(element,&window)||window!=wid||!decorationFrameRead(element,frame,YES))return NO;
+    id value=decorationAttribute(element,kAXRoleAttribute,NULL);if(![value isKindOfClass:NSString.class])return NO;*role=value;return YES;
+}
+// Kinds: a control (any role but group and scroll area, or a leaf group with an action), a group of only controls (a candidate), anything else.
+// Scroll areas are never entered: the tabs live there, and a window with many of them must fall back, not be walked node by node.
+static int decorationBandWalk(AXUIElementRef element,int depth,CGRect parent,DecorationBand *b){
+    if(b->failed)return DecorationBandIgnore;
+    if(--b->budget<0||CACurrentMediaTime()>=b->deadline||depth>4){b->failed=YES;return DecorationBandIgnore;}
+    CGRect frame;NSString *role;if(!decorationProbe(element,b->wid,b->getWindow,&frame,&role)){b->failed=YES;return DecorationBandIgnore;}
+    if(frame.size.width<=0||frame.size.height<=0||CGRectGetMaxY(frame)<=b->rowBottom+1)return DecorationBandIgnore;
+    NSDictionary *entry=@{@"frame":DWRectJSON(frame),@"parent":DWRectJSON(parent)};
+    if([role isEqual:(__bridge NSString *)kAXScrollAreaRole]){[b->obstacles addObject:entry];return DecorationBandMixed;}
+    if(![role isEqual:(__bridge NSString *)kAXGroupRole]){[b->obstacles addObject:entry];return DecorationBandControl;}
+    id children=decorationAttribute(element,kAXChildrenAttribute,NULL);
+    if((children&&![children isKindOfClass:NSArray.class])||[children count]>64){b->failed=YES;return DecorationBandIgnore;}
+    if(![children count]){
+        CFArrayRef names=NULL;if(AXUIElementCopyActionNames(element,&names)||!names){b->failed=YES;return DecorationBandIgnore;}
+        NSArray *actions=CFBridgingRelease(names);
+        for(NSString *name in @[(__bridge NSString *)kAXPressAction,(__bridge NSString *)kAXPickAction,(__bridge NSString *)kAXConfirmAction,(__bridge NSString *)kAXIncrementAction,(__bridge NSString *)kAXDecrementAction])
+            if([actions containsObject:name]){[b->obstacles addObject:entry];return DecorationBandControl;}
+        return DecorationBandIgnore;
+    }
+    NSUInteger controls=0;BOOL mixed=NO;
+    for(id value in children){
+        if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID()){b->failed=YES;return DecorationBandIgnore;}
+        int kind=decorationBandWalk((__bridge AXUIElementRef)value,depth+1,frame,b);
+        if(kind==DecorationBandControl)controls++;else if(kind!=DecorationBandIgnore)mixed=YES;
+    }
+    if(mixed)return DecorationBandMixed;if(!controls)return DecorationBandIgnore;
+    [b->candidates addObject:DWRectJSON(frame)];return DecorationBandControlsOnly;
+}
+// The empty space under the tabs: the one group of controls only (the New Tab button) that spans the header's width and ends within 16 points of
+// the sidebar's bottom (12 measured), minus its controls. nil for every other tree, and when a control or a scroll area lies over it.
+static NSDictionary *decorationSidebarBand(AXUIElementRef sidebar,CGRect frame,CGRect inner,CGFloat rowBottom,CGRect own,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline){
+    id children=decorationAttribute(sidebar,kAXChildrenAttribute,NULL);if(![children isKindOfClass:NSArray.class]||[children count]>64)return nil;
+    DecorationBand b={.wid=wid,.getWindow=getWindow,.deadline=deadline,.budget=48,.rowBottom=rowBottom,.candidates=[NSMutableArray array],.obstacles=[NSMutableArray array]};
+    for(id value in children){if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return nil;decorationBandWalk((__bridge AXUIElementRef)value,1,frame,&b);}
+    if(b.failed)return nil;
+    CGRect found=CGRectNull;
+    for(NSDictionary *value in b.candidates){
+        CGRect g=DWRectFromJSON(value);
+        if(fabs(CGRectGetMinX(g)-CGRectGetMinX(inner))>1.5||fabs(CGRectGetMaxX(g)-CGRectGetMaxX(inner))>1.5||CGRectGetMinY(g)<rowBottom-1
+            ||CGRectGetMaxY(g)>CGRectGetMaxY(frame)+1||CGRectGetMaxY(g)<CGRectGetMaxY(frame)-16)continue;
+        if(!CGRectIsNull(found))return nil;found=g;
+    }
+    if(CGRectIsNull(found))return nil;
+    NSMutableArray *excluded=[NSMutableArray array];
+    for(NSDictionary *obstacle in b.obstacles){
+        CGRect o=DWRectFromJSON(obstacle[@"frame"]);BOOL own_=CGRectEqualToRect(DWRectFromJSON(obstacle[@"parent"]),found);
+        if(own_){[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(o,-1,-1),own))];continue;}
+        if(!CGRectIsNull(CGRectIntersection(o,found))&&CGRectIntersection(o,found).size.width>0&&CGRectIntersection(o,found).size.height>0)return nil;
+    }
+    return @{@"region":DWRectJSON(decorationLocal(found,own)),@"excluded":excluded};
+}
+// Builds the vertical caption from a walk that found exactly one toolbar and one tab group. The reasons are its own (vcaption_*); every shape that
+// does not have the sidebar on the window's left, full height, the lights inside it and the toolbar to its right up to the window's right edge is
+// rejected and keeps the horizontal rule's reason.
+static NSDictionary *decorationVerticalBuild(DecorationCaption *c,CGRect own,CGRect lights,NSMutableArray *excluded,NSString **why){
+    CGRect side=c->tabGroup,bar=c->toolbar;CGFloat rowBottom=CGRectGetMaxY(bar);
+    if(fabs(CGRectGetMinX(side)-CGRectGetMinX(own))>1||fabs(CGRectGetMinY(side)-CGRectGetMinY(own))>1||CGRectGetMaxY(side)<CGRectGetMaxY(own)-1||!CGRectContainsRect(CGRectInset(own,-1,-1),side)
+        ||side.size.width>own.size.width/2){*why=@"vcaption_sidebar_geometry";return nil;}
+    if(fabs(CGRectGetMinY(bar)-CGRectGetMinY(own))>1||CGRectGetMinX(bar)<CGRectGetMaxX(side)-1||CGRectGetMaxX(bar)<CGRectGetMaxX(own)-1||CGRectGetMaxX(bar)>CGRectGetMaxX(own)+1
+        ||rowBottom<CGRectGetMaxY(lights)-1||rowBottom>=CGRectGetMaxY(own)-1){*why=@"vcaption_toolbar_geometry";return nil;}
+    if(!CGRectContainsRect(CGRectInset(side,-1,-1),lights)||CGRectGetMinY(lights)<CGRectGetMinY(own)-1){*why=@"vcaption_lights_outside_sidebar";return nil;}
+    // Whatever starts just above the toolbar's bottom (Aside's 3 point separator group starts 2 above it) cuts the region there; anything higher is a control.
+    CGFloat bottom=rowBottom;
+    for(NSDictionary *value in c->below){CGFloat top=CGRectGetMinY(DWRectFromJSON(value));
+        if(top<rowBottom-4){*why=@"caption_control_below_lights";return nil;}if(top<rowBottom-1.5)bottom=fmin(bottom,top);}
+    // The sidebar's header: the one group on its top row. Its width is the strip's inner width; the margins at its sides are the sidebar's own.
+    id children=decorationAttribute(c->sidebar,kAXChildrenAttribute,NULL);
+    if(![children isKindOfClass:NSArray.class]||[children count]>64){*why=@"vcaption_sidebar_children";return nil;}
+    CGRect header=CGRectNull;
+    for(id value in children){
+        if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID()||CACurrentMediaTime()>=c->deadline){*why=@"vcaption_sidebar_children";return nil;}
+        CGRect frame;NSString *role;if(!decorationProbe((__bridge AXUIElementRef)value,c->wid,c->getWindow,&frame,&role)){*why=@"vcaption_sidebar_children";return nil;}
+        if(![role isEqual:(__bridge NSString *)kAXGroupRole]||frame.size.width<=0||fabs(CGRectGetMinY(frame)-CGRectGetMinY(side))>1||fabs(CGRectGetMaxY(frame)-rowBottom)>2
+            ||CGRectGetMinX(frame)<CGRectGetMinX(side)-1||CGRectGetMaxX(frame)>CGRectGetMaxX(side)+1)continue;
+        if(!CGRectIsNull(header)){*why=@"vcaption_sidebar_header";return nil;}header=frame;
+    }
+    if(CGRectIsNull(header)||CGRectGetMinX(header)<=CGRectGetMinX(side)||CGRectGetMaxX(header)>=CGRectGetMaxX(side)||CGRectGetMinX(lights)<CGRectGetMinX(header)-1||CGRectGetMaxX(lights)>CGRectGetMaxX(header)+1){*why=@"vcaption_sidebar_header";return nil;}
+    for(NSDictionary *value in c->controls)[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(DWRectFromJSON(value),-1,-1),own))];
+    CGRect left=CGRectMake(CGRectGetMinX(side),CGRectGetMinY(own),CGRectGetMinX(header)-CGRectGetMinX(side),bottom-CGRectGetMinY(own));
+    CGRect right=CGRectMake(CGRectGetMaxX(header),CGRectGetMinY(own),CGRectGetMaxX(side)-CGRectGetMaxX(header),bottom-CGRectGetMinY(own));
+    for(NSValue *value in @[[NSValue valueWithRect:left],[NSValue valueWithRect:right]])[excluded addObject:DWRectJSON(decorationLocal(value.rectValue,own))];
+    NSMutableDictionary *result=[@{@"region":DWRectJSON(CGRectMake(0,0,own.size.width,bottom-CGRectGetMinY(own))),@"excluded":excluded}mutableCopy];
+    NSDictionary *band=decorationSidebarBand(c->sidebar,side,header,rowBottom,own,c->wid,c->getWindow,c->deadline);
+    if(band)result[@"additional_regions"]=@[band];
+    *why=band?@"accepted_browser_caption_vertical_sidebar":@"accepted_browser_caption_vertical";
+    return result.copy;
+}
+// The second pass, run only when the horizontal one met a toolbar in the row. *why is set when the tree has a toolbar and a tab group (the shape was
+// recognised): to the acceptance or the reason it was refused. It stays nil for every other tree, which keeps the horizontal pass's reason.
+static NSDictionary *decorationVerticalCaption(NSArray *children,CGRect own,CGRect lights,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline,NSArray *chrome,NSMutableArray *excluded,NSString **why){
+    DecorationCaption c={.own=own,.lights=lights,.wid=wid,.getWindow=getWindow,.deadline=deadline,.budget=96,.controls=[NSMutableArray array],.below=[NSMutableArray array],.tabGroup=CGRectNull,.toolbar=CGRectNull,.vertical=YES};
+    NSString *failure=nil;NSDictionary *result=nil;*why=nil;
+    for(id value in children){
+        if([chrome containsObject:value])continue;
+        if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID()){failure=@"caption_child_type";break;}
+        if((failure=decorationCaptionWalk((__bridge AXUIElementRef)value,0,&c)))break;
+    }
+    if(c.tabGroups==1&&c.toolbars==1){
+        if(failure)*why=failure;else result=decorationVerticalBuild(&c,own,lights,excluded,why);
+    }
+    if(c.sidebar)CFRelease(c.sidebar);return result;
+}
 static NSDictionary *decorationBrowserCaption(NSArray *children,CGRect own,CGRect lights,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline,NSArray *chrome,NSMutableArray *excluded,NSString **reason){
     DecorationCaption c={.own=own,.lights=lights,.wid=wid,.getWindow=getWindow,.deadline=deadline,.budget=96,.controls=[NSMutableArray array],.below=[NSMutableArray array],.tabGroup=CGRectNull};
     for(id value in children){
         if([chrome containsObject:value])continue;
         if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return decorationRejected(reason,@"caption_child_type");
-        NSString *failure=decorationCaptionWalk((__bridge AXUIElementRef)value,0,&c);if(failure)return decorationRejected(reason,failure);
+        NSString *failure=decorationCaptionWalk((__bridge AXUIElementRef)value,0,&c);
+        if(failure){
+            // A toolbar in the row is the one failure that has a second reading (the tab strip in a sidebar); every other failure is final.
+            NSString *why=nil;NSDictionary *vertical=[failure isEqual:@"caption_content_or_toolbar_in_row"]?decorationVerticalCaption(children,own,lights,wid,getWindow,deadline,chrome,excluded,&why):nil;
+            if(vertical){if(reason)*reason=why;return vertical;}
+            return decorationRejected(reason,why?:failure);
+        }
     }
     if(!c.tabGroups)return decorationRejected(reason,@"missing_top_toolbar");
     CGRect tabs=c.tabGroup;CGFloat bottom=CGRectGetMaxY(tabs);

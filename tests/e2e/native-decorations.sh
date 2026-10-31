@@ -1,8 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Title-region classifier over recorded Accessibility shapes (Chrome, TextEdit, Finder, Aside's sign-in window) with the AX calls
-# substituted by a table. No process, window, tap, event, permission prompt or native session is touched; a pass is not proof that a
-# press on a third-party window is routed.
+# Title-region classifier over recorded Accessibility shapes (Chrome with horizontal and with vertical tabs, TextEdit, Finder, Aside's sign-in
+# window and Aside's tab-sidebar window) with the AX calls substituted by a table. No process, window, tap, event, permission prompt or
+# native session is touched; a pass is not proof that a press on a third-party window is routed.
 set -eu
 cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64

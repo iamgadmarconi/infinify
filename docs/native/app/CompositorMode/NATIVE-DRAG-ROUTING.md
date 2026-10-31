@@ -255,18 +255,117 @@ The `before` double-click and tab/omnibox rows show that the application kept ge
 reliable, so that row is not claimed. Not measured: Aside's browser window (the guest's Aside only reached its sign-in screen), Electron windows with a hidden
 title bar, a window with many tabs (the 150 ms lookup was not timed; no `title_deadline` reason was logged in the after run with three tabs), and the owner's Mac.
 
-`sh tests/e2e/native-decorations.sh` runs the classifier over the Accessibility shapes recorded in the guest (Chrome with three tabs, one tab and an infobar, Aside's sign-in window, TextEdit, Finder; 57 checks: caption points owned, tab, close button, New Tab, tab search, traffic lights, omnibox, toolbar and web content points the application's, the TextEdit and Finder cases unchanged, and mutations of the Chrome tree that must keep the old rejection). With the audit disabled 16 of those checks fail. It substitutes the AX calls, so it is a statement about the classifier, not about a live press.
+`sh tests/e2e/native-decorations.sh` runs the classifier over the Accessibility shapes recorded in the guest (Chrome with three tabs, one tab and an infobar, Aside's sign-in window, TextEdit, Finder; 57 checks, the first 57 of the script's 179 (the vertical-tabs shapes are described in "Chromium's vertical tab strip" below): caption points owned, tab, close button, New Tab, tab search, traffic lights, omnibox, toolbar and web content points the application's, the TextEdit and Finder cases unchanged, and mutations of the Chrome tree that must keep the old rejection). With the audit disabled 16 of those checks fail. It substitutes the AX calls, so it is a statement about the classifier, not about a live press.
 
 COMPOSITOR-MODE.md's numbers row for the drag lane lists "Chrome tab strip" at 0 samples before and after at zoom 0.5; the points of that row are not
 recorded, and the empty-strip points of this section are the ones that showed 11 and 27.
 
-Electron windows with a hidden title bar (Orca, Marengo) and Aside's real browser window are NOT covered or measured: an Electron page draws its
+Electron windows with a hidden title bar (Orca, Marengo) are NOT covered or measured: an Electron page draws its
 drag area with CSS (`-webkit-app-region`), which Accessibility does not expose, so there is no caption signal to read, and such a window keeps
-today's rejection; Aside was only reachable at its sign-in window in the guest (no tab group, close button outside the window: rejected as before).
+today's rejection. Aside's own window is covered only for its tab sidebar layout and only in its top row ("Chromium's vertical tab strip" below); Aside at its sign-in window in the guest
+has no tab group and its close button outside the window, and is rejected as before.
 The next section was measured on a tree WITHOUT the caption audit above, so Chrome's empty tab strip was then a press the shell did not recognise. With both
 changes merged, Chrome's strip is a title press and this path is not reached there; it stays as the net for presses the classifier cannot own (Aside's
 signed-in window, Electron `-webkit-app-region` areas and other applications that call `performWindowDragWithEvent:`).
 
+
+#### Chromium's vertical tab strip (Chrome 156 "Show Tabs Vertically", Aside's tab sidebar)
+
+The owner's browser is Aside, and its tabs are in a sidebar, not in a strip: `native title cache window=#20 ... region=0 reason=missing_top_toolbar`, then every
+press went to the application, Chromium called `performWindowDragWithEvent:`, and WindowServer showed the transformed window at scale 1 for the length of the drag.
+The horizontal rule above cannot read that tree (it rejects the `AXToolbar` in the row with `caption_content_or_toolbar_in_row`). The tree of the owner's window
+(dumped on their Mac with the tab titles replaced; recorded as `DWShapeAsideVerticalTabs`) and the tree Chrome 156 shows with "Show Tabs Vertically" have the same
+shape (the strings "Collapse Tabs" and "Vertical Tab Strip Resize Handle (Draggable)" are in both locale packs; the setting is in the tab strip's context menu,
+`vertical_tabs.enabled` in the profile, no flag needed):
+
+- one `AXTabGroup`, the whole sidebar: on the window's left edge, from its top to its bottom (`[0,38 194x1291]` in Aside, `[40,100 240x800]` in Chrome). Its children:
+  a header group on the top row (`[8,38 178x42]`, `[52,100 216x46]`: "Collapse Tabs", in Chrome also "Tab groups" and "Tab search"), the tabs inside scroll areas, in Chrome a
+  "New tab" container group that fills the rest of the sidebar (`[52,257 216x631]`, one button in it), in Aside the pinned-tab grid and a footer ("Work", "Search"),
+  the `AXSlider` "Vertical Tab Strip Resize Handle (Draggable)" along its right edge, and full-size leaf groups;
+- the traffic lights inside the header's row, and one `AXToolbar` in the top row to the right of the sidebar, reaching the window's right edge (Back, Forward, Reload,
+  the omnibox group, extension and profile controls);
+- the web content below the toolbar.
+
+**Which points drag the window natively** was measured first, with Infinify not running, on Chrome 156 in the guest (vm2, macOS 27.0.1; a throwaway profile
+`--user-data-dir=/tmp/vcap-profile`, so the guest's own Chrome profile was not changed; window 1200x800 at 40,100, sidebar 240 wide, three tabs). For each point the
+window's origin was reset through Accessibility, then a real HID press at `kCGHIDEventTap`, a 150 ms hold, a (120,60) drag in 20 steps of 8 ms, with the native bounds
+sampled every 0.5 ms (`SLSGetWindowBounds`); "drags" is the native origin moving by the full 120 points (`target/lanes/evidence/vt-measure-native.txt`,
+`vt-measure2-native.txt`, and the EXTRA lines of the base run). Window-local points:
+
+| Where | Natively |
+| --- | --- |
+| row, y 0 to 45 (the toolbar's bottom is y 46): gap right of the lights (80,23), between the lights (31,23), (54,23), above and below them (20,8), (20,36), (31,8) | drags |
+| header: gap between "Collapse Tabs" and "Tab groups" (84, 85, 119, 120, 145, 168, 169 at y 23), top and bottom margins (145,3), (145,43) | drags |
+| toolbar: gaps between items (281,23), (356,23), (1119,23), (1158,23); the pixel next to an item's frame on either side (245, 280, 360, 1115, 1123, 1195 at y 23); above and below the omnibox (660,3), (660,43); y 1, 4, 44, 45 at x 660 | drags |
+| row, x 238, 239, 241 and 244 at y 23 (right of the handle) | drags |
+| y 46 to 53 at x 660 (separator, web content); between the header and the first tab (120,50) | does not drag |
+| the sidebar's left margin x 4, 8, 11 (rows 23, 43, 400, 500) | does not drag |
+| the resize handle's zone: x 228 to 236 at row 23 (x 222 and 226 are inside "Tab search"), x 228 to 230 at row 500, and the slider itself (237,400); its AX frame is x 235 to 240 | does not drag |
+| omnibox: left padding 2 points inside its group (363,23), its text field (660,23); Back (263,23); "Collapse Tabs" (102,23); "New tab" (120,173); web content (660,400) | does not drag |
+| the gap between two tabs (120,86) | does not drag the window: Chrome hit-tests it as a tab, and the drag detached "Tab three" into a window of its own |
+| the empty sidebar under the "New tab" button: x 12 to 227, y 190 to 786 | drags |
+| the same band at y 788 and 790 (below its container) and at x 228 to 230 | does not drag |
+| top-left corner (4,3); the window's right edge, 3 points in (1197,23) | resizes the window |
+
+The empty part is exactly the AX frame of the "New tab" container (`[12,157 216x631]` window-local), minus the button.
+
+**The rule** (`decorationVerticalCaption` in `DWNativeDecorations.m`, a second pass entered only when the horizontal walk meets an `AXToolbar` in the row). It needs exactly one
+`AXTabGroup`, whose left edge is the window's, whose top is the window's top, that reaches the window's bottom and is at most half its width, with the traffic lights inside it, and
+exactly one `AXToolbar`, at the window's top, to the right of the sidebar, reaching the window's right edge, whose bottom is at or below the lights'. The region is the row, the window's
+top to the toolbar's bottom (`reason=accepted_browser_caption_vertical`), full width, minus:
+
+- the traffic lights; every toolbar item over its whole rectangle (a group item too: the omnibox's padding is the omnibox's, measured, so `decorationGroupExtent`, which trims a group to
+  its children, is deliberately not used; the leaf groups after Extensions are treated as controls); every control and every group with a press action in the sidebar's header row;
+- the sidebar's margins beside its header group (left of it, and right of it up to the sidebar's right edge, which holds the resize handle's zone);
+- anything the walk meets that starts below the lights and above the toolbar's bottom cuts the region there if it starts at most 4 points above it (Aside's 3 point separator group starts 2
+  above), and rejects (`caption_control_below_lights`) if it starts higher.
+
+The empty sidebar under the tabs is one `additional_regions` entry (`reason=accepted_browser_caption_vertical_sidebar`), taken only from the single group, below the row, that holds
+controls and nothing else (no group, no scroll area), whose x range is the header's and that ends within 16 points of the sidebar's bottom (12 measured); its controls are excluded, a
+control or scroll area lying over it drops it. No scroll area is ever entered (the tabs are in them), the band walk has its own budget of 48 nodes, and an exhausted budget, an
+unreadable node, or any other shape drops only that region (the row is still the caption): a window with many tabs falls back, it is not guessed. Anything else keeps today's rejection and
+its reason: a shape with no sidebar, two toolbars or two tab groups, a sidebar not on the window's left or not full height, a toolbar that is not at the window's top or not reaching its right
+edge, a missing or duplicated header, an element in the row that is unreadable or belongs to another window, the 96 node and 150 ms budgets of the horizontal walk. When the tree was
+recognised (one toolbar and one tab group) the reason is the vertical pass's own (`vcaption_sidebar_geometry`, `vcaption_toolbar_geometry`, `vcaption_lights_outside_sidebar`,
+`vcaption_sidebar_header`, `vcaption_sidebar_children`, `caption_toolbar_items`, `caption_toolbar_item_geometry`, `caption_multiple_toolbars`); otherwise it is the horizontal
+pass's. Horizontal Chrome, TextEdit, Finder and unified toolbars do not enter the pass.
+
+Aside: its pinned grid, its empty tab list and its footer are NOT claimed. Nothing could be measured on them (the guest's Aside only reaches its sign-in screen; no account was
+created and no credentials entered), and none of them has the one measured shape, so in Aside's window the caption is the row only: the gap between the lights and "Collapse Tabs"
+(78 to 155 at y 0 to 40, window-local), the strips above and below the toolbar's items and the 6 to 9 point gaps between them. That the same sidebar space drags natively in Aside as it does in Chrome is
+unverified.
+
+Guest numbers (macOS 27.0.1, vm2; real HID at `kCGHIDEventTap`; `INFINIFY_DEBUG=1`; `AppleActionOnDoubleClick` `None`; the guest's persisted scene file moved aside for each run and put back, because
+the stale window sizes in it made the harness's coordinates wrong in the first, discarded runs; the vertical window is Chrome 156 with three tabs, `VT one` to `VT three`; before = the staged batch
+at bd4f5f0 without this change, after = with it; press points from the AX tree at the start of each run; evidence under `target/lanes/evidence/base-*` and `new-*`, not committed):
+
+| Chrome, vertical tabs | before | after |
+| --- | --- | --- |
+| classification of the window (`native title cache`) | `region=0 reason=caption_content_or_toolbar_in_row` | `region=1 reason=accepted_browser_caption_vertical_sidebar` |
+| zoom 0.5 drag from the header gap (window-local 144,23), fast (15 steps, 60 ms): samples at scale 1, native frame moved | 0 (the takeover at the press ran: `native window drag taken over at the press`), native 40,100 to 618,418 (578 points) | 0, 0 points; the drawn window moved (150,60) |
+| zoom 0.5 drag, slow (60 steps, 960 ms) | 21 samples at scale 1 (28 and 32 in two earlier runs on a stale scene), native moved 2 points | 0, 0 points |
+| zoom 1 drag, fast and slow, native frame moved | 210 and 150 points | 0 and 0 |
+| zoom 0.5 and 1 single click, no motion | native frame changed (620,419 to 618,418 at zoom 0.5; 570,305 to 420,245 at zoom 1); drawn unchanged; `reason=no_region` | native and drawn unchanged; `native chrome owned window=#1 kind=title` |
+| zoom 0.5 and 1 double-click | native unchanged, no action (`reason=no_region` twice) | `native resize origin operation=native_decoration action=fullscreen` (the canvas's own Fill): native 40,100 1200x800 to 0,30 1920x1082 at both zooms |
+| drag from the toolbar gap omnibox/profile (zoom 0.5 / 1) | native moved 427 / 150 points | 0 / 0, drawn moved |
+| drag from the empty sidebar under "New tab" (zoom 0.5 / 1) | native moved 439 / 150 points | 0 / 0, drawn moved |
+| click on the second tab; click in the omnibox | tab two selected; omnibox focused (AX), at both zooms | the same, at both zooms |
+| "Collapse Tabs", then "Expand Tabs"; drag of the resize handle +40 and back | sidebar 240 to 56 to 240 wide; 240 to 280 to 240 wide, native frame unmoved, at both zooms | the same, at both zooms |
+| horizontal Chrome tab strip (650x520, one tab), zoom 0.5 and 1, fast and slow | 0 samples at scale 1, native moved 0 (4 of 4), canvas-owned | the same (4 of 4) |
+| TextEdit title, zoom 0.5, fast and slow | 0 samples, native moved 0 | the same |
+
+The before sizes differ: under Infinify the vertical window was 1080x740 in the before run and 1200x800 in the after run (the same launch flags; the compositor's own size adoption is not
+what this change touches). The first drag after a restore starts from a native frame that was left by the previous run's takeover (basis only), which is why the "native" columns of the before
+rows begin at different points. Not obtained: TextEdit's title at zoom 1 (the harness could not bring the TextEdit window to the screen at that zoom in either build; two attempts were discarded), so only its zoom 0.5 rows are claimed.
+
+Not measured, or not covered: Aside itself (above); the sidebar collapsed to its icon rail (Chrome then puts the toolbar `[148,100 1092x46]` at the window's top and the rail `[40,146 56x754]` below it; the pass answers
+`vcaption_sidebar_geometry` and the window stays the application's, which the after run's log shows twice, once per "Collapse Tabs" test, so a collapsed Aside sidebar still flickers); a window with many tabs (the band walk's budget is covered by a test on a recorded tree, not timed in the guest: no
+`title_deadline` reason was logged with three tabs; the 150 ms lookup on Aside's 2056x1291 tree with its pinned grid was not timed); Chromium builds other than Chrome 156; the owner's Mac.
+
+`sh tests/e2e/native-decorations.sh` (179 checks, 57 of them the earlier horizontal, TextEdit and Finder cases, unchanged) replays Chrome 156's vertical-tabs tree and Aside's real window through the real
+classifier: the measured gaps, margins and the empty band are owned, and the lights, "Collapse Tabs", the header's popups, every toolbar item and the omnibox's edge, the leaf groups, the resize handle's slider
+and zone, the sidebar's margins, each tab and the gap between two tabs, "New tab", the separator, the Ask Aside popup, web content, Aside's pinned tabs, empty tab list and footer stay the application's; a
+dozen mutations keep today's rejection and its reason, and the band is dropped, not guessed, for a scroll area, too many controls or a container that stops short.
 
 ### A press the shell does not recognise (clicks, double-clicks and the first 50 ms of a press)
 
