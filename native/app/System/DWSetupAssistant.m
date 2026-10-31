@@ -4,6 +4,7 @@
 #import "DWSetupAssistant.h"
 #import "DWSetupButton.h"
 #import "DWDockReloader.h"
+#import "DWInstall.h"
 #import "DWLoginItem.h"
 #import "DWNativeDesktopCLI.h"
 #import "DWOwnerFile.h"
@@ -51,7 +52,7 @@ static NSView *row(NSString *name,NSView *trailing) {
 @interface DWSetupAssistant () <NSWindowDelegate>
 @end
 @implementation DWSetupAssistant {
-    NSString *_support,*_signature,*_status;
+    NSString *_support,*_original,*_signature,*_status;
     NSWindow *_window;
     NSTimer *_timer;
     BOOL _busy,_askedRecording,_waitingLogin,_waitingDaemon,_retireFailed,_demoNeedsRecording;
@@ -66,8 +67,11 @@ static NSView *row(NSString *name,NSView *trailing) {
     _daemonState=^DWLoaderState{return [DWLoaderService state];};
     _loginItemStatus=^NSInteger{return [SMAppService agentServiceWithPlistName:DWLoginItemAgentPlist].status;};
     _compositorAtLogin=^BOOL{return DWNativeLoginIsCompositor();};
-    NSString *bundle=NSBundle.mainBundle.bundlePath;
-    _otherCopies=^NSArray<NSString *> *{return DWSetupOtherCopies(bundle,DWSetupCopyCandidates());};
+    // A translocated run is its original: that is the copy the other copies are told apart from, and the one a move replaces.
+    NSString *bundle=NSBundle.mainBundle.bundlePath,*original=DWInstallTranslocatedOriginal(bundle)?:bundle;
+    _original=original;
+    _installPlace=^NSString *{return DWInstallIsInstalled(bundle)?nil:DWInstallPlace(DWSetupCopyCandidates());};
+    _otherCopies=^NSArray<NSString *> *{return DWSetupOtherCopies(original,DWSetupCopyCandidates());};
     return self;
 }
 - (DWSetupMode)mode { return DWSetupModeAt(_support,self.compositorAtLogin()); }
@@ -137,6 +141,14 @@ static NSView *closeBelow(NSView *view) { view.identifier=kCloseBelow;return vie
     [views addObject:icon];
     [views addObject:text(@"Infinify",22,YES,DWSetupTextColor())];
     [views addObject:body(@"Your desktop becomes one canvas you pan and zoom, and your windows live on it. Setup takes a few minutes, and a restart into Recovery if your Mac still keeps the Dock helper out.")];
+    NSString *place=self.installPlace();
+    if(place){
+        NSString *why=@"Infinify runs from your Applications folder, where its login item and launch daemon find it.";
+        [views addObject:quiet(DWSetupIsInfinifyAt(place)?[why stringByAppendingFormat:@" Moving it there replaces the copy at %@.",place]:why)];
+        DWSetupButton *move=[self button:_busy?@"Moving…":@"Move to Applications" role:DWSetupButtonPrimary action:@selector(moveToApplications:)];
+        move.enabled=!_busy;[actions addObject:move];
+        return;
+    }
     NSArray<NSString *> *others=self.otherCopies();
     if(others.count&&!_retireFailed)[views addObject:quiet([NSString stringWithFormat:@"Another copy of Infinify is at %@. Setup removes it first, with its login item and launch daemon.",[others componentsJoinedByString:@" and "]])];
     [actions addObject:[self button:_retireFailed?@"Continue":@"Set up" role:DWSetupButtonPrimary action:@selector(setUp:)]];
@@ -221,6 +233,19 @@ static NSView *closeBelow(NSView *view) { view.identifier=kCloseBelow;return vie
             self->_busy=NO;
             if(failures.count){self->_retireFailed=YES;self->_status=[[failures componentsJoinedByString:@" "] stringByAppendingString:@" Remove it by hand, or continue with both."];[self buildPane:self->_pane];}
             else [self showPane:DWSetupPanePermissions];
+        });
+    });
+}
+- (void)moveToApplications:(id)sender {
+    (void)sender;NSString *place=self.installPlace(),*source=NSBundle.mainBundle.bundlePath,*original=_original;
+    if(!place||_busy)return;
+    _busy=YES;_status=nil;[self buildPane:_pane];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        NSString *why=nil;BOOL moved=DWInstallMove(source,original,place,nil,&why);
+        dispatch_async(dispatch_get_main_queue(),^{
+            self->_busy=NO;
+            if(!moved){self->_status=why;[self buildPane:self->_pane];return;}
+            [self close];if(self->_onMoved)self->_onMoved(place);
         });
     });
 }
@@ -310,7 +335,7 @@ static NSView *closeBelow(NSView *view) { view.identifier=kCloseBelow;return vie
 - (void)dealloc { [_timer invalidate]; }
 @end
 
-typedef NS_ENUM(NSInteger,DWSetupNext) { DWSetupNextQuit, DWSetupNextCompositor, DWSetupNextDemo, DWSetupNextRelaunch };
+typedef NS_ENUM(NSInteger,DWSetupNext) { DWSetupNextQuit, DWSetupNextCompositor, DWSetupNextDemo, DWSetupNextRelaunch, DWSetupNextMoved };
 // SIGTERM (uninstall, a hand-over, the removal of this copy), SIGINT and SIGHUP end the assistant as its close button does,
 // with status 0: an end by signal would be a failure to launchd, which starts the login item's job again after one.
 static volatile sig_atomic_t setupSignal;
@@ -333,8 +358,9 @@ int DWSetupRun(int argc,const char **argv) { @autoreleasepool {
     for(NSRunningApplication *app in [NSRunningApplication runningApplicationsWithBundleIdentifier:NSBundle.mainBundle.bundleIdentifier?:@"com.marengox.infinify"])
         if(app.processIdentifier!=getpid()&&[app.executableURL.path.stringByResolvingSymlinksInPath isEqual:executable.stringByResolvingSymlinksInPath])canvas=YES;
     if(canvas)assistant.canvasMode=DWSetupModeAt(support,DWNativeLoginIsCompositor());
-    __block DWSetupNext next=DWSetupNextQuit;__block BOOL done=NO;
+    __block DWSetupNext next=DWSetupNextQuit;__block BOOL done=NO;__block NSString *moved=nil;
     assistant.onQuit=^{done=YES;};
+    assistant.onMoved=^(NSString *place){moved=place;next=DWSetupNextMoved;done=YES;};
     assistant.onCompositor=^{next=DWSetupNextCompositor;done=YES;};
     assistant.onDemo=^{next=DWSetupNextDemo;done=YES;};
     assistant.onRelaunch=^{next=DWSetupNextRelaunch;done=YES;};
@@ -347,6 +373,7 @@ int DWSetupRun(int argc,const char **argv) { @autoreleasepool {
     [assistant close];
     close(lock);
     if(setupSignal||next==DWSetupNextQuit)return 0;
+    if(next==DWSetupNextMoved)return DWInstallOpenInstead(moved);
     // A canvas of this bundle ends first (orderly: SIGTERM puts its windows and settings back), so that the launcher, or the
     // demo's own run, finds no Infinify holding the desktop.
     if(next!=DWSetupNextRelaunch&&!DWUninstallStopInstances(DWUninstallInstances(executable),10)){fputs("Infinify: a running Infinify did not quit; quit it and open Infinify again.\n",stderr);return 1;}

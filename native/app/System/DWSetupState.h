@@ -42,6 +42,8 @@ static inline BOOL DWSetupPolicyAllows(DWSetupPolicy policy) { return policy.kno
 
 // /Applications/Infinify.app and ~/Applications/Infinify.app, where an install puts the app.
 NSArray<NSString *> *DWSetupCopyCandidates(void);
+// YES when `bundle` is a directory holding a bundle with Infinify's identifier.
+BOOL DWSetupIsInfinifyAt(NSString *bundle);
 // The candidates that are another Infinify (a bundle with Infinify's identifier, not the file at `runningBundle`).
 NSArray<NSString *> *DWSetupOtherCopies(NSString *runningBundle,NSArray<NSString *> *candidates);
 

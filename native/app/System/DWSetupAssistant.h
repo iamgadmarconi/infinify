@@ -6,7 +6,9 @@
 // Finder while it runs. It grows out of the permission window (DWOnboarding.h) and takes over the terminal steps of an
 // install. Five panes, in Ego's design language (DWSetupButton.h):
 //
-//   Welcome      what Infinify is; another copy in an Applications folder is removed first (DWUninstall.h)
+//   Welcome      what Infinify is; a copy that is not in an Applications folder (opened on the disk image) offers Move to
+//                Applications in place of Set up (DWInstall.h); another copy in an Applications folder is removed first
+//                (DWUninstall.h)
 //   Permissions  Accessibility (required) and Screen Recording (for extra displays and the demo), each with Allow
 //   Login        the login item is registered, not offered: Infinify starts at every login and after a crash
 //   Compositor   the doctor's reading of SIP and the boot argument; while it fails, the Recovery steps, what each changes
@@ -24,6 +26,8 @@
 @property(copy) void (^onDemo)(void);
 // Screen Recording was allowed: this run starts again, since macOS gives it only to a newly started process.
 @property(copy) void (^onRelaunch)(void);
+// This copy was moved to Applications: the run ends and opens the copy at `place`, whose setup goes on from there.
+@property(copy) void (^onMoved)(NSString *place);
 // The window was closed before setup ended.
 @property(copy) void (^onQuit)(void);
 // Why compositor mode did not start, as the launcher said it; shown on the compositor pane.
@@ -40,13 +44,15 @@
 - (void)close;
 
 // Seams, for the fixture that draws every pane (tests/native/app/System/DWSetupAssistantFixture.m). Each defaults to the
-// real thing: the two grants, the doctor's policy, the launch daemon, the login item, the other copies and their removal.
+// real thing: the two grants, the doctor's policy, the launch daemon, the login item, where a move puts this copy, the
+// other copies and their removal.
 @property(copy) BOOL (^accessibility)(void);
 @property(copy) BOOL (^screenRecording)(void);
 @property(copy) DWSetupPolicy (^policy)(void);
 @property(copy) DWLoaderState (^daemonState)(void);
 @property(copy) NSInteger (^loginItemStatus)(void); // an SMAppServiceStatus
 @property(copy) BOOL (^compositorAtLogin)(void);    // the login-mode record exists (DWNativeDesktopCLI.h)
+@property(copy) NSString *(^installPlace)(void);    // nil when this copy is installed (DWInstallIsInstalled)
 @property(copy) NSArray<NSString *> *(^otherCopies)(void);
 // Builds the pane into the window without showing it or recording it; for the fixture's pictures.
 - (void)buildPane:(DWSetupPane)pane;
@@ -56,7 +62,8 @@
 // alone, with no canvas and without the canvas run's lease, so it can run beside an Infinify that holds it (an older copy
 // being replaced, or a demo canvas). One assistant at a time (setup.lock in the support directory; a second one ends at
 // once with status 0). It ends by replacing this process: with the hand-over to compositor mode (a running demo canvas of
-// this bundle is ended first), with `--demo` (the capture-mode canvas), or with itself again for Screen Recording.
+// this bundle is ended first), with `--demo` (the capture-mode canvas), with itself again for Screen Recording, or with
+// open(1) of the copy a move put in Applications.
 // --refused is how the launcher, refused at login, says why compositor mode did not start. Returns the exit status when it
 // ends without replacing itself: 0 when the window was closed.
 int DWSetupRun(int argc,const char **argv);

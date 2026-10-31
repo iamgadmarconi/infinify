@@ -8,6 +8,7 @@
 #import <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#import "DWInstall.h"
 #import "DWLoginItem.h"
 #import "DWNativeDesktopCLI.h"
 #import "DWOnboarding.h"
@@ -70,10 +71,14 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // Compositor mode is handed over to the bundled launcher; until setup is done the assistant shows; the demo is the
     // capture-mode desktop below. --demo runs the demo whatever setup decided (the assistant's Try the demo).
     if(argc==2&&!strcmp(argv[1],"--demo"))argc=1;
-    else if(argc==1)switch(DWSetupModeAt(DWSupportDirectory(),DWNativeLoginIsCompositor())){
-        case DWSetupCompositor:return DWSetupHandOverToCompositor(NO);
-        case DWSetupIncomplete:return DWSetupRun(0,NULL);
-        case DWSetupDemo:break;
+    else if(argc==1){
+        // A launch macOS translocated, of a bundle copied into Applications by a command: that bundle opens instead (DWInstall.h).
+        DWInstallLeaveTranslocation();
+        switch(DWSetupModeAt(DWSupportDirectory(),DWNativeLoginIsCompositor())){
+            case DWSetupCompositor:return DWSetupHandOverToCompositor(NO);
+            case DWSetupIncomplete:return DWSetupRun(0,NULL);
+            case DWSetupDemo:break;
+        }
     }
     DWRaiseOpenFileLimit();
     const char **launched=argv; // as given, for the onboarding window's Relaunch

@@ -56,15 +56,20 @@ DWSetupPolicy DWSetupReadPolicy(void) {
 NSArray<NSString *> *DWSetupCopyCandidates(void) {
     return @[@"/Applications/Infinify.app",[NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Infinify.app"]];
 }
+BOOL DWSetupIsInfinifyAt(NSString *bundle) {
+    struct stat st;
+    if(lstat(bundle.fileSystemRepresentation,&st)!=0||!S_ISDIR(st.st_mode))return NO;
+    NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[bundle stringByAppendingPathComponent:@"Contents/Info.plist"]];
+    return [info[@"CFBundleIdentifier"] isEqual:kBundleIdentifier];
+}
 NSArray<NSString *> *DWSetupOtherCopies(NSString *runningBundle,NSArray<NSString *> *candidates) {
     struct stat running;BOOL known=stat(runningBundle.fileSystemRepresentation,&running)==0;
     NSMutableArray<NSString *> *others=[NSMutableArray array];
     for(NSString *candidate in candidates){
         struct stat st;
-        if(lstat(candidate.fileSystemRepresentation,&st)!=0||!S_ISDIR(st.st_mode))continue;
+        if(!DWSetupIsInfinifyAt(candidate)||lstat(candidate.fileSystemRepresentation,&st)!=0)continue;
         if(known&&st.st_dev==running.st_dev&&st.st_ino==running.st_ino)continue;
-        NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[candidate stringByAppendingPathComponent:@"Contents/Info.plist"]];
-        if([info[@"CFBundleIdentifier"] isEqual:kBundleIdentifier])[others addObject:candidate];
+        [others addObject:candidate];
     }
     return others;
 }

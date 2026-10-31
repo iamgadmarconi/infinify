@@ -176,7 +176,12 @@ design language (neutral greys only, Helvetica Neue at one size, Primary and Sec
 alone, without the canvas run's lease, so it can run beside an Infinify that holds it; one assistant at a time
 (`setup.lock` in the support directory, a second one ends at once with status 0).
 
-1. **Welcome.** Another `Infinify.app` in `/Applications` or `~/Applications` is removed first with that copy's own
+1. **Welcome.** A copy that is not installed (`DWInstall.h`: on the disk image, in Downloads, anywhere but an
+   Applications folder on a writable volume) offers Move to Applications in place of Set up. The move copies the bundle,
+   without quarantine, to the Applications folder that already holds an Infinify (whose processes are stopped and which
+   goes to the Trash first), else `/Applications` when the user can write it, else `~/Applications`; moves the original
+   to the Trash when it is on a writable volume (a disk image is left as it is); and opens the copy (`open -n`), whose
+   own welcome goes on. Another `Infinify.app` in `/Applications` or `~/Applications` is removed first with that copy's own
    `uninstall`, or, for a build from before that command (which answers it with the usage status), with its
    `login-item off` and `native-desktop disable`, its processes ended and the bundle moved to the Trash.
 2. **Permissions.** Accessibility (required) and Screen Recording (for additional displays and the demo), each with an
@@ -196,6 +201,22 @@ alone, without the canvas run's lease, so it can run beside an Infinify that hol
 Each pane reached is recorded in `setup.plist` (owner-only, 0600) and setup resumes there: after the Screen Recording
 restart, and after the restart Recovery needs, when the login item, registered by then, runs `login-start`, finds setup
 not done and shows the assistant again.
+
+**Translocation.** macOS starts a quarantined app that Finder did not move (opened on the disk image, or copied into
+place by a command) from a read-only copy under `AppTranslocation`, a new one at every launch, even after the owner
+allowed it once; a login item or launch daemon registered from there points at nothing after a restart. A Finder drag
+clears translocation, and Homebrew's cask sets the quarantine's do-not-translocate bit, so neither is translocated. A
+plain launch that was translocated, of a bundle whose original is in an Applications folder, clears that original's
+quarantine (this launch has just passed Gatekeeper with it) and opens the original instead; one whose original is
+elsewhere gets the welcome's Move to Applications. The assistant tells other copies apart from the original, not from
+the translocated path. Found in the guest on 2026-10-30 with the notarized 0.2.0, copied into `/Applications` with
+`ditto` from a quarantined image: it ran from `AppTranslocation` after Open, again on the next launch, and its welcome
+offered to remove `/Applications/Infinify.app`, itself, as another copy. With this change, the same evening, from a
+notarized test build (build 181): opened on the quarantined image with build 180 in `/Applications`, the welcome offered
+Move to Applications over that copy, and the move put build 181 there without quarantine and build 180 in the Trash,
+and opened it from `/Applications` (welcome with Set up, no other copy); copied into `/Applications` with `ditto`, after
+Open it cleared its own quarantine and opened from `/Applications`, and the next launch was neither asked about nor
+translocated.
 
 **When compositor mode does not start.** A login start has no terminal to read a refusal in, and neither has Try again
 from the assistant. In those two cases (the launcher's `--login` mode, and its by-hand mode started with

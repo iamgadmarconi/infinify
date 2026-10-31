@@ -40,6 +40,11 @@ the exact signed bundle to `/Applications/Infinify.app` (where a disk image and 
 hardened runtime; without the variable the build is ad hoc. `--built` installs the identity already used for that
 build.
 
+From a release's disk image, drag Infinify onto the Applications link beside it. Opened on the image instead (or from
+Downloads), setup's first pane offers Move to Applications, which copies it there, replacing an older copy, and opens
+it from there; copied into Applications by a command, which leaves macOS running it from a temporary translocated copy,
+it opens itself from Applications instead.
+
 Then `open /Applications/Infinify.app`. A copy left in the other Applications folder (an install from before this
 default) keeps its login item and launch daemon until setup removes it: the script says so, and
 `/Applications/Infinify.app/Contents/MacOS/Infinify setup` opens the assistant, whose first pane removes it. Until setup is done a plain launch shows the setup assistant: the two
@@ -64,11 +69,14 @@ link, mounts the image and checks the bundle inside it (signature, every file, `
 `target/dist/VERSION/`: `Infinify-VERSION.dmg`, `infinify-VERSION-source.tar.gz` (the same commit, for GPL-3.0
 section 6), `SHA256SUMS` and `infinify.rb`, the Homebrew cask. `--notarize PROFILE` submits the image with the
 `notarytool` keychain profile, keeps the service's log beside it, staples the ticket and checks the image with
-`spctl`; create the profile once with `xcrun notarytool store-credentials PROFILE --apple-id … --team-id …`. A release
+`spctl`; create the profile once with `xcrun notarytool store-credentials PROFILE`, given an App Store Connect API key
+(`--key AuthKey_ID.p8 --key-id ID --issuer ISSUER`, a team key with the Developer role) or an Apple ID
+(`--apple-id … --team-id …` and an app-specific password). A release
 signs the Dock payload with the identity too (`INFINIFY_SIGN_PAYLOAD=1`, which development builds leave off), because
 the notary service refuses an ad hoc Mach-O: in the guest (macOS 27.0.1, SIP relaxed) the Dock loaded a payload signed
-by team PBKWRHQV74 through the sudo path on 2026-10-30, launch outcome `ready`, the desktop presented natively. Not yet
-known: whether the notary service accepts the arm64e loader and payload; the first submission's log says. The release
+by team PBKWRHQV74 through the sudo path on 2026-10-30, launch outcome `ready`, the desktop presented natively. The
+notary service accepted 0.2.0 that day with no issues, the arm64e loader and payload included, and a quarantined copy
+of the stapled image passed Gatekeeper in the guest as `Notarized Developer ID`. The release
 build replaces `target/app`. The script ends with the `gh release` and tap steps for when the repository is
 public; friends then install with `brew install --cask iamgadmarconi/tap/infinify`.
 
