@@ -77,28 +77,45 @@ static bool same_frame(CGRect a,CGRect b) { return same_size(a.size,b.size)&&nea
 // Where the window has to sit for `size` to be granted. macOS does not let an Accessibility size change carry a window past the
 // available frame of its screen: from an origin the size does not fit from, the request changes nothing (the owner's run of
 // 2026-10-10: 2056x1329 asked four times of a window at (223,39) on a 2056x1329 display, answered each time with the 1833x1290
-// that reaches the screen's edges). The least move that makes room, one axis at a time and only on an axis the request grows on:
-// a size that fits is given exactly its room, a larger one starts at the frame's origin and is asked as it is,
-// so that the application grants what it can. Match the canvas's menu/notch-only exclusion: the Dock overlays it and must not
-// make this preparatory move ask for less room. AX readback still reports any stricter limit the application actually enforces.
+// that reaches the screen's edges). The window is moved once, on each axis the request grows on and would overflow, to the frame's
+// origin on that axis: the most room the screen has, so that the sizes a drag asks next from that same place need no further move.
+// (The least move that makes room was tried first, 2026-10-30: dragging an edge past the screen moved the window 4 to 7 times by
+// a few points each, each move a jump of the drawn window until the shell re-based on the origin the result reported.) A size
+// larger than the frame is then asked as it is, so that the application grants what it can. Match the canvas's menu/notch-only
+// exclusion: the Dock overlays it and must not make this preparatory move ask for less room. AX readback still reports any
+// stricter limit the application actually enforces.
 // The screen is the one that holds most of the window; a window on none is left alone.
 // AppKit's screens are measured upwards from the primary screen's lower left corner, Accessibility downwards from its top left.
-static bool room(CGRect before, CGSize size, CGPoint *to) {
+static bool visible_frame(CGRect before, CGRect *visible) {
     NSArray<NSScreen *> *screens=NSScreen.screens; if (!screens.count) return false;
-    CGFloat top=NSMaxY(screens[0].frame), most=0; CGRect visible=CGRectZero;
+    CGFloat top=NSMaxY(screens[0].frame), most=0; CGRect found=CGRectZero;
     for (NSScreen *screen in screens) {
         NSRect f=screen.frame;CGFloat inset=MAX(screen.safeAreaInsets.top,MAX(0,NSMaxY(f)-NSMaxY(screen.visibleFrame)));
         inset=isfinite(inset)?MIN(ceil(inset),MAX(0,f.size.height-1)):0;
         NSRect v=NSMakeRect(f.origin.x,f.origin.y,f.size.width,f.size.height-inset);
         CGRect shared=CGRectIntersection(before,CGRectMake(f.origin.x,top-NSMaxY(f),f.size.width,f.size.height));
         if (CGRectIsNull(shared) || shared.size.width*shared.size.height<=most) continue;
-        most=shared.size.width*shared.size.height; visible=CGRectMake(v.origin.x,top-NSMaxY(v),v.size.width,v.size.height);
+        most=shared.size.width*shared.size.height; found=CGRectMake(v.origin.x,top-NSMaxY(v),v.size.width,v.size.height);
     }
-    if (most<=0 || !valid_rect(visible)) return false;
+    if (most<=0 || !valid_rect(found)) return false;
+    *visible=found; return true;
+}
+static bool room(CGRect before, CGSize size, CGPoint *to) {
+    CGRect visible; if (!visible_frame(before,&visible)) return false;
     CGPoint p=before.origin;
-    if (size.width>before.size.width && p.x+size.width>CGRectGetMaxX(visible)) p.x=fmax(CGRectGetMinX(visible),CGRectGetMaxX(visible)-size.width);
-    if (size.height>before.size.height && p.y+size.height>CGRectGetMaxY(visible)) p.y=fmax(CGRectGetMinY(visible),CGRectGetMaxY(visible)-size.height);
+    if (size.width>before.size.width && p.x+size.width>CGRectGetMaxX(visible)) p.x=CGRectGetMinX(visible);
+    if (size.height>before.size.height && p.y+size.height>CGRectGetMaxY(visible)) p.y=CGRectGetMinY(visible);
     *to=p; return !CGPointEqualToPoint(p,before.origin);
+}
+// A size that stops short of the request on an axis where the request reaches past the screen's visible frame from where the window is
+// is that frame's limit and final: AppKit constrains the frame to it (measured on macOS 27.0.1, 2026-10-30: TextEdit, Terminal, Finder,
+// Safari, Chrome and Ghostty all end at the visible frame's far edge or within a few points of it, whether sized by AX or by AppleScript,
+// from every order of position and size, with AXEnhancedUserInterface off or on). No second read can change it, so none is waited for.
+static bool screen_limited(CGRect actual, CGSize size) {
+    CGRect visible; if (!visible_frame(actual,&visible)) return false;
+    bool narrow=size.width>actual.size.width+1 && actual.origin.x+size.width>CGRectGetMaxX(visible)+1;
+    bool short_=size.height>actual.size.height+1 && actual.origin.y+size.height>CGRectGetMaxY(visible)+1;
+    return (narrow||short_) && (narrow||near(actual.size.width,size.width)) && (short_||near(actual.size.height,size.height));
 }
 static bool readback_once(DWResizeIdentity i, AXUIElementRef window, double deadline, DWResizeResult *r, bool *frame_disagreement) {
     if(frame_disagreement)*frame_disagreement=false;
@@ -332,14 +349,21 @@ static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, double deadlin
     if (room(before,size,&to)) {
         AXValueRef p=AXValueCreate(kAXValueCGPointType,&to); DWResizeResult kept=r; bool seen=false;
         if (p) { positioned=true; record_mutation(mutation,AXUIElementSetAttributeValue(w,kAXPositionAttribute,p)); CFRelease(p); }
-        for (int n=0;positioned && n<5 && now()<deadline;n++) {
-            // AX setters commonly complete before returning. Read that answer
-            // immediately; only a change still in flight needs a delayed retry.
-            // Four retries give a 120ms settling window.
-            if (n) usleep(30000);
-            seen=readback(i,w,deadline,&r);
+        // As after the size: AX has the new origin when the setter returns and the window list a few ms later, so a read where they
+        // disagree is retried in 2ms. An agreed origin that is not the one asked (the menu bar, a limit) holds when a second read,
+        // 8ms on, shows it again. The shell re-bases the canvas on the origin this call reports; every ms spent here is a ms the drawn
+        // window sits at the new native origin before that (measured at zoom .5 with a real drag: each move showed as a 165ms jump on a 30ms poll grid).
+        double moveBegan=now();CGPoint lastOrigin=CGPointZero;bool haveOrigin=false;
+        while (positioned && now()<deadline && now()-moveBegan<=.12) {
+            seen=readback_once(i,w,deadline,&r,NULL);
             if (r.outcome==DWResizeStaleIdentity) { CFRelease(w); return r; }
-            if (seen && near(r.actual_ax.origin.x,to.x) && near(r.actual_ax.origin.y,to.y)) break;
+            double wait=.002;
+            if (seen) {
+                if (near(r.actual_ax.origin.x,to.x) && near(r.actual_ax.origin.y,to.y)) break;
+                if (haveOrigin && near(r.actual_ax.origin.x,lastOrigin.x) && near(r.actual_ax.origin.y,lastOrigin.y)) break;
+                lastOrigin=r.actual_ax.origin;haveOrigin=true;wait=.008;
+            } else haveOrigin=false;
+            usleep((useconds_t)(wait*1e6));
         }
         // Unread, the window is taken to be where it was read last; the read after the size write says where it is.
         if (!seen) r=kept;
@@ -357,26 +381,43 @@ static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, double deadlin
     record_mutation(mutation,setter);
     r.observed=false; r.outcome=now()>=deadline?DWResizeTimedOut:DWResizeReadbackFailed;
     // Always read back even after an error: the receiver may have accepted a timed-out call.
-    bool observed=false;
-    for (int n=0;n<5 && now()<deadline;n++) {
-        // Keep the final non-exact observation at least 120ms after the
-        // setter returned. AX/CG read time belongs inside that settling
-        // window, not in addition to four successive 30ms sleeps.
-        double due=fmin(returned+n*.03,deadline),pause;
-        while((pause=due-now())>0){double began=now();usleep((useconds_t)ceil(pause*1e6));sleepSeconds+=now()-began;}
-        if(now()>=deadline){observed=false;r.observed=false;r.outcome=DWResizeTimedOut;break;}
-        double began=now();attempts++;
-        observed=readback(i,w,deadline,&r);
+    // An AX setter has completed in the app when it returns, but the window list shows the new frame a few milliseconds later, and a
+    // read is only taken where AX and the window list agree; so a disagreement is retried at once (2ms), not on the old 30ms grid.
+    // The first agreed read is the answer when it is the size asked for or the screen's own limit. Anything else (a minimum, a
+    // maximum, an increment, an app's animation) is accepted when a second agreed read, 8ms later, shows the same size; a size still
+    // moving is followed for up to 120ms after the setter, as before, and the last agreed read then stands.
+    bool observed=false,havePrior=false;CGSize prior=CGSizeZero;double spacing=.008,pollSpacing=.002;DWResizeResult agreed=r;
+    double until=returned+.12;
+    while (now()<deadline && now()<=until) {
+        double began=now();attempts++;bool disagreement=false;
+        bool read=readback_once(i,w,deadline,&r,&disagreement);
         readSeconds+=now()-began;
-        // An agreed AX/CG change can still be an intermediate owner animation
-        // frame. Only the requested size completes immediately; a non-exact
-        // size keeps the existing four delayed reads before it is classified.
-        if (observed && same_size(size,r.actual_ax.size)) break;
-        if (r.outcome==DWResizeStaleIdentity) break;
+        if (r.outcome==DWResizeStaleIdentity) {observed=false;break;}
+        double wait=pollSpacing;
+        if (read) {
+            observed=true;agreed=r;
+            if (same_size(size,r.actual_ax.size)||screen_limited(r.actual_ax,size)||(havePrior&&same_size(prior,r.actual_ax.size))) break;
+            prior=r.actual_ax.size;havePrior=true;wait=spacing;
+        } else {
+            if (!disagreement&&r.ax_error!=kAXErrorCannotComplete) break;
+            // A read that itself timed out ate the window: the owner is busy, not settled, so it is asked once more.
+            if (r.ax_error==kAXErrorCannotComplete) until=fmax(until,now()+.03);
+            havePrior=false;
+        }
+        double began2=now();usleep((useconds_t)(wait*1e6));sleepSeconds+=now()-began2;
     }
+    // A read that failed after an agreed one leaves that one the answer: it was the last the owner and the window list agreed on.
+    if (!observed&&now()>=deadline){r.observed=false;r.outcome=DWResizeTimedOut;}
+    else if (observed&&!r.observed) {r=agreed;}
     const char *debug=getenv("INFINIFY_DEBUG");
     if(debug&&atoi(debug)==1)fprintf(stderr,"debug: native size settle pid=%d wid=%u attempts=%d elapsed_ms=%.3f read_ms=%.3f sleep_ms=%.3f requested=%gx%g observed=%d actual=%gx%g\n",i.pid,i.window,attempts,(now()-returned)*1000,readSeconds*1000,sleepSeconds*1000,size.width,size.height,observed,r.actual_ax.size.width,r.actual_ax.size.height);
     if (observed) r.outcome=same_size(size,r.actual_ax.size)?DWResizeApplied:(!same_size(before.size,r.actual_ax.size)?DWResizeClamped:DWResizeRejected);
+    // Once per window: the canvas keeps the size the app took and later asks past it are answered from the first read, silently.
+    if (observed&&debug&&atoi(debug)==1&&screen_limited(r.actual_ax,size)) {
+        static NSMutableSet *told;static dispatch_once_t once;dispatch_once(&once,^{told=[NSMutableSet set];});
+        NSString *key=[NSString stringWithFormat:@"%d/%u",i.pid,i.window];BOOL first;@synchronized(told){first=![told containsObject:key];[told addObject:key];}
+        if(first)fprintf(stderr,"debug: native size limit pid=%d wid=%u requested=%gx%g actual=%gx%g at %g,%g: the screen's visible frame ends the window; the canvas keeps the size taken\n",i.pid,i.window,size.width,size.height,r.actual_ax.size.width,r.actual_ax.size.height,r.actual_ax.origin.x,r.actual_ax.origin.y);
+    }
     if (setter!=kAXErrorSuccess) r.ax_error=setter;
     if (positioned && observed) r.moved=!CGPointEqualToPoint(r.actual_ax.origin,origin);
     CFRelease(w); return r;

@@ -23,25 +23,47 @@ An `AXCannotComplete` during position/size observation retries the complete
 read with fresh ownership checks within that same deadline. Other errors,
 invalid geometry and AX/CG disagreement fail closed. This never repeats a setter.
 
-After AXSize, an exact requested size completes immediately. Non-exact results
-retain five observations, with retries due 30, 60, 90 and 120 ms after the setter
-returns. Readback work counts toward these deadlines instead of extending every
-interval by its own duration; the final non-exact observation still starts no
-earlier than 120 ms. The shared two-second deadline remains authoritative.
+After AXSize, an exact requested size completes on the first read where AX and the window list agree. The window list
+shows the new frame about 10 ms after AX does (sampled every 4 ms on macOS 27.0.1), so a read where they disagree is retried
+after 2 ms, not on the old 30 ms grid. A size that is not the one asked is final on that first agreed read when the request
+reaches past the visible frame of the window's screen from where the window sits and the answer is short of it: that is
+AppKit's own limit (below) and no second read changes it. Any other non-exact size (a minimum, a maximum, a resize increment,
+an app's animation) is accepted when a second agreed read, 8 ms later, shows it unchanged; a size still changing between
+reads is followed for up to 120 ms after the setter and the last agreed read stands. A read that itself timed out extends
+that window by 30 ms once. Before 2026-10-30 every non-exact answer cost five reads over 120 ms, so a drag held at a limit
+spent 120 ms per request; the same drag now spends 0.3 ms (one read) per request past the screen and 8 to 20 ms per
+request the app can grant. The shared two-second deadline remains authoritative.
 `INFINIFY_DEBUG=1` records one settling receipt per size setter, separating read
-and sleep time from the elapsed post-setter interval.
+and sleep time from the elapsed post-setter interval, and says once per window, `native size limit`, that the
+screen's visible frame ended it.
 
 One native position write may precede the size. macOS grants no Accessibility size
 that would carry a window past the visible frame of its screen: asked from an
 origin the size does not fit from, the window keeps the size it has (rejected). On
-each axis the request grows on and would overflow, the window is first moved by the
-least that makes room: to where the size ends at the visible frame's far edge, or
-to the frame's origin for a size larger than the frame, which is then asked as it
-is and comes back clamped. The identity and settable checks stand before
+each axis the request grows on and would overflow, the window is first moved once, to the
+frame's origin on that axis (the most room there is, so the sizes a drag asks next from there need no further move; the least
+move that makes room moved a window 4 to 7 times by a few points each in one drag past the screen, and each move
+showed as a jump of the drawn window until the shell re-based on the origin the result reported). A size larger than the
+frame is then asked as it is and comes back clamped. The identity and settable checks stand before
 the move, identity and timeout again between the move and the size, and a move that
-fails or is not honoured does not stop the size from being asked. `moved` in the
-result says that the window was read at another origin afterwards;
+fails or is not honoured does not stop the size from being asked. The position read after the move
+is polled as the size read is (2 ms on disagreement, a second read 8 ms later for an origin other than the one asked).
+`moved` in the result says that the window was read at another origin afterwards;
 `mutation_attempted` remains the size setter's alone.
+
+Why a window cannot be made taller than the visible frame (measured on the macOS 27.0.1 guest, 1920x1200 with a 30 point
+menu bar and a 90 point Dock, visible frame 30..1110 vertically, 2026-10-30): TextEdit, Terminal, Finder, Safari, Google
+Chrome and Ghostty asked for heights of 1400, 2000 and 3000 from every order of position and size (size only; position then
+size; size then position; size, position, size as yabai does; with AXEnhancedUserInterface off; position first at y=-200 or
+y=5000) ended at 1009 to 1082 points tall with their bottom at 1099 to 1112, within 12 points of the visible frame's
+bottom; from y=30 the larger answers were 1079 (TextEdit), 1069 (Terminal, in rows) and 1082 (Finder, Safari, Chrome,
+Ghostty). Asking the window to start at the visible frame's top first is what gets the most (1079 against 1009 from y=100).
+`AXFrame` is not settable (`kAXErrorAttributeUnsupported`). TextEdit's AppleScript `set bounds` is clamped as well (to
+30..1113). Position is clamped too: y=5000 comes back as 1078 and x=-3000 as -760. A window taller than the display
+therefore cannot be made by Accessibility, scripting or any order of the two; it takes an app that lifts the constraint
+itself (AppKit's `constrainFrameRect:toScreen:`, which Electron's `enableLargerThanScreen` overrides) or a larger
+display. Neither Sunlight, yabai nor DriftWM has anything for it: they take the size the app answers with, as this does.
+The canvas window is kept at that size, and zoomed out it is simply drawn smaller.
 
 Results distinguish observed/applied/clamped/rejected/unsupported, invalid/stale,
 unavailable/missing/ambiguous, and readback failures/timeouts. `mutation_attempted`

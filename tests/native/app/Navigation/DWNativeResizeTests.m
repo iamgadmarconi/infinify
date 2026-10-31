@@ -26,7 +26,9 @@ static double pressedAt,animationDelay;
 static NSString *pressedIdentifier;
 static double monotonicSeconds,messageTimeout;
 static double sizeReturnedAt,postSizeReadSeconds,sizeSettlesAfter,lastSizeObservationStarted;
-static BOOL clampSize;
+static BOOL clampSize,animateSize;
+static CGFloat clampHeight;
+static int transientDisagree;
 static CGSize requestedSize;
 static int monotonicClock(clockid_t clock,struct timespec *t) {(void)clock;*t=(struct timespec){(time_t)monotonicSeconds,(long)((monotonicSeconds-floor(monotonicSeconds))*1e9)};return 0;}
 static int sleepMicros(useconds_t duration) {monotonicSeconds+=duration/1e6;return 0;}
@@ -46,6 +48,7 @@ static NSArray *axWindows;
 static CFArrayRef windowInfo(CGWindowListOption options,CGWindowID wid) {
     (void)options;
     CGRect cg=nativeFrame;cg.size.width+=cgWidthOffset;double sincePress=monotonicSeconds-pressedAt;
+    if(transientDisagree>0&&sizeReturnedAt){transientDisagree--;cg.origin.x+=10;}
     if(disagree||(fillTransientDisagree&&pressedAt&&sincePress>=.09&&sincePress<.21))cg.origin.x+=10;
     NSDictionary *row=@{(id)kCGWindowNumber:@(wid),(id)kCGWindowOwnerPID:@(stale?0:getpid()),
         (id)kCGWindowBounds:CFBridgingRelease(CGRectCreateDictionaryRepresentation(cg))};
@@ -70,6 +73,7 @@ static AXError copy(AXUIElementRef element,CFStringRef attribute,CFTypeRef *out)
     else if(CFEqual(attribute,kAXPositionAttribute)) {
         if(sizeReturnedAt){lastSizeObservationStarted=monotonicSeconds;monotonicSeconds+=postSizeReadSeconds;
             if(sizeSettlesAfter>0&&monotonicSeconds-sizeReturnedAt>=sizeSettlesAfter)nativeFrame.size=requestedSize;}
+        if(animateSize&&sizeReturnedAt&&nativeFrame.size.width<requestedSize.width)nativeFrame.size.width=fmin(requestedSize.width,nativeFrame.size.width+5);
         if(fillAnimating&&pressedAt&&monotonicSeconds-pressedAt>=animationDelay)nativeFrame=fillFrame;
         if(fillDrifting&&pressedAt)nativeFrame.origin.x+=.8;
         positionReads++;
@@ -99,6 +103,7 @@ static AXError set(AXUIElementRef element,CFStringRef attribute,CFTypeRef value)
     } else if(CFEqual(attribute,kAXSizeAttribute)) {
         [writes addObject:@"size"];AXValueGetValue((AXValueRef)value,kAXValueCGSizeType,&nativeFrame.size);cgWidthOffset=0;
         requestedSize=nativeFrame.size;sizeReturnedAt=monotonicSeconds;if(clampSize)nativeFrame.size.width-=20;
+        if(clampHeight>0&&nativeFrame.size.height>clampHeight)nativeFrame.size.height=clampHeight;
         stale|=staleAfterSize;disagree|=disagreeAfterSize;
         if(readTimeoutAfterSize){positionReadTimeouts=1;readTimeoutAfterSize=NO;}
         if(sizeTimeouts>0){sizeTimeouts--;return kAXErrorCannotComplete;}
@@ -135,7 +140,7 @@ static DWResizeIdentity reset(CGRect frame) {
     offsetCGAfterPosition=NO;cgWidthOffset=0;
     positionExhaustsDeadline=staleAfterReadTimeout=readTimeoutAfterSize=NO;sizeTimeouts=positionTimeouts=positionReadTimeouts=sizeReadTimeouts=positionReads=sizeReads=0;
     positionReadError=kAXErrorSuccess;monotonicSeconds=100;messageTimeout=.15;
-    sizeReturnedAt=postSizeReadSeconds=sizeSettlesAfter=lastSizeObservationStarted=0;clampSize=NO;requestedSize=CGSizeZero;
+    sizeReturnedAt=postSizeReadSeconds=sizeSettlesAfter=lastSizeObservationStarted=0;clampSize=animateSize=NO;clampHeight=0;transientDisagree=0;requestedSize=CGSizeZero;
     frontmost=YES;focusedWindow=42;focusChangesAfterMenu=fillStale=fillDisagree=fillTransientDisagree=fillUnchanged=fillAnimating=fillDrifting=menuTimeout=NO;fillError=fillReadError=kAXErrorSuccess;pressedAt=0;animationDelay=.18;pressedIdentifier=nil;fillFrame=CGRectMake(0,30,960,740);
     menuRoot=menuTree(@[@{@"role":(id)kAXMenuItemRole,@"AXIdentifier":@"_zoomFill:",@"AXEnabled":@YES}]);
     DWResizeIdentity identity={.pid=getpid(),.window=42};
@@ -147,14 +152,31 @@ int main(void) {@autoreleasepool {
     DWResizeResult restored=dw_resize_apply_frame(identity,original);
     check(restored.outcome==DWResizeApplied&&restored.observed&&restored.mutation_attempted&&CGRectEqualToRect(restored.actual_ax,original),@"full fractional frame restored");
     check([writes isEqual:@[@"size",@"position"]],@"exact AX and CG extent after positioning needs no second size write");
+    // A size the app took that is not the one asked (a minimum, a maximum, an increment) is accepted when a second agreed read, 8ms
+    // later, shows it unchanged: 2 reads after the setter and about 30ms here, not the five reads over 120ms that used to be spent.
     identity=reset(original);clampSize=YES;postSizeReadSeconds=.01;restored=dw_resize_apply(identity,CGSizeMake(600,400));
-    check(restored.outcome==DWResizeClamped&&restored.observed&&sizeReads==6&&lastSizeObservationStarted-sizeReturnedAt>=.12&&monotonicSeconds-sizeReturnedAt<.141&&[writes isEqual:@[@"size"]],@"non-exact size retains all five reads through 120ms while AX time overlaps the settling window");
+    check(restored.outcome==DWResizeClamped&&restored.observed&&CGSizeEqualToSize(restored.actual_ax.size,CGSizeMake(580,400))&&sizeReads==3&&monotonicSeconds-sizeReturnedAt<.06&&[writes isEqual:@[@"size"]],@"a non-exact size that holds still is accepted on its second agreed read, not after 120ms");
     identity=reset(original);postSizeReadSeconds=.01;restored=dw_resize_apply(identity,CGSizeMake(600,400));
     check(restored.outcome==DWResizeApplied&&sizeReads==2&&monotonicSeconds-sizeReturnedAt<.021&&[writes isEqual:@[@"size"]],@"an exact first read finishes without a settling delay or repeated setter");
     identity=reset(original);clampSize=YES;postSizeReadSeconds=.025;restored=dw_resize_apply(identity,CGSizeMake(600,400));
-    check(restored.outcome==DWResizeClamped&&sizeReads==6&&lastSizeObservationStarted-sizeReturnedAt>=.12&&monotonicSeconds-sizeReturnedAt<.251&&[writes isEqual:@[@"size"]],@"slow observations never add sleeps after their retry deadlines or shorten the final observation floor");
-    identity=reset(original);clampSize=YES;postSizeReadSeconds=.01;sizeSettlesAfter=.11;restored=dw_resize_apply(identity,CGSizeMake(600,400));
-    check(restored.outcome==DWResizeApplied&&restored.observed&&CGSizeEqualToSize(restored.actual_ax.size,CGSizeMake(600,400))&&lastSizeObservationStarted-sizeReturnedAt>=.12&&[writes isEqual:@[@"size"]],@"an intermediate owner frame still gets the final 120ms observation before classification");
+    check(restored.outcome==DWResizeClamped&&sizeReads==3&&monotonicSeconds-sizeReturnedAt<.12&&[writes isEqual:@[@"size"]],@"slow observations are not followed by sleeps past the 120ms they may take");
+    // The screen's visible frame (1000x770 here) is AppKit's own limit: a size that reaches past it and comes back short is final on
+    // the first agreed read. The request starts at the frame's origin after the room move, so it is asked as it is.
+    identity=reset(original);clampSize=YES;postSizeReadSeconds=.01;restored=dw_resize_apply(identity,CGSizeMake(1200,400));
+    check(restored.outcome==DWResizeClamped&&restored.observed&&CGSizeEqualToSize(restored.actual_ax.size,CGSizeMake(1180,400))&&sizeReads==3&&monotonicSeconds-sizeReturnedAt<.021&&[writes isEqual:@[@"position",@"size"]],@"a size past the screen that comes back short is accepted on the first read with no settling poll");
+    identity=reset(CGRectMake(0,30,586,488));clampHeight=740;postSizeReadSeconds=.01;restored=dw_resize_apply(identity,CGSizeMake(586,1500));
+    check(restored.outcome==DWResizeClamped&&restored.observed&&CGSizeEqualToSize(restored.actual_ax.size,CGSizeMake(586,740))&&sizeReads==2&&monotonicSeconds-sizeReturnedAt<.021&&[writes isEqual:@[@"size"]],@"a height past the screen, from the frame's own top, is accepted on the first read as a width is");
+    // Room is made once and as large as the screen has: the frame's origin on each axis the request overflows, not the least move.
+    identity=reset(original);postSizeReadSeconds=.001;restored=dw_resize_apply(identity,CGSizeMake(900,600));
+    check(restored.outcome==DWResizeApplied&&restored.moved&&CGPointEqualToPoint(restored.actual_ax.origin,CGPointMake(0,30))&&[writes isEqual:@[@"position",@"size"]],@"a size that overflows is given the frame's origin on that axis in one move");
+    identity=reset(CGRectMake(0,30,586,488));postSizeReadSeconds=.001;restored=dw_resize_apply(identity,CGSizeMake(600,700));
+    check(restored.outcome==DWResizeApplied&&!restored.moved&&[writes isEqual:@[@"size"]],@"a window already at the frame's origin needs no second move for a larger size");
+    // A frame still moving (an app's own animation) is followed until two reads agree.
+    identity=reset(original);clampSize=YES;animateSize=YES;postSizeReadSeconds=.01;restored=dw_resize_apply(identity,CGSizeMake(600,400));
+    check(restored.outcome==DWResizeApplied&&restored.observed&&CGSizeEqualToSize(restored.actual_ax.size,CGSizeMake(600,400))&&sizeReads>=5&&[writes isEqual:@[@"size"]],@"a size still changing between reads is followed to the size asked");
+    // The window list shows the new frame a few ms after AX: the disagreeing read is retried in 2ms, not 30.
+    identity=reset(original);postSizeReadSeconds=.001;transientDisagree=2;restored=dw_resize_apply(identity,CGSizeMake(600,400));
+    check(restored.outcome==DWResizeApplied&&restored.observed&&monotonicSeconds-sizeReturnedAt<.012&&[writes isEqual:@[@"size"]],@"AX and the window list disagreeing for one read costs one 2ms retry, not a 30ms grid step");
     identity=reset(CGRectMake(0,30,960,740));resizeOnPosition=YES;restored=dw_resize_apply_frame(identity,original);
     check(restored.outcome==DWResizeApplied&&CGRectEqualToRect(restored.actual_ax,original)&&CGRectEqualToRect(restored.actual_cg,original)&&[writes isEqual:@[@"size",@"position",@"size"]],@"position-induced extent change retains size-position-size ordering");
     identity=reset(CGRectMake(0,30,960,740));offsetCGAfterPosition=YES;restored=dw_resize_apply_frame(identity,original);

@@ -317,8 +317,8 @@ transaction above, so there is one at a time and each ends in bounded time.
   fullscreen toggle, an IPC resize of any window, a second begin.
 
 Where a Mac window cannot follow upstream's client: its minimum and maximum
-are unknown until a size past them was asked and refused (about 120 ms each
-by the adapter's polling constants, not measured);
+are unknown until a size past them was asked and refused (10 to 20 ms each,
+0.3 ms past the screen's visible area, measured on the guest 2026-10-30; it was about 120 ms);
 macOS grants no size past the screen's visible area; its own top-left does
 not move for a left or top drag, so only the tile on the canvas keeps the
 opposite edge; and what is drawn lags the pointer by one request, since the

@@ -703,9 +703,9 @@ By the code:
   moves the real window first.** macOS grants no size that would carry a
   window past the visible area of its screen (the owner's run of 2026-10-10:
   2056x1329 asked of a window at (223,39), answered with the 1833x1290 it
-  had). The adapter therefore writes a native position before the size, the
-  least that makes room, and a size larger than the visible area is asked from
-  the area's corner and comes back clamped to it: on a 2056x1329 display under
+  had). The adapter therefore writes a native position before the size, once, to the
+  visible area's origin on each axis that overflows, and a size larger than the visible area is asked from
+  the area's corner and comes back clamped to it, on the first read, with no settling poll: on a 2056x1329 display under
   a 39 point menu bar a fullscreen ends at 2056x1290. The place on the canvas
   and the camera do not change (case 19 of the test); the trace line ends
   `moved=1`. The real window is not put back afterwards, and one with a
@@ -809,12 +809,22 @@ nothing, and the next press starts afresh.
   screen).
 - **Limits are not known before asking.** Upstream clamps to the limits its
   client declares and never asks for more. Here a size past a limit is asked
-  and refused, about an eighth of a second each time while the pointer keeps
-  moving (by the adapter's polling constants; not measured); a pointer at rest
+  and refused, 0.3 ms each time past the screen's visible area and about 10 to 20 ms
+  for another limit while the pointer keeps moving (one or two reads, measured on
+  the guest 2026-10-30; it was an eighth of a second); a pointer at rest
   asks nothing. The snap cluster follows the size
   granted, so it stops with the window.
 - **macOS grants no size larger than the screen's visible area**, and the
-  real window is moved first when a larger size has no room where it sits.
+  real window is moved first when a larger size has no room where it sits. This is
+  AppKit's own constraint on the frame, not ours: no order of position and size, no
+  `AXFrame`, no AppleScript bounds and no off-screen start lifts it (measured on six
+  apps, [NATIVE-RESIZE.md](NATIVE-RESIZE.md)), so a window cannot be taller than the
+  display, zoomed out or not. The canvas keeps the size the app took.
+- **A drag that makes the real window move shows a short jump.** The move is
+  made once, and the drawn window sits at the new native origin until the shell has
+  re-based on the origin the result reports: 12 ms (one sample) for a bottom drag
+  past the screen, 40 ms for a corner drag past it on both axes, one run each at zoom .5
+  (before: two moves of a bottom drag, each shown for about 165 ms).
 - **A screen-pinned window is not resized**, where upstream resizes it in
   screen space. The press raises and focuses it and says so. A decision of
   the port, for the owner to confirm.

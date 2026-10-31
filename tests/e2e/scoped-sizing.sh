@@ -385,7 +385,7 @@ now = {'camera': State()['camera'], 'zoom': State()['zoom']}; check('17: the cam
 until('17: another window is sizable', 10, lambda: resize('a', 520, 420).returncode == 0, bool); agreed('17: and was resized', 'a', [520, 420])
 
 # 19. Room on the screen. macOS grants no size that would carry a window past its screen's visible area, so the adapter moves
-# the real window first, by the least that makes room, and the canvas knows nothing of it: the frame on the canvas follows the
+# the real window first, once, to the visible area's origin on each axis that overflows, and the canvas knows nothing of it: the frame on the canvas follows the
 # size alone, by msg resize's rule (the center stays), and the camera stays. Every number is from the visible area D reports.
 away('a'); show('d'); time.sleep(.2)
 V = [int(v) for v in status('d')['screen_visible']]; d0 = status('d')['bounds']
@@ -402,7 +402,7 @@ def roomed(what, w, h, outcome, origin, size, moved):
         now = {'frame': frame('d'), 'camera': State()['camera']}
         check(f'19: {what}: on the canvas the center and the camera stay, {when}', now == {'frame': want, 'camera': view}, {'before': before, 'now': now, 'want': want, 'camera before': view})
         if when == 'at the answer': time.sleep(1.3)
-roomed('a size that fits the visible area but not from there', W, H, 'applied', [V[0] + 200, V[1] + 150], [W, H], 1)
+roomed('a size that fits the visible area but not from there', W, H, 'applied', [V[0], V[1]], [W, H], 1)
 # Wider than the visible area: asked as it is from the area's left edge, and the window takes the width there is.
 roomed('wider than the visible area', V[2] + 300, H, 'clamped', [V[0], V[1] + 150], [V[2], H], 1)
 # The screen's whole size, which a fullscreen on a whole display asks (the owner's 2056x1329): the visible area's, at its origin.
