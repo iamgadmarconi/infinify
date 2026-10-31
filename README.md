@@ -98,7 +98,9 @@ screen (a standard window or a dialog, not a popup or helper window) joins the c
   saved, the panels close and the native desktop returns.
 - **What a run changes.** Stage Manager and macOS window tiling would fight the canvas, so while the canvas is
   open the run writes `false` to `GloballyEnabled`, `EnableTilingByEdgeDrag`, `EnableTopTilingByEdgeDrag` and
-  `EnableTilingOptionAccelerator` in `com.apple.WindowManager` (an absent key is removed again afterwards), after
+  `EnableTilingOptionAccelerator` in `com.apple.WindowManager` and `None` to the title-bar double-click
+  (`AppleActionOnDoubleClick`, which would zoom a window's native frame behind its drawn copy) (an absent key is removed
+  again afterwards), after
   saving your own values to `~/Library/Application Support/Infinify/window-prefs-snapshot.plist`. They are put
   back when it ends (quit, signal, log out) or, if it was killed, at the next launch. A setting you change
   yourself meanwhile stays as you set it. `--windowed`, `--manual` and `--only-pid` runs leave the settings alone.
@@ -215,7 +217,7 @@ window, event, permission or Dock; the live ones start disposable fixture window
 | `native-focus.sh` | the focus adapter refuses an identity that is not a live window | no |
 | `privileged-regression.sh` | the Dock payload and its C client with substituted native calls | no |
 | `root-capture-mailbox.sh` | the root capture mailbox and captured-input acceptance code | no |
-| `system-takeover.sh` | the Stage Manager and tiling snapshot and restore against an in-memory store | no |
+| `system-takeover.sh` | the Stage Manager, tiling and title-bar double-click snapshot and restore against an in-memory store | no |
 | `window-discovery.sh`, `window-events.sh` | window discovery scheduling and the application and window lifecycle events | no |
 | `scoped-windows.sh`, `scoped-sizing.sh`, `scoped-resize-drag.sh`, `scoped-native.sh`, `physical-resize-edge.sh`, `native-drag-drop.sh` | the product on disposable fixture windows of the test's own (`--only-pid`) | yes |
 | `privileged-fixture.sh`, `compositor-dnd.sh` | the Dock helper and drag-and-drop in compositor mode; guest only, off unless a live flag is given | yes |

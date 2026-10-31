@@ -85,6 +85,54 @@ DriftWM is a compositor: it is the session, not an app one launches. A normal ru
     removed, stays as they left it and is named on stderr. Stage Manager
     switched on under the open canvas is not switched off again: it is named
     once on stderr, with what its windows will look like, and the run goes on.
+  - **The title-bar double-click is held at "None" too.** A fifth key,
+    `AppleActionOnDoubleClick` in the global domain (System Settings,
+    Desktop & Dock, "Double-click a window's title bar to"), is written
+    `None` and put back the same way: saved first, restored to the user's
+    exact value (a key that was absent is removed again, not written as
+    macOS's default), kept if the user changed it meanwhile, put back at the
+    next launch after a crash. Why: with the macOS default the double-click
+    zooms the *native* frame, which the canvas does not draw. On a window whose
+    own title bar the canvas does not recognise (Chromium's tab strip, for
+    one: `native title cache … reason=missing_top_toolbar`) the click goes to
+    the application and the native frame jumps to the display while the drawn
+    copy stays where it is, then is adopted: the owner's "double-clicking the
+    title bar expands the window to the whole viewport and it jumps around"
+    (their log, window #20 Aside: `native origin … old=(145,57,1782,1291)
+    new=(0,38,2056,1291) … end=adopted displayed origin`). A window whose title
+    the canvas does recognise never gets the click: the canvas's own
+    double-click there is `fullscreen` (DriftWM's fit).
+    Running applications do not read the key again by themselves: HIToolbox
+    keeps it in a static after the first read (`GetWindowDoubleClickAction`
+    with an `sFetched` guard in the dyld cache), so a change made while TextEdit
+    ran had no effect on it. Each write of this key therefore also posts the
+    distributed notification `AppleNoRedisplayAppearancePreferenceChanged`
+    (`DWCFPrefs -setValue:ofPref:`); AppKit applications read the key again on
+    it. Two traps found on the way: after AppKit is loaded,
+    `CFPreferencesCopyAppValue` answers `Maximize` for an absent global key
+    (AppKit's registered default), so the global key is read with
+    `CFPreferencesCopyValue` for the user's own store; and `Fill`, which the
+    owner's Mac may show in Settings, is not a stored value the reader knows:
+    in the guest an explicit `Fill` did nothing, and an absent key behaved
+    as `Maximize`.
+    Run in the guest (macOS 27.0.1, TextEdit, Finder, Safari, Google Chrome;
+    no Electron application is installed there, and Aside's window sat on a
+    coordinate offset that the pointer could not reach, so it was not tried):
+    with the key absent, a HID double-click on the title bar (or Chrome's tab
+    strip) zoomed the window in each; with `None` written and the notification
+    posted *while the application ran*, the same double-click left the frame
+    unchanged in each, and with the key deleted and the notification posted
+    again it zoomed again. Without the notification a running TextEdit,
+    Finder and Chrome kept the value they had read at launch. Under a
+    compositor run on Chrome (title not recognised): `None` held, the click
+    ended `native mouse owner … end=unchanged native click` and the frame was
+    `[0 30 1900 1092]` before and after; with the key then deleted by hand and
+    the notification posted (the user changing it meanwhile), the same
+    double-click moved the native origin from y=30 to y=49 and ended `end=adopted
+    displayed origin`, the owner's symptom. `msg action quit`, SIGTERM and a
+    relaunch after `kill -9` each left the guest's key as it was found (absent,
+    `Minimize`, `None`). Not run: an Electron application, Aside, the
+    owner's Mac (macOS 27.2).
   - Nothing here is a setting of Infinify's: there is no config key to leave
     the user's settings alone; use `--windowed`, `--manual` or `--only-pid`
     for that. Tiling a window by hand (Window menu, keyboard shortcuts)

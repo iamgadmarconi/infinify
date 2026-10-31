@@ -7,6 +7,10 @@
 // EnableTilingOptionAccelerator) and puts the user's settings back when it ends. Written through
 // CFPreferences, as `defaults write` does: WindowManager follows it live, with no restart of anything
 // (established on macOS 27.0.1 in the guest, docs/native/user-guide.md "Desktop mode").
+// A fifth setting is the title-bar double-click (NSGlobalDomain AppleActionOnDoubleClick, "Zoom"/"Fill" in System Settings, absent
+// by default): macOS zooms or fills the native frame, which the canvas does not draw, so the window jumps to the display while its
+// drawn copy stays put. It is held at "None" the same way. Applications read it once, at launch, so each write of it also posts
+// AppleNoRedisplayAppearancePreferenceChanged, which makes the running ones read it again.
 // A translation of Sunlight's takeover preferences; DWSystemTakeover.m names each translated function and its lines.
 //
 // The rules that keep the user's settings theirs:

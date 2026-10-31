@@ -28,6 +28,11 @@
 // Deviations, all deliberate:
 // - `managed` holds the four com.apple.WindowManager keys at false. EnableTiledWindowMargins stays alone: it only sets the gap
 //   between tiled windows, and no window is tiled.
+// - A fifth row is Infinify's own: NSGlobalDomain AppleActionOnDoubleClick at "None". The title-bar double-click zooms or fills
+//   the native frame, which the canvas does not draw: the window jumps to the display while its drawn copy stays put. An
+//   application reads the key once, at launch (HIToolbox keeps it in a static), so running ones are told afterwards: every write
+//   of it posts the distributed notification System Settings' appearance pane posts, which makes AppKit applications read it
+//   again (DWCFPrefs -setValue:ofPref:; measured in the guest, docs/native/user-guide.md "Desktop mode").
 // - The snapshot is a file, written atomically before the first write (Sunlight: UserDefaults `takeover.snapshot`, 135-137).
 // - `write` reads every value back, and `apply` stops at the first one that did not stick and is all or nothing: what was
 //   written is put back (Sunlight writes and moves on).
@@ -43,6 +48,9 @@
 #include <unistd.h>
 
 static NSString *const kDomain=@"com.apple.WindowManager";
+// What `defaults -g` calls the global domain; CFPreferences names it kCFPreferencesAnyApplication (DWCFPrefs maps it).
+static NSString *const kGlobalDomain=@"NSGlobalDomain";
+static NSString *const kDoubleClickKey=@"AppleActionOnDoubleClick"; // "Maximize" (Zoom), "Fill", "Minimize" or "None"; absent is macOS's own default
 static NSString *const kAbsent=@"<absent>"; // SystemPrefs.swift:19
 
 @interface DWPref ()
@@ -55,12 +63,14 @@ static NSString *const kAbsent=@"<absent>"; // SystemPrefs.swift:19
 - (NSString *)identifier { return [NSString stringWithFormat:@"%@|%@",_domain,_key]; }
 @end
 
-// SystemPrefs.swift:21-45, in the order the keys are written and reported.
+// SystemPrefs.swift:21-45, in the order the keys are written and reported. The last row is Infinify's own (Sunlight has none):
+// the title-bar double-click, which acts on the native frame the canvas does not draw.
 static NSArray<DWPref *> *managed(void) {
     static NSArray<DWPref *> *rows;static dispatch_once_t once;
     dispatch_once(&once,^{NSMutableArray *list=[NSMutableArray array];
         for(NSString *key in @[@"GloballyEnabled",@"EnableTilingByEdgeDrag",@"EnableTopTilingByEdgeDrag",@"EnableTilingOptionAccelerator"])
             [list addObject:[[DWPref alloc]initWithDomain:kDomain key:key desired:@NO]];
+        [list addObject:[[DWPref alloc]initWithDomain:kGlobalDomain key:kDoubleClickKey desired:@"None"]];
         rows=list;});
     return rows;
 }
@@ -72,18 +82,31 @@ static BOOL equalValues(id a,id b) {
     return NO;
 }
 
+static CFStringRef cfDomain(DWPref *pref) { return [pref.domain isEqual:kGlobalDomain]?kCFPreferencesAnyApplication:(__bridge CFStringRef)pref.domain; }
+
+// Applications read the double-click key once, at launch; this is what makes the running ones read it again (TextEdit, Finder and
+// Chrome in the guest; no other notification tried did). Name of a notification AppKit listens for, not of ours.
+static NSString *const kReloadNote=@"AppleNoRedisplayAppearancePreferenceChanged";
+
 @implementation DWCFPrefs
 // SystemPrefs.current (52-54), after a synchronize so a value another process just wrote is seen.
+// The global domain is read from the user's own store, not through CFPreferencesCopyAppValue: once AppKit is loaded that call answers
+// with AppKit's registered default ("Maximize" for the double-click) for a key the user never set, so an absent key would be saved as
+// "Maximize" and written back as one (measured in the guest). A forced (managed) value is told apart by -setValue:ofPref:.
 - (id)valueOfPref:(DWPref *)pref {
-    CFStringRef domain=(__bridge CFStringRef)pref.domain;CFPreferencesAppSynchronize(domain);
+    CFStringRef domain=cfDomain(pref);CFPreferencesAppSynchronize(domain);
+    if([pref.domain isEqual:kGlobalDomain])return CFBridgingRelease(CFPreferencesCopyValue((__bridge CFStringRef)pref.key,domain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost));
     return CFBridgingRelease(CFPreferencesCopyAppValue((__bridge CFStringRef)pref.key,domain));
 }
 // The body of SystemPrefs.write (100-108) for one pref, then the read-back: a managed (forced) preference, or any store that
 // did not take the value, reads back as it was and is refused.
 - (BOOL)setValue:(id)value ofPref:(DWPref *)pref {
-    CFStringRef domain=(__bridge CFStringRef)pref.domain;
+    CFStringRef domain=cfDomain(pref);
     CFPreferencesSetAppValue((__bridge CFStringRef)pref.key,(__bridge CFPropertyListRef)value,domain);CFPreferencesAppSynchronize(domain);
-    return equalValues([self valueOfPref:pref],value);
+    BOOL global=[pref.domain isEqual:kGlobalDomain];
+    BOOL stuck=equalValues([self valueOfPref:pref],value)&&!(global&&CFPreferencesAppValueIsForced((__bridge CFStringRef)pref.key,domain));
+    if(stuck&&global)[NSDistributedNotificationCenter.defaultCenter postNotificationName:kReloadNote object:nil userInfo:nil deliverImmediately:YES];
+    return stuck;
 }
 @end
 
@@ -199,7 +222,7 @@ static BOOL writeAtomically(NSData *data,NSString *path) {
     // 127-138: snapshot before anything is touched; an existing snapshot only gains the prefs added since, and is persisted before the first write.
     NSDictionary *snapshot=[self snapshotAdding:stored];
     if(!applied||snapshot.count!=stored.count){
-        if(![self save:snapshot]){[lines addObject:@"Infinify: could not save the window settings first, so Stage Manager and window tiling were left as they are"];if(note)*note=[lines componentsJoinedByString:@"\n"];return NO;}
+        if(![self save:snapshot]){[lines addObject:@"Infinify: could not save the window settings first, so Stage Manager, window tiling and the title-bar double-click were left as they are"];if(note)*note=[lines componentsJoinedByString:@"\n"];return NO;}
     }
     NSMutableArray<DWPref *> *written=[NSMutableArray array],*failed=[NSMutableArray array];
     if(![self applyPrefs:written failed:failed]){
@@ -207,12 +230,12 @@ static BOOL writeAtomically(NSData *data,NSString *path) {
         BOOL back=YES;
         for(DWPref *p in written.reverseObjectEnumerator){id saved=snapshot[p.identifier],original=([saved isKindOfClass:NSString.class]&&[saved isEqual:kAbsent])?nil:saved;back=[_store setValue:original ofPref:p]&&back;}
         if(back&&!applied)[self removeFile];
-        [lines addObject:[NSString stringWithFormat:@"Infinify: could not switch off %@ in %@, so Stage Manager and window tiling were left as they were%@",named(failed),kDomain,back?@"":@" (some could not be put back; the saved originals are restored at the next launch)"]];
+        [lines addObject:[NSString stringWithFormat:@"Infinify: could not switch off %@, so Stage Manager, window tiling and the title-bar double-click were left as they were%@",named(failed),back?@"":@" (some could not be put back; the saved originals are restored at the next launch)"]];
         if(note)*note=[lines componentsJoinedByString:@"\n"];return NO;
     }
     _snapshot=snapshot;
-    [lines addObject:written.count?[NSString stringWithFormat:@"Infinify: Stage Manager and window tiling are off while it runs (were: %@); they go back when it ends",listed(snapshot,managed())]
-        :@"Infinify: Stage Manager and window tiling were already off; nothing was changed"]; // 151
+    [lines addObject:written.count?[NSString stringWithFormat:@"Infinify: Stage Manager, window tiling and the title-bar double-click are off while it runs (were: %@); they go back when it ends",listed(snapshot,managed())]
+        :@"Infinify: Stage Manager, window tiling and the title-bar double-click were already off; nothing was changed"]; // 151
     if(note)*note=[lines componentsJoinedByString:@"\n"];return YES;
 }
 
@@ -224,7 +247,7 @@ static BOOL writeAtomically(NSData *data,NSString *path) {
     BOOL ok=[self revertSnapshot:snapshot restored:restored kept:kept failed:failed];
     if(ok){[self removeFile];_snapshot=nil;}
     NSString *keptText=kept.count?[@"; left as you set them: " stringByAppendingString:named(kept)]:@"";
-    if(note)*note=ok?[NSString stringWithFormat:@"Infinify: put back Stage Manager and window tiling (%@)%@",listed(snapshot,managed()),keptText]
+    if(note)*note=ok?[NSString stringWithFormat:@"Infinify: put back Stage Manager, window tiling and the title-bar double-click (%@)%@",listed(snapshot,managed()),keptText]
         :[NSString stringWithFormat:@"Infinify: could not put back %@; the saved originals stay and are restored at the next launch",named(failed)];
     return ok;
 }

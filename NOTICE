@@ -88,6 +88,9 @@ file. Each adapted file names what it took. Files derived from Sunlight:
   Sources/Canvas/Takeover/SystemPrefs.swift and TakeoverMode.swift: snapshot the
   user's own preferences before the first write, an absent key restored as
   absent, restore on every end and from a leftover record at the next launch.
+  Its AppleActionOnDoubleClick row and the notification that makes running
+  applications read it again are Infinify's own (no Sunlight, DriftWM or yabai
+  counterpart; none of the three overrides the title-bar double-click).
   native/app/Windows/DWWindowEvents.m, DWWindowEvents.h and the files cut
   from DWWindowEvents.m (DWWindowEvents+Applications.m, +Observation.m,
   +Private.h, DWApplicationWatch, DWApplicationCatalogWatch,
