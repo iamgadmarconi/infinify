@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // New implementation. Desktop updates: a desktop run reads whether a newer release is out (DWUpdateCheck.h) when it starts
 // and every six hours after, and tells the owner once per version with a notification. Infinify has no window or menu of
-// its own while it is the desktop, so the notification is where the news shows; its click opens the setup assistant,
-// whose Ready pane says how to update. macOS asks once whether Infinify may notify, the first time there is news.
+// its own while it is the desktop, so the notification is where the news shows; its click opens the setup assistant at
+// its Ready pane (`setup --update`), which says how to update, whatever pane setup would resume at. macOS asks once
+// whether Infinify may notify, the first time there is news.
 #import "Desktop+Private.h"
 #import "DWOwnerFile.h"
 #import "DWUpdateCheck.h"
@@ -36,7 +37,7 @@ static NSString *const kUpdateNotification=@"com.marengox.infinify.update";
 }
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler {
     (void)center;
-    if([response.notification.request.identifier isEqual:kUpdateNotification])dispatch_async(dispatch_get_main_queue(),^{[self openSetupAssistant];});
+    if([response.notification.request.identifier isEqual:kUpdateNotification])dispatch_async(dispatch_get_main_queue(),^{[self openSetupAssistant:@[@"--update"]];});
     completionHandler();
 }
 @end

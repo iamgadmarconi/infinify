@@ -268,8 +268,9 @@
 - (void)cleanup;
 - (void)onboard;
 - (void)runAutostart;
-// The setup assistant beside this run (Desktop+Session.m): what opening Infinify again, or its update notification, shows.
-- (void)openSetupAssistant;
+// The setup assistant beside this run (Desktop+Session.m), given `setup`'s arguments: what opening Infinify again shows
+// (none), and what the update notification opens (--update).
+- (void)openSetupAssistant:(NSArray<NSString *> *)arguments;
 @end
 // A newer release (DWUpdateCheck.h), read when a desktop run starts and every six hours after, told once per version by a
 // notification whose click opens the setup assistant (Desktop+Updates.m). Windowed, chooser and scoped runs never look.

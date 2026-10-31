@@ -332,7 +332,11 @@ static NSView *closeBelow(NSView *view) { view.identifier=kCloseBelow;return vie
     else if(_onDemo)_onDemo();
 }
 
-- (void)show { [self showPane:self.refusal.length?DWSetupPaneCompositor:DWSetupResumePaneAt(_support)]; }
+- (void)show {
+    if(self.refusal.length)[self showPane:DWSetupPaneCompositor];
+    else if(self.forUpdate&&self.mode!=DWSetupIncomplete)[self showPane:DWSetupPaneReady];
+    else [self showPane:DWSetupResumePaneAt(_support)];
+}
 - (void)showPane:(DWSetupPane)pane {
     [self buildPane:pane];DWSetupRecordPane(_support,_pane);
     if(!self.window.visible)[self.window center];
@@ -362,8 +366,9 @@ static volatile sig_atomic_t setupSignal;
 static void setupStop(int signal) { setupSignal=signal; }
 int DWSetupRun(int argc,const char **argv) { @autoreleasepool {
     NSString *refusal=nil;
+    BOOL forUpdate=argc==1&&!strcmp(argv[0],"--update");
     if(argc==2&&!strcmp(argv[0],"--refused"))refusal=@(argv[1]);
-    else if(argc!=0){fputs("usage: Infinify setup [--refused REASON]\n",stderr);return 64;}
+    else if(argc!=0&&!forUpdate){fputs("usage: Infinify setup [--refused REASON | --update]\n",stderr);return 64;}
     NSString *support=DWSupportDirectory();
     if(![NSFileManager.defaultManager createDirectoryAtPath:support withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:NULL]){fputs("Infinify: cannot create the support directory\n",stderr);return 73;}
     // One assistant at a time: the login item that setup registers starts at once, and finds this lock.
@@ -371,7 +376,7 @@ int DWSetupRun(int argc,const char **argv) { @autoreleasepool {
     if(lock<0||flock(lock,LOCK_EX|LOCK_NB)!=0){if(lock>=0)close(lock);return 0;}
     [NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];[NSApp finishLaunching];
     DWSetupAssistant *assistant=[[DWSetupAssistant alloc]initWithSupportDirectory:support];
-    assistant.refusal=refusal;
+    assistant.refusal=refusal;assistant.forUpdate=forUpdate;
     // A canvas of this bundle that is already running (the assistant was opened from Finder over it), taken to be in the mode setup recorded.
     NSString *executable=NSBundle.mainBundle.executablePath;
     BOOL canvas=NO;

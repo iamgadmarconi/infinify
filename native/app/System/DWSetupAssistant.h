@@ -33,10 +33,13 @@
 @property(copy) void (^onQuit)(void);
 // Why compositor mode did not start, as the launcher said it; shown on the compositor pane.
 @property(copy) NSString *refusal;
+// Opened from the update notification: the Ready pane, which says how to update, once setup is done or the demo chosen.
+@property BOOL forUpdate;
 // The mode of the canvas this run has open, DWSetupIncomplete for none (the assistant was opened again from Finder in a
 // running Infinify otherwise): with a canvas, closing the window only closes it, and Ready says Done for the mode running.
 @property DWSetupMode canvasMode;
-// Shows the window at the pane setup resumes at (the compositor pane when there is a refusal), or at the given pane.
+// Shows the window at the pane setup resumes at (the compositor pane when there is a refusal, the Ready pane for an
+// update), or at the given pane.
 - (void)show;
 - (void)showPane:(DWSetupPane)pane;
 @property(readonly) DWSetupPane pane;
@@ -61,12 +64,13 @@
 - (void)buildPane:(DWSetupPane)pane;
 @end
 
-// `Infinify setup [--refused REASON]`, and what a plain launch or the login item runs while setup is not done: the assistant
+// `Infinify setup [--refused REASON | --update]`, and what a plain launch or the login item runs while setup is not done: the assistant
 // alone, with no canvas and without the canvas run's lease, so it can run beside an Infinify that holds it (an older copy
 // being replaced, or a demo canvas). One assistant at a time (setup.lock in the support directory; a second one ends at
 // once with status 0). It ends by replacing this process: with the hand-over to compositor mode (a running demo canvas of
 // this bundle is ended first), with `--demo` (the capture-mode canvas), with itself again for Screen Recording, or with
 // open(1) of the copy a move put in Applications.
-// --refused is how the launcher, refused at login, says why compositor mode did not start. Returns the exit status when it
+// --refused is how the launcher, refused at login, says why compositor mode did not start; --update is how the update
+// notification's click asks for the Ready pane (Desktop+Updates.m). Returns the exit status when it
 // ends without replacing itself: 0 when the window was closed.
 int DWSetupRun(int argc,const char **argv);

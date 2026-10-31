@@ -151,11 +151,11 @@
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible {
     (void)sender;(void)visible;
     if(self.windowed||!self.managing||self.scope)return NO;
-    [self openSetupAssistant];
+    [self openSetupAssistant:@[]];
     return NO;
 }
-- (void)openSetupAssistant {
-    NSTask *setup=[NSTask new];setup.executableURL=NSBundle.mainBundle.executableURL;setup.arguments=@[@"setup"];
+- (void)openSetupAssistant:(NSArray<NSString *> *)arguments {
+    NSTask *setup=[NSTask new];setup.executableURL=NSBundle.mainBundle.executableURL;setup.arguments=[@[@"setup"] arrayByAddingObjectsFromArray:arguments];
     NSMutableDictionary<NSString *,NSString *> *environment=[NSProcessInfo.processInfo.environment mutableCopy];
     [environment removeObjectForKey:@"XPC_SERVICE_NAME"];setup.environment=environment;
     NSError *error=nil;if(![setup launchAndReturnError:&error])[self say:[NSString stringWithFormat:@"The setup assistant did not start: %@",error.localizedDescription]];

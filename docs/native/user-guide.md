@@ -287,10 +287,15 @@ desktop run (not windowed, chooser or scoped) and the setup assistant read GitHu
 with no account and nothing sent but the request, and keep it in `updates.plist` in the support directory (owner-only)
 with the newest version the owner was told about; a draft, a prerelease or a tag that is no version is never offered.
 When the release is newer than the running version, the desktop run posts one notification for that version ("Infinify
-0.2.3 is out", macOS asking once whether Infinify may notify), whose click opens the setup assistant as opening Infinify
-again does, and the Ready pane shows the version with `brew upgrade --cask infinify` when Homebrew's Caskroom holds
+0.2.3 is out", macOS asking once whether Infinify may notify), whose click opens the setup assistant at its Ready pane
+(`setup --update`; a demo would otherwise resume at the compositor pane), and the Ready pane shows the version with `brew upgrade --cask infinify` when Homebrew's Caskroom holds
 infinify, or a Download button that opens the release page. `defaults write com.marengox.infinify CheckForUpdates -bool
-NO` turns checking off. Nothing is downloaded or installed by the app itself: Homebrew is the update channel.
+NO` turns checking off. Nothing is downloaded or installed by the app itself: Homebrew is the update channel. In the guest on 2026-10-30, a copy stamped 0.2.2 against the published 0.2.3: the demo run read the release
+(`updates.plist`: version 0.2.3, told 0.2.3), macOS asked whether Infinify may notify, and once allowed the notification
+"Infinify 0.2.3 is out" showed; its click started the setup assistant; `setup --update` opened the Ready pane with the
+notice and Download, which opened the release page in Safari. The notification's icon showed as a blank placeholder
+there, which the permission request did not; the guest's Launch Services held stale records of earlier test copies, so
+whether a clean Mac shows the icon is not yet known.
 
 **Uninstall.** `Infinify uninstall [--leave-app]` turns the login item off (which ends the instance launchd started),
 sends SIGTERM to every other process of this bundle's executable and waits ten seconds, turns compositor mode off as
