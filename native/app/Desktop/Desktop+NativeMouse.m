@@ -69,11 +69,15 @@
     CGWindowID wid=(CGWindowID)CGEventGetIntegerValueField(event,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
     if(!wid)wid=(CGWindowID)CGEventGetIntegerValueField(event,kCGMouseEventWindowUnderMousePointer);
     source=[self nativeSource:wid at:CGEventGetLocation(event)];
-    if(!source||[[self.resize busyWindow]isEqual:source.logical]||[self grabbed:source]
-        ||self.nativeOwnershipTransfer||self.nativeHoverTransfer||[self.nativeViews requiresPlacementAdmissionForWindow:source.logical])return;
-    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*record=nil,*view=nil;NSNumber *output=[self.nativeViews desiredOwnerForWindow:source.logical];
+    // INFINIFY_DEBUG: a native press no managed window owns is left entirely to the application and WindowServer, so say why.
+    if(!source){if(DWDebugTrace())fprintf(stderr,"debug: native press unowned wid=%u reason=no_source root=%d\n",wid,[self.native rootWindowFor:wid].intValue);return;}
+    if([[self.resize busyWindow]isEqual:source.logical]||[self grabbed:source]
+        ||self.nativeOwnershipTransfer||self.nativeHoverTransfer||[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]){
+        if(DWDebugTrace())fprintf(stderr,"debug: native press unowned window=#%s reason=busy_or_admission\n",source.logical.description.UTF8String);return;}
+    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*record=nil,*view=nil,*planned=nil;NSNumber *output=[self.nativeViews desiredOwnerForWindow:source.logical];
     for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:source.logical]){record=row;break;}
     for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){view=row;break;}
+    for(NSDictionary *row in snapshot[@"placements"])if([row[@"window"]isEqual:source.logical]&&[row[@"output"]isEqual:output]){planned=DWTyped(row[@"screen_rect"],NSDictionary.class);break;}
     NSDictionary *binding=DWTyped(record[@"source"],NSDictionary.class);double zoom=[view[@"zoom"]doubleValue];
     if(source.nativeMouseOwnership){
         NSMutableDictionary *held=source.nativeMouseOwnership;held[@"buttons"]=buttons;[held removeObjectForKey:@"released"];self.nativeMouseOwner=source;
@@ -87,10 +91,13 @@
     if(!DWNativeBounds(source.router.wid,&initialNative)||!initialRow[(id)kCGWindowBounds]
         ||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)initialRow[(id)kCGWindowBounds],&initialScreen)
         ||!boundIdentity(source.identity,binding[@"identity"])||!binding[@"generation"]||!view||!isfinite(zoom)||zoom<=0
-        ||![self.native withholdWindow:source.identity])return;
+        ||![self.native withholdWindow:source.identity]){if(DWDebugTrace())fprintf(stderr,"debug: native press unowned window=#%s reason=basis_or_withhold\n",source.logical.description.UTF8String);return;}
     source.nativeMouseOwnership=[@{@"identity":source.identity.copy,@"generation":binding[@"generation"],@"output":output,@"session":@(self.nativeSessionEpoch),
         @"camera":view[@"camera"],@"zoom":view[@"zoom"],@"screen_bounds":view[@"screen_bounds"],@"buttons":buttons,@"last_packet":@(now),
         @"initial_native":DWRectJSON(initialNative),@"initial_screen":DWRectJSON(initialScreen)}mutableCopy];
+    // Where the controller draws the window. The window list's bounds are not always the drawn rectangle (a Finder window drawn at half
+    // size from its own top-left corner read back as its native frame in the guest, so no takeover ever saw a transformed window).
+    if(planned)source.nativeMouseOwnership[@"planned_screen"]=planned;
     NSDictionary *clickBinding=@{@"window":source.logical,@"identity":binding[@"identity"],@"generation":binding[@"generation"]};
     BOOL root=wid==source.router.wid&&CGRectContainsPoint(DWRectFromJSON(view[@"screen_bounds"]),CGEventGetLocation(event));
     source.nativeMouseOwnership[@"click_binding"]=clickBinding;source.nativeMouseOwnership[@"click_start"]=pointJSON(CGEventGetLocation(event));source.nativeMouseOwnership[@"click_possible"]=@(root);source.nativeMouseOwnership[@"root"]=@(root);
@@ -111,21 +118,29 @@
 // the press point exactly as after a recognized title press. Resizes and content drags (the extent or nothing changes) stay native.
 - (BOOL)takeOverNativeDrag:(LiveSource *)source event:(CGEventRef)event {
     NSMutableDictionary *held=source.nativeMouseOwnership;
-    if(!held||[held[@"taken"]boolValue]||![held[@"root"]boolValue]||!self.nativeInput||self.cleaning||self.sessionInactive||!self.native||self.native.ended||self.nativeFillHandoff
-        ||source.detached||!boundIdentity(source.identity,held[@"identity"])||[held[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch)return NO;
+    // INFINIFY_DEBUG: why a drag packet of a native press was not taken over, once per reason and press.
+    BOOL (^no)(const char *)=^BOOL(const char *reason){
+        if(DWDebugTrace()&&held&&![held[@"takeover_refused"]isEqual:@(reason)]){held[@"takeover_refused"]=@(reason);fprintf(stderr,"debug: native takeover declined window=#%s reason=%s\n",source.logical.description.UTF8String,reason);}
+        return NO;};
+    if(!held)return NO;
+    if([held[@"taken"]boolValue]||![held[@"root"]boolValue]||!self.nativeInput||self.cleaning||self.sessionInactive||!self.native||self.native.ended||self.nativeFillHandoff
+        ||source.detached||!boundIdentity(source.identity,held[@"identity"])||[held[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch)return no("state");
     CGPoint point=CGEventGetLocation(event),start=jsonPoint(held[@"click_start"]);
-    CGRect first=DWRectFromJSON(held[@"initial_native"]),drawn=DWRectFromJSON(held[@"initial_screen"]),native;
-    if(hypot(point.x-start.x,point.y-start.y)<=4||!DWNativeBounds(source.router.wid,&native)||!DWNativeWindowDragStarted(first,drawn,native,start,point))return NO;
+    CGRect first=DWRectFromJSON(held[@"initial_native"]),drawn=held[@"planned_screen"]?DWRectFromJSON(held[@"planned_screen"]):DWRectFromJSON(held[@"initial_screen"]),native;
+    if(hypot(point.x-start.x,point.y-start.y)<=4||!DWNativeBounds(source.router.wid,&native))return NO;
+    if(!DWNativeWindowDragStarted(first,drawn,native,start,point)){
+        if(DWDebugTrace()&&(fabs(native.origin.x-first.origin.x)>1||fabs(native.origin.y-first.origin.y)>1))fprintf(stderr,"debug: native takeover declined window=#%s reason=drag_test first=%g,%g,%g,%g drawn=%g,%g,%g,%g now=%g,%g,%g,%g\n",source.logical.description.UTF8String,first.origin.x,first.origin.y,first.size.width,first.size.height,drawn.origin.x,drawn.origin.y,drawn.size.width,drawn.size.height,native.origin.x,native.origin.y,native.size.width,native.size.height);
+        return NO;}
     NSNumber *output=held[@"output"];DesktopView *view=nil;
     for(DesktopView *candidate in self.views)if([[candidate outputAt:start]isEqual:output]){view=candidate;break;}
     if(!view||view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab||self.nativeGestureView||self.nativeOwnershipTransfer||self.nativeHoverTransfer
-        ||[[self.resize busyWindow]isEqual:source.logical]||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return NO;
+        ||[[self.resize busyWindow]isEqual:source.logical]||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return no("view_state");
     NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*record=nil,*pose=nil;
     for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:source.logical]){record=row;break;}
     for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){pose=row;break;}
     NSDictionary *binding=DWTyped(record[@"source"],NSDictionary.class);
     if(!pose||[record[@"mode"]isEqual:@"fullscreen"]||!boundIdentity(source.identity,binding[@"identity"])||![binding[@"generation"]isEqual:held[@"generation"]]
-        ||![pose[@"camera"]isEqual:held[@"camera"]]||![pose[@"zoom"]isEqual:held[@"zoom"]]||![pose[@"screen_bounds"]isEqual:held[@"screen_bounds"]])return NO;
+        ||![pose[@"camera"]isEqual:held[@"camera"]]||![pose[@"zoom"]isEqual:held[@"zoom"]]||![pose[@"screen_bounds"]isEqual:held[@"screen_bounds"]])return no("pose");
     NSDictionary *begun=[self call:@{@"op":@"begin_drag",@"window":source.logical,@"output":output,@"group":@NO}];
     if(!begun)return NO;
     // The drag the application started is WindowServer's own (the window follows the pointer whatever the event taps swallow), and

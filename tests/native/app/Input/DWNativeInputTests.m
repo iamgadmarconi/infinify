@@ -151,7 +151,13 @@ int main(void) {@autoreleasepool {
         check(!DWNativeWindowDragStarted(press,drawn,press,start,away),@"no native motion is a content drag");
         check(!DWNativeWindowDragStarted(press,drawn,CGRectMake(0.5,528.5,800,632),start,away),@"native motion of a point or less is no drag");
         check(!DWNativeWindowDragStarted(press,drawn,CGRectMake(0,528,830,632),start,away)&&!DWNativeWindowDragStarted(press,drawn,CGRectMake(236,447,830,640),start,away),@"a changed extent is a resize, left native");
-        check(!DWNativeWindowDragStarted(press,drawn,moved,start,CGPointMake(893,325)),@"under 4 points of pointer travel is still a click");}
+        check(!DWNativeWindowDragStarted(press,drawn,moved,start,CGPointMake(893,325)),@"under 4 points of pointer travel is still a click");
+        // The sequence that dragged a Finder window at zoom 0.5 natively for 24 to 30 samples of scale 1 (guest, 2026-10-30): the window list
+        // read the NATIVE frame as the bounds of a window drawn at half size from its own corner (800x600 at 300,200 against the drawn
+        // 400x300 at 560,746), so the press looked untransformed and no takeover ever started. The controller's placement is what is drawn.
+        CGRect finder=CGRectMake(300,200,800,600),listed=finder,placed=CGRectMake(560,746,400,300),dragged=CGRectMake(448,296,800,600);CGPoint from=CGPointMake(640,760),to=CGPointMake(600,790);
+        check(!DWNativeWindowDragStarted(finder,listed,dragged,from,to),@"the window list's bounds alone cannot show that the window is drawn elsewhere (the failing sequence)");
+        check(DWNativeWindowDragStarted(finder,placed,dragged,from,to),@"the placement the controller drew shows it, and the application's drag is taken over");}
     // Which part of a toolbar group is native (DWNativeToolbarExtent.h). Safari 27.0.1's centre group, read with Accessibility in the guest:
     // the group is 541,0 753x52; its children are the search button 547,11.5 23.5x30 and the address field 568,18 720x31.
     {CGRect group=CGRectMake(541,0,753,52),kids[]={CGRectMake(547,11.5,23.5,30),CGRectMake(568,18,720,31)},extent;

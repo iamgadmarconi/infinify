@@ -208,7 +208,7 @@ are offered to the consumer, the next press is native again); that the applicati
 a guest observation recorded in [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper).
 The takeover does not put the application's native frame back: WindowServer has already moved it (to where the window was drawn), and the
 helper restores the window's original placement-1 layer, which is relative to the native frame, so a taken-over window is restored consistent
-with its frame (COMPOSITOR-MODE.md section "Restore after a native-origin move"). A press on the empty strip of a toolbar group (Safari's address-field group,
+with its frame (COMPOSITOR-MODE.md section "Restore after a native-origin move"). The takeover decides "transformed" from the placement the controller drew (`planned_screen`, read when the press is owned), not from the window list's bounds, which read back the native frame for some windows (Finder drawn at half size) and so hid the transform; see [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper) for the flicker it caused and what remains. A press on the empty strip of a toolbar group (Safari's address-field group,
 for example) is the window's, not the application's, so it is claimed as a title press and never becomes a takeover.
 
 Managed root chrome now has a separate session-stage ownership decision.

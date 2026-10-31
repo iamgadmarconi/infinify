@@ -142,15 +142,33 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     NSDictionary *hit=context[@"pinned"]||context[@"widget"]||[placement[@"fullscreen"]boolValue]?context:DWPickHit(context,snapshot,output);
     NSDictionary *border=frame?[view resizeBorderForButton:0 flags:event.modifierFlags hit:hit at:point output:output]:nil;
     if(border&&![border[@"window"]isEqual:source.logical])border=nil;
-    if(!title&&!green&&!border)return NO; // Unknown content and native controls keep their original packets.
-    [self cancelNativeTitleClick];[self.navigation cancelNativeClick];
-    self.nativeGestureView=view;self.nativeGestureButton=0;
+    // Below [zoom] interact_min every window is a pick target and takes no pointer input (upstream's try_pick_button): the press is the
+    // canvas's whether or not the title is recognised. It has to be claimed here, at the session tap: WindowServer begins its own
+    // window drag of a press in the title band between this tap and the annotated one, so a pick press left to that later tap moved
+    // the native frame under the canvas move (the owner's UTM drag at low zoom, "native origin ... basis_only" for the whole drag),
+    // and a recognised title press was refused below as chrome_policy and did nothing at all.
+    if([hit[@"pick"]boolValue]&&[hit[@"window"]isEqual:source.logical]&&!hit[@"native_member"]&&!hit[@"widget"]&&!hit[@"pinned"]&&!(event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift))){
+        [self cancelNativeTitleClick];[self.navigation cancelNativeClick];
+        self.nativeGestureView=view;self.nativeGestureButton=0;
+        [self deliverNative:event type:kCGEventLeftMouseDown view:view at:point];
+        if(DWDebugTrace())fprintf(stderr,"debug: native chrome owned window=#%s kind=pick gesture=%ld\n",source.logical.description.UTF8String,(long)view.gesture);
+        return YES;
+    }
+    // A press that a bound gesture claims (alt-drag moves, resizes and pans the canvas) is the canvas's whether or not Accessibility knows a
+    // title there. Left to the annotated tap it was claimed after WindowServer had begun its own window drag of a title-band press, which then
+    // ran under the canvas move (measured in the guest with the Option key held: the drawn window went to scale 1 for the whole drag).
+    NSDictionary *earlyBinding=!title&&!green&&!border&&!hit[@"widget"]&&!hit[@"native_member"]?[self mouseBinding:@"left" source:nil flags:event.modifierFlags window:YES under:source.logical pick:[hit[@"pick"]boolValue]]:nil;
+    BOOL chromeless=!title&&!green&&!border;
+    if(chromeless&&![@[@"pan_viewport",@"move_window",@"move_snapped_windows",@"resize_window",@"resize_window_snapped"]containsObject:DWTyped(earlyBinding[@"kind"],NSString.class)?:@""])return NO; // Unknown content and native controls keep their original packets.
     const char *refusal=NULL;
     if(!frame)refusal="physical_frame";
     else if(!binding[@"generation"]||!boundIdentity(source.identity,binding[@"identity"]))refusal="binding";
     else if(![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output]||[self.nativeViews replica:source.logical output:output])refusal="native_owner";
     else if(self.nativeFillHandoff||source.nativeMouseOwnership||self.nativeOwnershipTransfer||self.nativeHoverTransfer||[[self.resize busyWindow]isEqual:source.logical])refusal="geometry_owned";
     else if([hit[@"widget"]boolValue])refusal="widget";
+    if(refusal&&chromeless){DWNativeTitleRefused(YES,refusal,source.logical,wid,point,nil);return NO;}
+    [self cancelNativeTitleClick];[self.navigation cancelNativeClick];
+    self.nativeGestureView=view;self.nativeGestureButton=0;
     if(refusal){DWNativeTitleRefused(YES,refusal,source.logical,wid,point,nil);return YES;}
     NSDictionary *intent=@{@"window":source.logical,@"output":output,@"identity":source.identity.copy,@"generation":binding[@"generation"]};
     NSEventModifierFlags modifiers=event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift);
