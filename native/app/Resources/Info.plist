@@ -5,6 +5,8 @@
 <key>CFBundleIdentifier</key><string>com.marengox.infinify</string>
 <key>CFBundleName</key><string>Infinify</string>
 <key>CFBundleDisplayName</key><string>Infinify</string>
+<key>CFBundleIconFile</key><string>Infinify</string>
+<key>CFBundleIconName</key><string>Infinify</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>

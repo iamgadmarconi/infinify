@@ -94,6 +94,14 @@
     if(output)*output=box.output;
     return box.status;
 }
++ (int)pingWithin:(NSTimeInterval)seconds output:(NSString *__autoreleasing *)output {
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:seconds];
+    for(;;){
+        int status=[self run:@"ping" arguments:@[] timeout:5 output:output];
+        if(status!=-1||deadline.timeIntervalSinceNow<=0)return status;
+        sleep(1);
+    }
+}
 + (NSString *)describe:(DWLoaderState)state {
     switch(state){
         case DWLoaderUnavailable:return @"unavailable (this build has no launch daemon: it is ad-hoc signed, or not run from an Infinify.app)";

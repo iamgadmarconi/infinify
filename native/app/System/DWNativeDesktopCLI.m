@@ -97,7 +97,7 @@ static int enable(void) {
     }
     if(state!=DWLoaderEnabled){fprintf(stderr,"native-desktop enable: launch daemon: %s\nRun this again once it is approved.\n",[DWLoaderService describe:state].UTF8String);return 1;}
     NSString *reply=nil;
-    int pinged=[DWLoaderService run:@"ping" arguments:@[] timeout:30 output:&reply];
+    int pinged=[DWLoaderService pingWithin:30 output:&reply];
     if(pinged!=0){fprintf(stderr,"native-desktop enable: the launch daemon does not answer this app: %s\n",reply.UTF8String);return 1;}
     fputs("The launch daemon answers.\n",stdout);
     // The marker first: registering the login item below starts it at once.
@@ -115,20 +115,24 @@ static int enable(void) {
     return 0;
 }
 
-static int disable(void) {
+// `disable`, and uninstall's own step (DWNativeDesktopTurnOff), which has already turned the login item off and ended
+// every instance, so it says only what it changed.
+static int turnOff(BOOL uninstalling) {
     NSString *directory=DWDockReloadStateDirectory();
     NSDictionary *login=DWNativeReadLoginRecord(directory);
     BOOL added=[login[@"agent_added"] boolValue];
     DWNativeRemoveLoginRecord(directory);
     DWDockReloadResume(directory);
     int result=0;
-    if(added){const char *off[]={"off"};result=DWLoginItemCommand(1,off);}
-    else if(login)puts("login item: left as it was before enable (it was already on).");
+    if(added&&!uninstalling){const char *off[]={"off"};result=DWLoginItemCommand(1,off);}
+    else if(login&&!uninstalling)puts("login item: left as it was before enable (it was already on).");
     [DWLoaderService unregister];
     printf("launch daemon: %s\n",[DWLoaderService describe:[DWLoaderService state]].UTF8String);
-    puts("compositor mode at login: disabled. An instance running now is not stopped (Infinify msg action quit); launch records and journals are left as the launcher keeps them.");
+    puts(uninstalling?"compositor mode at login: disabled.":"compositor mode at login: disabled. An instance running now is not stopped (Infinify msg action quit); launch records and journals are left as the launcher keeps them.");
     return result;
 }
+static int disable(void) { return turnOff(NO); }
+int DWNativeDesktopTurnOff(void) { return turnOff(YES); }
 
 // The launcher's way to the launch daemon. `status` prints the daemon's state and succeeds only when it is enabled. `staged RUNTIME`
 // is read-only and talks to nobody: it prints "DIRECTORY SHA256" of the payload the daemon staged for that runtime (DWLoaddRequest.m's

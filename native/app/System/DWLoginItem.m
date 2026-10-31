@@ -27,7 +27,7 @@ int DWLoginItemCommand(int argc,const char **argv) { @autoreleasepool {
     if(!on&&!off)return report(service.status);
     NSString *bundle=NSBundle.mainBundle.bundlePath;
     if(![NSFileManager.defaultManager fileExistsAtPath:[[bundle stringByAppendingPathComponent:@"Contents/Library/LaunchAgents"]stringByAppendingPathComponent:DWLoginItemAgentPlist]]){
-        fprintf(stderr,"login item: %s carries no LaunchAgent. Run the installed bundle's own executable, ~/Applications/Infinify.app/Contents/MacOS/Infinify (scripts/install-app.sh puts it there).\n",bundle.fileSystemRepresentation);return 1;}
+        fprintf(stderr,"login item: %s carries no LaunchAgent. Run the installed bundle's own executable, /Applications/Infinify.app/Contents/MacOS/Infinify (scripts/install-app.sh puts it there).\n",bundle.fileSystemRepresentation);return 1;}
     // Already as asked: macOS answers a second registration, and the removal of none, with an error. None is also what it
     // answers "not found" for: an agent this bundle never registered.
     SMAppServiceStatus status=service.status;

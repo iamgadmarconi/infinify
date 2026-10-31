@@ -33,7 +33,24 @@ fi
 # the owner has to look at (the log, `Infinify native-desktop status`), not something a restart fixes.
 native_fail_status=1
 [ "$native_mode" != login ] || native_fail_status=0
-fail() { printf 'Infinify native desktop: %s\n' "$*" >&2; exit "$native_fail_status"; }
+# With no terminal to read a refusal (a login start, or a start by hand from the setup assistant, which sets
+# INFINIFY_LAUNCH_FROM_SETUP), the app's setup assistant says it instead and offers to try again or the demo
+# (`Infinify setup --refused REASON`). Only once the app bundle's signature has been verified below; never for --check or
+# --reload, and the variable goes no further than this launcher, so the app and its own reloads never see it.
+native_setup_feedback=false
+if [ "$native_mode" = login ] || { [ "$native_mode" = launch ] && [ "${INFINIFY_LAUNCH_FROM_SETUP:-}" = 1 ]; }; then native_setup_feedback=true; fi
+unset INFINIFY_LAUNCH_FROM_SETUP
+native_app_verified=false
+native_lock_held=false
+fail() {
+  printf 'Infinify native desktop: %s\n' "$*" >&2
+  if [ "$native_setup_feedback" = true ] && [ "$native_app_verified" = true ]; then
+    # exec skips the EXIT trap, so the launch lock this run took (and only that one) is released first.
+    if [ "$native_lock_held" = true ]; then /bin/rmdir "$native_lock" 2>/dev/null || :; fi
+    exec "$native_app" setup --refused "$*"
+  fi
+  exit "$native_fail_status"
+}
 # The reload's stdout is the app's to read: the one endpoint line goes to descriptor 3, everything else to stderr.
 if [ "$native_mode" = reload ]; then exec 3>&1 1>&2; fi
 native_state_dir="$HOME/Library/Application Support/Infinify/native-desktop"
@@ -136,6 +153,7 @@ native_payload_sha256=$(native_manifest_value artifacts.payload.sha256 string) |
 /usr/bin/codesign --verify --strict "$native_daemon" || fail 'launch daemon signature verification failed.'
 /usr/bin/codesign --verify --strict "$native_payload" || fail 'payload signature verification failed.'
 /usr/bin/codesign --verify --deep --strict "$native_bundle" || fail 'app bundle signature verification failed.'
+native_app_verified=true
 
 [ "$(/usr/bin/id -u)" != 0 ] || fail 'run this launcher as the login user, never with sudo; only its explicit loader step uses sudo.'
 [ "$(/usr/bin/uname -s)" = Darwin ] && [ "$(/usr/bin/uname -m)" = arm64 ] || fail 'Apple Silicon macOS 26 or later is required.'
@@ -213,6 +231,7 @@ native_lock="$native_state_dir/launch.lock"
 /bin/mkdir -p "$native_state_dir"
 [ -d "$native_state_dir" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_state_dir")" = "$native_uid:700" ] || fail 'launch-state directory must be owned by this login user with mode 0700.'
 /bin/mkdir "$native_lock" 2>/dev/null || fail 'another launch or interrupted launch lock exists; inspect it before retrying.'
+native_lock_held=true
 # Only this invocation's empty lock is removed. Runtimes, nonce files, payload
 # sidecars and recovery journals are never deleted, even after an early failure.
 release_lock() { /bin/rmdir "$native_lock" 2>/dev/null || :; }
@@ -239,7 +258,7 @@ if [ "$native_mode" = launch ]; then
   fi
 elif native_paused; then
   case "$native_mode" in
-    login) printf '%s\n' 'Automatic loading is paused for this payload (three Dock restarts in a row around loads): compositor mode was not started. Run Infinify native-desktop by hand to try again.'; exit 0 ;;
+    login) fail 'automatic loading is paused after three Dock restarts in a row around loads; a start by hand lifts the pause.' ;;
     *) fail 'automatic loading is paused for this payload; run Infinify native-desktop by hand to lift the pause.' ;;
   esac
 fi

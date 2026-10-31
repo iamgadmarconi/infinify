@@ -378,6 +378,49 @@ def main() -> int:
             raise AssertionError("the launch daemon was not signed with the build identity")
         if hashlib.sha256(signed_daemon.read_bytes()).hexdigest() != signed_manifest["artifacts"]["daemon"]["sha256"]:
             raise AssertionError("the manifest binds the launch daemon before it was signed")
+        if any("--timestamp" in call for call in signed_calls):
+            raise AssertionError(f"a development build was timestamped, which needs the network: {signed_calls}")
+
+        # A release build (INFINIFY_VERSION and INFINIFY_BUILD_NUMBER) carries that version and is timestamped for notarization.
+        write(
+            repo / "native/app/Resources/Info.plist",
+            plistlib.dumps({"CFBundleIdentifier": "com.marengox.infinify", "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}).decode(),
+        )
+        release_stage = base / "release-stage"
+        release_app = release_stage / "Infinify.app"
+        (release_app / "Contents/MacOS").mkdir(parents=True)
+        (release_app / "Contents/MacOS/Infinify").write_bytes(b"release-binary")
+        (release_app / "Contents/MacOS/Infinify").chmod(0o755)
+        release_privileged = release_stage / "privileged"
+        shutil.copytree(stage_privileged_template, release_privileged)
+        release_snapshot = release_stage / "source-before.json"
+        run([sys.executable, str(PACKAGE), "snapshot", "--root", str(repo), "--output", str(release_snapshot)], cwd=ROOT)
+        release_log = base / "codesign-release.log"
+        release_env = dict(signed_env, PACKAGE_TEST_CODESIGN_LOG=str(release_log), INFINIFY_VERSION="0.2.0", INFINIFY_BUILD_NUMBER="42")
+        release_publish = [
+            sys.executable, str(PACKAGE), "publish", "--root", str(repo), "--snapshot", str(release_snapshot),
+            "--staged-app", str(release_app), "--privileged-dir", str(release_privileged),
+            "--app-dir", str(base / "release-publish"),
+        ]
+        run(release_publish, cwd=ROOT, env=release_env)
+        release_calls = [json.loads(line) for line in release_log.read_text(encoding="utf-8").splitlines()]
+        if len(release_calls) != 2 or any(call[:6] != ["--force", "--sign", "Test Identity", "--options", "runtime", "--timestamp"] for call in release_calls):
+            raise AssertionError(f"a release build was not signed with the hardened runtime and a timestamp: {release_calls}")
+        release_info = plistlib.loads((base / "release-publish/Infinify.app/Contents/Info.plist").read_bytes())
+        if (release_info.get("CFBundleShortVersionString"), release_info.get("CFBundleVersion")) != ("0.2.0", "42"):
+            raise AssertionError(f"a release build does not carry its version: {release_info}")
+        if release_info.get("CFBundleIdentifier") != "com.marengox.infinify":
+            raise AssertionError("stamping the version lost the rest of Info.plist")
+        for bad_version, bad_build in (("0.2", "42"), ("0.2.0", ""), ("v0.2.0", "42"), ("0.2.0", "0")):
+            rejected = subprocess.run(
+                release_publish[:-1] + [str(base / "rejected-release-publish")],
+                cwd=ROOT,
+                env=dict(release_env, INFINIFY_VERSION=bad_version, INFINIFY_BUILD_NUMBER=bad_build),
+                capture_output=True,
+                text=True,
+            )
+            if rejected.returncode == 0 or (base / "rejected-release-publish/Infinify.app").exists():
+                raise AssertionError(f"a release build accepted version {bad_version!r} build {bad_build!r}")
 
         legacy_path = base / "legacy-BUILD.json"
         legacy = dict(manifest, schema_version=1)

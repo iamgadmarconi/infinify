@@ -35,26 +35,52 @@ INFINIFY_SIGN_IDENTITY="<your signing identity>" ./scripts/install-app.sh
 ```
 
 `security find-identity -v -p codesigning` lists identities. The script builds the app with that identity and copies
-the exact signed bundle to `~/Applications/Infinify.app`, after checking the outer signature, the executable hash
-and the helper hashes. With an identity the app, the loader, the doctor and the launch daemon are signed with the
+the exact signed bundle to `/Applications/Infinify.app` (where a disk image and Homebrew put it; `--user` installs in
+`~/Applications`), after checking the outer signature, the executable hash and the helper hashes. With an identity the app, the loader, the doctor and the launch daemon are signed with the
 hardened runtime; without the variable the build is ad hoc. `--built` installs the identity already used for that
 build.
 
-1. `open ~/Applications/Infinify.app`, click the Allow buttons in the permission window, switch Infinify on in the
-   two System Settings panes they open, then click Relaunch (macOS gives Screen Recording only to a newly started
-   app). Quit again before the next step.
-2. `~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on` starts Infinify now, at every login and again
-   after a crash. macOS may ask you to allow it under System Settings > General > Login Items & Extensions.
-   `login-item status` reports it; `login-item off` removes it and ends the instance it started.
-3. To remove it: `login-item off`, then `native-desktop disable` if you enabled compositor mode, then delete the
-   bundle.
+Then `open /Applications/Infinify.app`. A copy left in the other Applications folder (an install from before this
+default) keeps its login item and launch daemon until setup removes it: the script says so, and
+`/Applications/Infinify.app/Contents/MacOS/Infinify setup` opens the assistant, whose first pane removes it. Until setup is done a plain launch shows the setup assistant: the two
+permissions, the login item (Infinify starts at every login and after a crash), and compositor mode, the product, with
+the Recovery steps while SIP still keeps the Dock helper out, or the demo (capture mode) until then. Once set up, a
+plain launch and every login start compositor mode. Opening Infinify again while it runs shows the assistant again.
+`Infinify uninstall` takes it off this Mac (login item, launch daemon, window settings, the bundle to the Trash). The
+terminal commands do the same steps one by one: `login-item on | off | status`, `native-desktop enable | disable | status`.
+[docs/native/user-guide.md](docs/native/user-guide.md#setup-the-demo-and-uninstall) says what each pane does.
+
+### A release
+
+For you to run, from a clean working tree; it publishes nothing.
+
+```sh
+INFINIFY_SIGN_IDENTITY="Developer ID Application: …" ./scripts/build-release.sh 0.2.0 [--notarize PROFILE]
+```
+
+It builds the app at that version (the build number is the commit count, so it only goes up), signs every artifact
+with a secure timestamp, packs it with `scripts/package-dmg.sh` into a compressed disk image beside an Applications
+link, mounts the image and checks the bundle inside it (signature, every file, `validate-bundle`), and writes
+`target/dist/VERSION/`: `Infinify-VERSION.dmg`, `infinify-VERSION-source.tar.gz` (the same commit, for GPL-3.0
+section 6), `SHA256SUMS` and `infinify.rb`, the Homebrew cask. `--notarize PROFILE` submits the image with the
+`notarytool` keychain profile, keeps the service's log beside it, staples the ticket and checks the image with
+`spctl`; create the profile once with `xcrun notarytool store-credentials PROFILE --apple-id … --team-id …`. A release
+signs the Dock payload with the identity too (`INFINIFY_SIGN_PAYLOAD=1`, which development builds leave off), because
+the notary service refuses an ad hoc Mach-O: in the guest (macOS 27.0.1, SIP relaxed) the Dock loaded a payload signed
+by team PBKWRHQV74 through the sudo path on 2026-10-30, launch outcome `ready`, the desktop presented natively. Not yet
+known: whether the notary service accepts the arm64e loader and payload; the first submission's log says. The release
+build replaces `target/app`. The script ends with the `gh release` and tap steps for when the repository is
+public; friends then install with `brew install --cask iamgadmarconi/tap/infinify`.
 
 ## Run
 
 ```sh
 ./scripts/build-app.sh      # builds target/app/Infinify.app; launches nothing
-open target/app/Infinify.app
+open target/app/Infinify.app --args --demo
 ```
+
+A plain `open` follows setup (above): the assistant, or compositor mode through the installed login item. `--demo` runs
+the capture-mode desktop this section describes.
 
 One canvas panel per display covers the whole display on every Space, under the menu bar and the Dock, which both
 stay. There is no toolbar, status line or chooser; status notes go to stderr. Every real application window on
@@ -147,7 +173,7 @@ compositor mode does to windows, popups and drags is in
 | `native/app` | the Objective-C shell and renderer, linked with the controller, one directory per module (Desktop, Canvas, Windows, Input, CompositorMode, Navigation (with the Accessibility focus and resize adapters), System, Support, Resources); [README](docs/native/README.md) |
 | `native/dock-helper` | the Dock helper (Payload), loader and doctor (Loader), launch daemon (Daemon) and client library (Client); [README](docs/native/dock-helper/README.md) |
 | `tests/native` | the headless regressions and the disposable AppKit fixtures that the live tests start, one directory per module of `native/app` and `native/dock-helper`; [how they run](docs/native/testing.md) |
-| `scripts` | `build-app.sh`, `build-privileged.sh`, `install-app.sh`, the launcher and packaging helpers |
+| `scripts` | `build-app.sh`, `build-privileged.sh`, `install-app.sh`, `build-release.sh`, `package-dmg.sh`, the launcher and packaging helpers |
 | `docs` | all Markdown documentation outside this file and `AGENTS.md`: `docs/native` (user guide, module docs), `docs/crates` (each crate's contracts), `docs/parity`; [index](docs/README.md) |
 | `docs/parity` | the parity contract |
 

@@ -60,18 +60,28 @@ xcrun clang -O2 -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra -Werror $he
   native/dock-helper/Loader/DWLoader.m "$out/dwclient-arm64e.o" -framework AppKit -o "$out/loader-arm64e"
 # Ad-hoc sign the standalone production tools and Dock payload, exactly as yabai
 # signs its scripting addition binaries (yabai dd845723416f5fe92af49fad5ebab00369e07edd
-# src/sa.m scripting_addition_prepare_binaries: "codesign -f -s -"). Only the
-# ad-hoc "-" identity is ever used; whether Dock accepts it on 27.2 is unproven.
+# src/sa.m scripting_addition_prepare_binaries: "codesign -f -s -"). An ad hoc build signs every one of them so.
 # A build signed with an identity (INFINIFY_SIGN_IDENTITY, which scripts/build-app.sh passes down) signs the doctor and the loader with it,
 # with the hardened runtime and no entitlements: nothing a root loader or the read-only doctor does needs one (measured, see
-# docs/native/dock-helper/Daemon/README.md). The payload stays ad hoc either way: it is not an executable, the Dock (not Infinify) maps it, and its
-# exact bytes are what the launch daemon's digest and the manifest pin. An ad-hoc build is signed exactly as before.
+# docs/native/dock-helper/Daemon/README.md). The payload stays ad hoc unless INFINIFY_SIGN_PAYLOAD=1 (below): it is not an executable, the Dock
+# (not Infinify) maps it, and its exact bytes are what the launch daemon's digest and the manifest pin. An ad-hoc build is signed exactly as before.
+# A release build (INFINIFY_VERSION set, by scripts/build-release.sh) is timestamped as well, as notarization requires.
 identity=${INFINIFY_SIGN_IDENTITY:--}
 sign_tool() {
-  if [ "$identity" = - ]; then codesign --force --sign - "$1"; else codesign --force --sign "$identity" --options runtime "$1"; fi
+  if [ "$identity" = - ]; then codesign --force --sign - "$1"
+  elif [ -n "${INFINIFY_VERSION:-}" ]; then codesign --force --sign "$identity" --options runtime --timestamp "$1"
+  else codesign --force --sign "$identity" --options runtime "$1"; fi
 }
 sign_tool "$out/doctor"
-codesign --force --sign - "$out/payload-arm64e.dylib"
+# INFINIFY_SIGN_PAYLOAD=1, with an identity, signs the payload with it too (timestamped in a release build): notarization
+# refuses any Mach-O in the bundle without a Developer ID signature. It is opt-in until the guest has shown that the Dock
+# loads a payload signed so; nothing in the loader or the daemon asks for an ad hoc one (they pin its digest, taken below).
+if [ "$identity" != - ] && [ "${INFINIFY_SIGN_PAYLOAD:-}" = 1 ]; then
+  if [ -n "${INFINIFY_VERSION:-}" ]; then codesign --force --sign "$identity" --timestamp "$out/payload-arm64e.dylib"
+  else codesign --force --sign "$identity" "$out/payload-arm64e.dylib"; fi
+else
+  codesign --force --sign - "$out/payload-arm64e.dylib"
+fi
 sign_tool "$out/loader-arm64e"
 codesign --verify --strict "$out/doctor"
 codesign --verify --strict "$out/payload-arm64e.dylib"

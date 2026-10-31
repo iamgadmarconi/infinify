@@ -3,7 +3,8 @@
 # The bundled native-desktop launcher's modes (owner start, --login, --reload), end to end, against a signed stand-in bundle:
 # stub doctor/loader/app/daemon client (tests/native/dock-helper/Loader/NativeLauncherFixture.c) that load nothing, a throwaway HOME, and the real
 # launcher script. It shows the launcher's decisions: when it asks the launch daemon and with which arguments, the journal
-# handoff from a retired Dock, the pause of automatic loading, the refusal of uncertain states, the quiet login refusals. It is
+# handoff from a retired Dock, the pause of automatic loading, the refusal of uncertain states, and login refusals handed to the
+# setup assistant (`Infinify setup --refused REASON`) rather than ending unseen. It is
 # not evidence that anything loads into a Dock (see docs/native/dock-helper/Daemon/README.md for the guest run).
 # It needs no Infinify process to be running (the launcher looks for one by name); run it where none is, e.g. the guest.
 set -eu
@@ -84,6 +85,13 @@ loads() { if [ -f "$control/daemon-loads" ]; then wc -l < "$control/daemon-loads
 expect_loads() { if [ "$(loads)" = "$2" ]; then ok "$1: $2 daemon load(s) so far"; else bad "$1: $(loads) daemon loads, wanted $2"; fi; }
 exists() { if [ -e "$2" ]; then ok "$1"; else bad "$1 (missing $2)"; fi; }
 absent() { if [ ! -e "$2" ]; then ok "$1"; else bad "$1 (found $2)"; fi; }
+# A refusal with no terminal to read it hands its reason to the setup assistant: the app is started once more, as
+# `setup --refused REASON`, never as the desktop, and the launch lock the run took is released before that exec.
+handed_to_setup() {
+  last=$(grep '^args:' "$control/app-launch" | tail -n 1)
+  case "$last" in "args: setup --refused "*"$2"*) ok "$1: opens the setup assistant with its reason" ;; *) bad "$1: did not hand '$2' to the setup assistant ($last)" ;; esac
+  absent "$1: leaves no launch lock" "$(state_dir)/launch.lock"
+}
 last_launch() { sed -n "$1p" "$control/app-launch" | grep -c -- "$2" | tr -d ' '; }
 dock() { printf '%s\n' "$1 $2 $3" > "$control/dock"; }
 record() { /usr/bin/plutil -extract "$1" raw -expect "$2" -o - "$(state_dir)/launch.plist"; }
@@ -176,26 +184,28 @@ pause=$(state_dir)/auto-reload-paused.plist
 write_pause() { /bin/rm -f "$pause"; printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>version</key><integer>1</integer><key>payload_sha256</key><string>%s</string></dict></plist>\n' "$1" > "$pause"; chmod 600 "$pause"; }
 write_pause "$payload_sha"
 dock $D4
-launches=$(grep -c '^args:' "$control/app-launch")
+cp "$control/app-launch" "$control/app-launch.before-pause"
 run 'reload while paused' 1 "$app/Contents/MacOS/Infinify" stub-reload-parent
 says 'reload while paused' 'paused for this payload'
 run 'login start while paused' 0 "$launcher" --login
-logsays 'login start while paused' 'compositor mode was not started'
+logsays 'login start while paused' 'automatic loading is paused'
 expect_loads 'paused' 3
-[ "$(grep -c '^args:' "$control/app-launch")" = "$launches" ] && ok 'a paused login started no app' || bad 'a paused login started the app'
+handed_to_setup 'a paused login start' 'automatic loading is paused'
+[ "$(grep -c '^args: --native-desktop-helper' "$control/app-launch")" = "$(grep -c '^args: --native-desktop-helper' "$control/app-launch.before-pause")" ] && ok 'a paused login started no desktop' || bad 'a paused login started the desktop'
 write_pause "$(printf other | shasum -a 256 | cut -d ' ' -f 1)"
 dock $D3
 run 'login start with a pause made for another payload' 0 "$launcher" --login
 if tail -n 40 "$(state_dir)/login.log" | grep -q 'Reusing the recorded same-Dock'; then ok 'another payload version is not paused'; else bad 'a pause for another payload held this one back'; sed 's/^/     | /' "$out"; fi
 printf 'not a plist' > "$pause"; chmod 600 "$pause"
 run 'login start with an unreadable pause file' 0 "$launcher" --login
-logsays 'login start with an unreadable pause file' 'compositor mode was not started'
+logsays 'login start with an unreadable pause file' 'automatic loading is paused'
+handed_to_setup 'a login start with an unreadable pause file' 'automatic loading is paused'
 write_pause "$payload_sha"
 run 'owner start lifts the pause' 0 "$launcher"
 says 'owner start lifts the pause' 'lifts the pause'
 absent 'the pause file is gone' "$pause"
 
-# Login start: waits for the Dock, logs, and refuses quietly.
+# Login start: waits for the Dock, logs, and hands a refusal to the setup assistant.
 printf '%s\n' 2 > "$control/dock-absent-queries"
 run 'login start while the Dock is still starting' 0 "$launcher" --login
 exists 'the login log exists' "$(state_dir)/login.log"
@@ -210,11 +220,23 @@ run 'login start in a new Dock without the daemon' 0 "$launcher" --login
 grep -q 'launch daemon is not enabled' "$(state_dir)/login.log" && ok 'a login start that would need a password says so in its log and exits 0' || bad 'the log says nothing'
 expect_loads 'no daemon' 3
 absent 'nothing was left pending' "$(state_dir)/launch.pending.plist"
-[ "$(grep -c '^args:' "$control/app-launch")" = "$n" ] && ok 'no app was started' || bad 'an app was started'
+handed_to_setup 'a login start that would need a password' 'launch daemon is not enabled'
+[ "$(grep -c '^args:' "$control/app-launch")" = "$((n + 1))" ] && ok 'the desktop was not started' || bad 'the desktop was started'
+# A start by hand from the setup assistant has no terminal either: its refusal goes back to the assistant. Typed in a terminal
+# (no INFINIFY_LAUNCH_FROM_SETUP) the same refusal is printed and nothing more starts.
+run 'a start by hand from setup that would need a password' 0 env INFINIFY_LAUNCH_FROM_SETUP=1 "$launcher"
+handed_to_setup 'a start by hand from setup that would need a password' 'in a terminal'
+n=$(grep -c '^args:' "$control/app-launch")
+run 'the same start typed with no terminal' 1 "$launcher"
+says 'the same start typed with no terminal' 'in a terminal'
+[ "$(grep -c '^args:' "$control/app-launch")" = "$n" ] && ok 'a refused start by hand outside setup starts nothing' || bad 'a refused start by hand outside setup started the app'
 
 touch "$control/daemon-enabled" "$control/daemon-ping-fails"
 run 'reload when the daemon does not answer' 1 "$app/Contents/MacOS/Infinify" stub-reload-parent
 says 'reload when the daemon does not answer' 'does not answer this app'
+n=$(grep -c '^args:' "$control/app-launch")
+run 'a reload never hands over to setup' 1 env INFINIFY_LAUNCH_FROM_SETUP=1 "$app/Contents/MacOS/Infinify" stub-reload-parent
+[ "$(grep -c '^args:' "$control/app-launch")" = "$n" ] && ok 'a refused reload started nothing, whatever its environment' || bad 'a refused reload started the app'
 expect_loads 'unanswered daemon' 3
 absent 'an unanswered daemon leaves nothing pending' "$(state_dir)/launch.pending.plist"
 rm -f "$control/daemon-ping-fails"
@@ -226,6 +248,7 @@ expect_loads 'failed loader' 4
 exists 'a failed load leaves its pending marker' "$(state_dir)/launch.pending.plist"
 run 'login start after a failed load' 0 "$launcher" --login
 grep -q 'interrupted launch or recovery remains pending' "$(state_dir)/login.log" && ok 'an uncertain load is refused at the next login' || bad 'pending not refused at login'
+handed_to_setup 'a login start after a failed load' 'remains pending'
 run 'reload after a failed load' 1 "$app/Contents/MacOS/Infinify" stub-reload-parent
 says 'reload after a failed load' 'remains pending'
 expect_loads 'nothing is retried' 4

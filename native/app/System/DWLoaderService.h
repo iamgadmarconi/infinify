@@ -17,5 +17,8 @@ typedef NS_ENUM(NSInteger,DWLoaderState) {
 + (void)unregister;
 // `ping` or `load ARGUMENTS` in the daemon, and the reply's status and output. Status -1 when it could not be reached.
 + (int)run:(NSString *)command arguments:(NSArray<NSString *> *)arguments timeout:(NSTimeInterval)timeout output:(NSString *__autoreleasing *)output;
+// `ping`, asked again once a second for up to `seconds` while the daemon cannot be reached or does not answer (each try waits
+// five seconds): right after the approval in Login Items launchd may still be starting it. Any answer ends the wait. Infinify's own.
++ (int)pingWithin:(NSTimeInterval)seconds output:(NSString *__autoreleasing *)output;
 + (NSString *)describe:(DWLoaderState)state;
 @end

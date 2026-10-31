@@ -144,6 +144,19 @@
     (void)sender;if(self.cleaning){[self saveScene];return NSTerminateNow;}
     [self quit:nil];[self.ipc stop];self.ipc=nil;[self cleanup];[self.chooser close];[self.onboarding close];return NSTerminateNow;
 }
+// Infinify opened again from Finder while the desktop runs: the setup assistant, in a process of its own (`Infinify setup`,
+// DWSetupAssistant.h), so it never holds up the canvas; a second one ends by itself while one is showing. It is not the
+// login item's job, whatever this run is: launchd's job name stays out of its environment, so a hand-over from it asks
+// launchd to start the job afresh. Windowed, chooser and scoped runs are not the desktop and open nothing.
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible {
+    (void)sender;(void)visible;
+    if(self.windowed||!self.managing||self.scope)return NO;
+    NSTask *setup=[NSTask new];setup.executableURL=NSBundle.mainBundle.executableURL;setup.arguments=@[@"setup"];
+    NSMutableDictionary<NSString *,NSString *> *environment=[NSProcessInfo.processInfo.environment mutableCopy];
+    [environment removeObjectForKey:@"XPC_SERVICE_NAME"];setup.environment=environment;
+    NSError *error=nil;if(![setup launchAndReturnError:&error])[self say:[NSString stringWithFormat:@"The setup assistant did not start: %@",error.localizedDescription]];
+    return NO;
+}
 // macOS platform rule: applications outlive Infinify, where upstream's clients end with the compositor. A window still fullscreen, or
 // still owed its size by a fullscreen that has ended, would keep the display's size after the canvas is gone, so each fullscreen is
 // ended and its size transaction performed to its end before anything is shut down, one at a time, the slot being one. Upstream's

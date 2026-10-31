@@ -49,16 +49,33 @@ BUILD_MANIFEST_KEYS = {
     "source_sha256",
 }
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+RELEASE_VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+RELEASE_BUILD_RE = re.compile(r"[1-9][0-9]*\Z")
+
+
+def release_version() -> tuple[str, str] | None:
+    """The version and build number of a release build (INFINIFY_VERSION and INFINIFY_BUILD_NUMBER, which
+    scripts/build-release.sh sets), or None for a development build, which keeps the source Info.plist's version."""
+    version = os.environ.get("INFINIFY_VERSION") or ""
+    build = os.environ.get("INFINIFY_BUILD_NUMBER") or ""
+    if not version and not build:
+        return None
+    if not RELEASE_VERSION_RE.fullmatch(version) or not RELEASE_BUILD_RE.fullmatch(build):
+        raise RuntimeError("INFINIFY_VERSION must be MAJOR.MINOR.PATCH and INFINIFY_BUILD_NUMBER a positive integer, both or neither")
+    return version, build
 
 
 def codesign_command(identity: str, target: Path, *, identifier: str | None = None, entitlements: Path | None = None) -> list[str]:
     """The codesign call for one signing step. A build signed with an identity gets the hardened runtime (and only the entitlements
     its binary needs, normally none), so that a process of the same user cannot inject code into a running Infinify and borrow its
-    identity to ask the launch daemon for a load; the daemon refuses a caller without the flag. An ad-hoc build ("-") is signed
-    exactly as it always was."""
+    identity to ask the launch daemon for a load; the daemon refuses a caller without the flag. A release build signed with an
+    identity is also timestamped, as notarization requires; a development build is not, so it signs without the network. An
+    ad-hoc build ("-") is signed exactly as it always was."""
     command = ["codesign", "--force", "--sign", identity]
     if identity != "-":
         command += ["--options", "runtime"]
+        if release_version() is not None:
+            command.append("--timestamp")
     if identifier is not None:
         command += ["--identifier", identifier]
     if entitlements is not None:
@@ -341,6 +358,12 @@ def copy_resources(root: Path, app: Path, privileged_dir: Path) -> None:
         ),
     ):
         shutil.copy2(root / source, destination)
+    release = release_version()
+    if release is not None:
+        info_path = app / "Contents/Info.plist"
+        info = plistlib.loads(info_path.read_bytes())
+        info["CFBundleShortVersionString"], info["CFBundleVersion"] = release
+        info_path.write_bytes(plistlib.dumps(info, fmt=plistlib.FMT_XML))
 
     native = native_desktop_dir(app)
     native.mkdir(parents=True, exist_ok=True)

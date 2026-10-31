@@ -145,8 +145,11 @@ automatic retry of an uncertain load. Its modes:
   enabled, else through `sudo` in a terminal. In `--login` and `--reload` there is no
   terminal, so a missing daemon is a refusal.
 - `--login` (the login item): waits up to about five minutes for a Dock whose identity reads the same
-  twice three seconds apart, writes to `native-desktop/login.log`, exits 0 for every refusal (launchd
-  restarts a failed login item; a refusal needs a decision), does nothing when an Infinify runs.
+  twice three seconds apart, writes to `native-desktop/login.log`, and never exits non-zero on a refusal (launchd
+  restarts a failed login item; a refusal needs a decision): once the app bundle's signature is verified it releases
+  its launch lock and replaces itself with `Infinify setup --refused REASON`, whose assistant shows the reason and
+  offers to try again by hand or the demo (before that point it exits 0). It does nothing when an Infinify runs. A
+  start by hand from that assistant (`INFINIFY_LAUNCH_FROM_SETUP=1`) hands its refusal back the same way.
 - `--reload` (the running app, after a Dock restart): requires that the one running Infinify is its
   parent, waits for a stable new Dock, runs the same recovery path (journal handoff from the retired
   Dock, same boot session) through the daemon, and writes only `INFINIFY-NATIVE-ENDPOINT RUNTIME

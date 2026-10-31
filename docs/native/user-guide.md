@@ -158,6 +158,108 @@ DriftWM is a compositor: it is the session, not an app one launches. A normal ru
   Manager or window-tiling settings ([What a normal run
   is](#what-a-normal-run-is)); a normal run does, while its canvas is open.
 
+### Setup, the demo and uninstall
+
+What a plain launch does (Finder, Spotlight, `open`, the login item's `login-start`, Homebrew reopening the app after an
+upgrade) depends on what setup decided (`native/app/System/DWSetupState.h`):
+
+- **Compositor mode** when the login-mode record exists (`native-desktop/login.plist` in the support directory, written
+  by setup or by `native-desktop enable`). The process hands over to the bundled launcher: the login item's own job runs
+  `launch.sh --login` itself, and any other process becomes `launchctl kickstart gui/UID/com.marengox.infinify.agent`, so
+  that the desktop is the job launchd restarts after a crash.
+- **The setup assistant** while setup is not done.
+- **The demo** once setup chose it: the capture-mode desktop this guide describes from
+  [What a normal run is](#what-a-normal-run-is) on. `--demo` runs it whatever setup decided.
+
+The setup assistant (`Infinify setup`, `native/app/System/DWSetupAssistant.h`) is one window of five panes, drawn in Ego's
+design language (neutral greys only, Helvetica Neue at one size, Primary and Secondary buttons, no outlines). It runs
+alone, without the canvas run's lease, so it can run beside an Infinify that holds it; one assistant at a time
+(`setup.lock` in the support directory, a second one ends at once with status 0).
+
+1. **Welcome.** Another `Infinify.app` in `/Applications` or `~/Applications` is removed first with that copy's own
+   `uninstall`, or, for a build from before that command (which answers it with the usage status), with its
+   `login-item off` and `native-desktop disable`, its processes ended and the bundle moved to the Trash.
+2. **Permissions.** Accessibility (required) and Screen Recording (for additional displays and the demo), each with an
+   Allow button that asks macOS and opens its pane. After Screen Recording is allowed, Restart Infinify starts the
+   assistant again, since macOS gives it only to a process started afterwards.
+3. **Start at login.** Turn on registers the login item; setup has no off switch for it. Registering starts it at once:
+   while setup runs, that instance finds the assistant's lock and ends.
+4. **Compositor mode.** The doctor's reading of SIP and the boot argument (`DWPreflight.h`, read-only). While it fails:
+   the Recovery steps, what they change and how to undo them, Check again, and Try the demo. Once it passes, Turn on
+   registers the launch daemon, waits for the approval in Login Items, checks that the daemon answers this app (`ping`)
+   and writes the login-mode record, as `native-desktop enable` does, except that the login item is left as setup made it
+   (`agent_added` false, so `native-desktop disable` does not remove it). An ad hoc build has no daemon; the pane says so
+   and offers the demo.
+5. **Ready.** The keys. Start Infinify ends any running canvas of this bundle (SIGTERM, its orderly end) and hands over;
+   Start the demo runs `--demo`.
+
+Each pane reached is recorded in `setup.plist` (owner-only, 0600) and setup resumes there: after the Screen Recording
+restart, and after the restart Recovery needs, when the login item, registered by then, runs `login-start`, finds setup
+not done and shows the assistant again.
+
+**When compositor mode does not start.** A login start has no terminal to read a refusal in, and neither has Try again
+from the assistant. In those two cases (the launcher's `--login` mode, and its by-hand mode started with
+`INFINIFY_LAUNCH_FROM_SETUP=1`, a variable the launcher reads once and never passes on), the launcher, once it has
+verified the app bundle's signature, releases the launch lock it took and replaces itself with
+`Infinify setup --refused REASON`. The assistant opens on the compositor pane with the reason, Try again (a start by
+hand, which also lifts a pause of automatic loading after Dock restarts) and Try the demo (this once). `--check` and
+`--reload` never do this, and before this change a login refusal only went to `login.log`.
+
+**Opened again.** Opening Infinify from Finder while it runs (macOS sends the running app a reopen event) starts
+`Infinify setup` beside it, with launchd's job name taken out of its environment; Ready then says Done for the mode
+already running. Windowed, chooser and scoped runs open nothing.
+
+**Uninstall.** `Infinify uninstall [--leave-app]` turns the login item off (which ends the instance launchd started),
+sends SIGTERM to every other process of this bundle's executable and waits ten seconds, turns compositor mode off as
+`native-desktop disable` does, puts back window settings an unorderly end left changed, forgets setup, and moves the
+bundle to the Trash, only from an Applications folder. `--leave-app` leaves the bundle for a package manager. The scene
+and the config stay. The Homebrew cask that `scripts/build-release.sh` writes calls `uninstall --leave-app` only from
+`zap`: `brew upgrade` runs every uninstall directive but `signal`, so the cask's `uninstall` only quits Infinify, and
+brew opens it again after an upgrade.
+
+`tests/e2e/setup-assistant.sh` covers the decisions, the pieces of uninstall that touch no registration, and every pane
+drawn off screen in light and dark from made-up states; `tests/e2e/native-launcher.sh` covers the launcher's hand-over,
+and runs only where no Infinify is running (the guest; 136 checks passed there on 2026-10-30).
+
+Run in the guest on 2026-10-30 (macOS 27.0.1, SIP relaxed, a build signed with the Developer ID, payload included,
+driven by Return key presses and read back by screenshots and the commands' own status): a plain launch showed the
+assistant; Set up, then Permissions read the guest's two grants; Turn on registered the login item, whose immediate start
+found the assistant's lock and exited 0 (one Infinify process, launchd `runs = 1`, last exit 0); the compositor pane read
+SIP relaxed and the boot argument set, and Turn on registered the launch daemon (enabled at once there, the approval
+evidently remembered from earlier runs), had it answer `ping` and wrote the login-mode record; Start Infinify ended the
+assistant and kickstarted the login item, whose launcher started compositor mode as the launchd job. Opening Infinify
+again showed the assistant beside it with Done. With automatic loading paused, the login item's start handed its reason
+to `setup --refused`, and Try again lifted the pause and started compositor mode in the same process, still the job.
+With the demo recorded, a plain launch opened the capture-mode desktop. `uninstall --leave-app` turned the login item,
+the daemon and the login-mode record off.
+
+A second guest round the same evening, with the same build plus the fixes it led to:
+
+- **Another copy.** A copy in `~/Applications` with its login item on was removed by setup from `/Applications` through
+  that copy's own `uninstall` (bundle in the Trash, login item gone). The owner's `c420c4b` build, which answers
+  `uninstall` with the usage status, was removed by the fallback while its login item ran a capture desktop: login item
+  off, the desktop ended in order (edge tiling put back to 1), bundle in the Trash.
+- **SIGTERM.** An assistant run that ended by signal would be a failure to launchd, which starts the login item's job
+  again; it now ends with status 0 on SIGTERM, SIGINT and SIGHUP (launchd `runs = 1`, last exit 0). macOS sends that
+  SIGTERM itself when Infinify's item is switched off under Background App Activity.
+- **Screen Recording restart.** From a fresh launch with the grant reset (`tccutil reset ScreenCapture`): Allow opened
+  the pane, the row said to restart, and Restart Infinify replaced the process (new window, same pid) with the grant
+  read as Allowed. A process started from an SSH shell is judged by `sshd-keygen-wrapper`'s grant, not Infinify's; the
+  test launched through LaunchServices.
+- **Approval waits.** With Infinify's background item switched off, Turn on for the login item waited, and approving it
+  moved setup on by itself. After `sfltool resetbtm` and a restart, the launch daemon needed a first approval: macOS
+  notified, setup waited, the approval moved it on, the daemon answered and Start Infinify loaded the payload through the
+  daemon (its root-owned staged copy, signed by team PBKWRHQV74) as the login item's job. Before the reset, switching the
+  item off and on in System Settings had left Background Task Management with a daemon record it could not resolve
+  (`effectiveDisposition: FATAL ERROR - fullPath is nil`): reported enabled, never started by launchd, and unregistering
+  and registering again did not clear it. Setup and `native-desktop enable` now ask `ping` again for up to 20 and 30
+  seconds (`+[DWLoaderService pingWithin:]`), since launchd may still be starting the daemon right after an approval.
+- **Uninstall** from `/Applications` stopped the running desktop, took the login item and daemon off and moved the app
+  to the Trash.
+
+Not run anywhere: the Recovery steps (the guest and the owner's Mac already have SIP relaxed), and anything on the
+owner's Mac.
+
 ### Installed, signed, started at login
 
 These are for the owner to run. No agent or test installed the app, registered
@@ -166,7 +268,9 @@ steps below was run for this document.
 
 1. `./scripts/install-app.sh` builds the bundle (`--built` takes the one
    already in `target/app`), copies its exact signed bytes to
-   `~/Applications/Infinify.app`, and verifies the app and helper hashes. Set
+   `/Applications/Infinify.app` (`--user`: `~/Applications`), and verifies the app and helper hashes.
+   When the other folder holds a copy, it says that copy's registrations still start Infinify and that
+   `Infinify setup` from the new copy removes it ([Setup](#setup-the-demo-and-uninstall)); setup now does steps 2 and 3. Set
    `$INFINIFY_SIGN_IDENTITY` during the build to sign with a code-signing
    identity (`security find-identity -v -p codesigning`); otherwise the build
    is ad hoc, and macOS ties both privacy grants to that signature. With
@@ -175,7 +279,7 @@ steps below was run for this document.
    whole and then removed, never overwritten file by file; an install that
    fails or is interrupted before the new copy is in place puts it back. It
    starts nothing and registers nothing.
-2. `~/Applications/Infinify.app/Contents/MacOS/Infinify login-item on`
+2. `/Applications/Infinify.app/Contents/MacOS/Infinify login-item on`
    registers the LaunchAgent the bundle carries at
    `Contents/Library/LaunchAgents/com.marengox.infinify.agent.plist`, through
    `SMAppService`, and launchd starts it at once. macOS may ask for approval
@@ -217,7 +321,7 @@ daemon and its checks are in
 [docs/native/dock-helper/Daemon/README.md](dock-helper/Daemon/README.md#launch-daemon-login-start-and-dock-reload);
 what the app does is:
 
-1. `~/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop enable` (a build signed
+1. `/Applications/Infinify.app/Contents/MacOS/Infinify native-desktop enable` (a build signed
    with a team identity, installed with `scripts/install-app.sh`). It runs the launcher's
    read-only `--check`, registers the launch daemon with `SMAppService`, opens System Settings >
    General > Login Items & Extensions for the owner's one approval, waits for it (up to three

@@ -15,6 +15,9 @@
 //
 // Returns the exit status: 0 done or reported, 1 refused, 64 usage; the launcher forms replace this process.
 int DWNativeDesktopCommand(int argc,const char **argv);
+// `Infinify uninstall`'s step: what `disable` does to the login-mode record, the Dock reload pause and the launch daemon,
+// saying only what it changed (uninstall has turned the login item off and ended every instance already).
+int DWNativeDesktopTurnOff(void);
 // `login-start`: whether the owner enabled compositor mode as the login default.
 BOOL DWNativeLoginIsCompositor(void);
 // The login-mode record (login.plist, owner-only, in the given state directory): written by `enable`, read by `login-start` and `status`.
