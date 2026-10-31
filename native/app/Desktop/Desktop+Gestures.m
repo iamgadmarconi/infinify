@@ -25,6 +25,12 @@
     if([input start]){self.globalTrackpad=input;self.globalTrackpadNoted=NO;return;}
     if(!self.globalTrackpadNoted){self.globalTrackpadNoted=YES;[self say:@"Global trackpad takeover needs existing Accessibility/input access. macOS system gestures remain active until the session tap can start."];}
 }
+// Why a held mouse button keeps a new canvas contact out, nil when none does. The hardware's own state decides (DWPhysicalMouseButtons, and a press the global
+// tap tracks only while that state has its button down), not NSEvent.pressedMouseButtons and not a press tracked from events alone: after a window drag the
+// canvas took over, the three- and four-finger touches were refused as "a mouse button is down" and handed to macOS (owner's M5 Pro, 2026-10-30).
+- (NSString *)buttonRefusal {
+    return DWPhysicalMouseButtons()||self.globalTrackpad.hasNativeMousePress?@"a mouse button is down":nil;
+}
 - (BOOL)admitGlobalTouches:(DWTrackpadTouchFrame *)frame { return [self admitContact:frame.fingers]; }
 // Whether a touch of `fingers` fingers is the canvas's, asked once per touch by whichever source sees its third finger first: the session tap's events
 // or MultitouchSupport's frames. When both report one touch the first answer stands, so the second does not end the gesture the first began.
@@ -37,7 +43,7 @@
     // A native mouse press already owns its drag session, even when its pointer
     // crosses a canvas panel. Extra fingers cannot begin a new camera contact
     // that steals the original source's physical drag and release.
-    else if(NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress)why=@"a mouse button is down";
+    else why=[self buttonRefusal];
     if(why){if(DWDebugTrace()&&fingers>=3)fprintf(stderr,"debug: gestures: touch of %lu fingers refused: %s\n",(unsigned long)fingers,why.UTF8String);return NO;}
     CGPoint at=pointer();BOOL output=NO;
     for(DesktopView *view in self.views){if(view.gesture){if(DWDebugTrace())fprintf(stderr,"debug: gestures: touch of %lu fingers refused: a view holds a gesture\n",(unsigned long)fingers);return NO;}if([view outputAt:at])output=YES;}
@@ -58,7 +64,7 @@
     if(![self globalGesturesEnabled])return NO;
     BOOL beginning=!self.magnifying;
     if(beginning){
-        if(NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress)return NO;
+        if([self buttonRefusal])return NO;
         CGPoint at=pointer();BOOL output=NO;
         for(DesktopView *view in self.views){if(view.gesture)return NO;if([view outputAt:at])output=YES;}
         if(!output)return NO;
@@ -95,11 +101,11 @@
 - (void)multitouchFrame:(DWMultitouchFrame *)frame {
     BOOL empty=!frame.contacts.count;
     if(!self.touchFeed||!self.trackpad||self.cleaning||self.sessionInactive||![self globalGesturesEnabled]){
-        [self.touchFeed cancel:frame.time];if(empty)self.globalGestureContact=NO;else [self.dockGuard refuseContact:frame.contact];return;
+        [self.touchFeed cancel:frame.time];if(empty)self.globalGestureContact=NO;else [self.dockGuard yieldContact:frame.contact];return;
     }
     self.touchPath=@"multitouch";
     BOOL fed=[self.touchFeed consume:frame];
-    // The system keeps a touch the canvas declined; the guard learns it at once.
+    // A touch the canvas declined is still the canvas's to keep from the system (a bound count is dropped all the same); the guard learns it at once, for its log.
     if(self.touchFeed.refused)[self.dockGuard refuseContact:frame.contact];
     if(fed){self.lastTouches=frame.time;[self armTrackpad];}
     if(empty)self.globalGestureContact=NO;

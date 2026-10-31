@@ -263,12 +263,20 @@ int main(void) {@autoreleasepool {
     DWDockGuardFingers(&t,0,40.5);check(DWDockGuardDrops(&t,40.5+DWDockTail-.001)&&!DWDockGuardDrops(&t,40.5+DWDockTail+.001)&&!t.boundTouch,@"the lift ends the flag and starts the tail from the lift");
     DWDockGuardFingers(&t,2,41);check(!DWDockGuardDrops(&t,41),@"two fingers of the next touch are not bound");
     DWDockGuardFingers(&t,0,41.1);
-    // The shell declined a touch: the system keeps it, and only that one.
+    // The shell declined a touch: a bound count is held back from the system all the same (the owner's M5 Pro opened the desktop view when a declined
+    // 3- or 4-finger touch was passed on), with the tail after its lift; the refusal belongs to that touch alone, and an unbound count is the system's.
     DWDockGuardFingers(&s,3,20);uint32_t mine=s.contact;DWDockGuardRefuse(&s,mine);
-    check(!DWDockGuardDrops(&s,20)&&s.refused,@"a refused touch is the system's");
-    DWDockGuardFingers(&s,0,20.1);check(!DWDockGuardDrops(&s,20.1),@"and has no tail");
-    DWDockGuardFingers(&s,3,21);DWDockGuardRefuse(&s,mine);check(DWDockGuardDrops(&s,21),@"a refusal that arrives after its touch is over refuses nothing of the next");
+    check(DWDockGuardDrops(&s,20)&&s.refused,@"a refused touch of a bound count is still dropped");
+    BOOL refusedDrop=NO;check(DWDockGuardReason(&s,20,&refusedDrop)==DWDockReasonRefused&&refusedDrop,@"and its reason says it was refused");
+    DWDockGuardFingers(&s,0,20.1);check(DWDockGuardDrops(&s,20.1)&&!DWDockGuardDrops(&s,20.1+DWDockTail+.001),@"and has the tail after its lift");
+    DWDockGuardFingers(&s,3,21);DWDockGuardRefuse(&s,mine);check(DWDockGuardDrops(&s,21)&&!s.refused,@"a refusal that arrives after its touch is over refuses nothing of the next");
     DWDockGuardFingers(&s,0,21.1);
+    DWDockGuardFingers(&s,2,21.5);DWDockGuardRefuse(&s,s.contact);check(!DWDockGuardDrops(&s,21.5)&&!DWDockGuardDrops(&s,21.7),@"a refused touch of an unbound count is the system's");
+    DWDockGuardFingers(&s,0,21.6);
+    // A touch the shell yields (the canvas is closed, the session is away) is the system's whole, whatever the count, and has no tail.
+    DWDockGuardFingers(&s,3,21.8);DWDockGuardYield(&s,s.contact);BOOL yieldedDrop=YES;
+    check(!DWDockGuardDrops(&s,21.8)&&DWDockGuardReason(&s,21.8,&yieldedDrop)==DWDockReasonYielded&&!yieldedDrop,@"a yielded touch of a bound count is the system's");
+    DWDockGuardFingers(&s,0,21.9);check(!DWDockGuardDrops(&s,21.9)&&!s.yielded,@"and has no tail, nor does the next touch inherit it");
     DWDockGuardFingers(&s,3,22);DWDockGuardLive(&s,NO);check(!DWDockGuardDrops(&s,22)&&!DWDockGuardDrops(&s,22.1)&&!s.fingers,@"a source that stops delivering holds nothing back, tail included");
     DWDockGuardLive(&s,YES);
     // Unconfigured: no binding, no drop.
@@ -404,11 +412,17 @@ int main(void) {@autoreleasepool {
     b1=dockOther(29);
     check([tap filter:DWDockControlType event:b1 at:rig.now+.1]==b1,@"but one lifted from five at once owes none");
     CFRelease(b1);
-    // The stream of a touch the shell declined is the system's.
+    // The stream of a touch the shell declined is dropped like any other of a bound count (it was once passed, and opened the desktop view).
     rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
     DWMultitouchFrame *refusedFrame=[rig frame:together count:4 device:1 after:.01];[rig.guard refuseContact:refusedFrame.contact];
-    began=dockSwipe(3,kCGGesturePhaseBegan,31);
-    check([tap filter:DWDockControlType event:began at:rig.now]==began,@"a touch the shell declined keeps its Dock-control stream");
+    began=dockSwipe(3,kCGGesturePhaseBegan,31);changed=dockSwipe(3,kCGGesturePhaseChanged,32);
+    check([tap filter:DWDockControlType event:began at:rig.now]==NULL&&[tap filter:DWDockControlType event:changed at:rig.now+.02]==NULL,@"a touch the shell declined does not hand its Dock-control stream to the system");
+    CFRelease(began);CFRelease(changed);
+    // The stream of a touch the shell yields (canvas closed, session away) is the system's.
+    rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];
+    DWMultitouchFrame *yieldedFrame=[rig frame:together count:4 device:1 after:.01];[rig.guard yieldContact:yieldedFrame.contact];
+    began=dockSwipe(3,kCGGesturePhaseBegan,33);
+    check([tap filter:DWDockControlType event:began at:rig.now]==began,@"a touch the shell yields keeps its Dock-control stream");
     CFRelease(began);
     // A beginning always starts afresh, and a stream that never ended is forgotten after a second.
     rig=[Rig new];[rig.guard setBound:three4];tap=[[DWDockTap alloc]initWithGuard:rig.guard];

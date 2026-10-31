@@ -3,6 +3,10 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import "DWDockControl.h"
 @class NSEvent,DWTrackpadTouchFrame;
+// The mouse buttons down now, bit n for button n, as WindowServer's HID system state has them: what the hardware and any HID-level post say, so the tagged
+// release a taken-over window drag posts clears it (measured in the guest: HID and AppKit's combined state both read up from that release on, while the
+// press this tap tracked from events was still "native" until the physical release). It does not depend on any release having reached a tap.
+NSUInteger DWPhysicalMouseButtons(void);
 
 // The event types DWNativeInput's annotated session tap subscribes to: only the pointer,
 // scroll, tablet and gesture types it acts on. Never the system-defined events (the volume,

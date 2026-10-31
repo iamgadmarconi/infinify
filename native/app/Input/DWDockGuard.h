@@ -28,7 +28,8 @@ typedef struct {
     uint32_t gesture;  // fingers of the recogniser's gesture in progress, 0 for none
     uint32_t contact;  // which touch the fingers belong to: counts up each time the pad goes from empty to touched
     BOOL live;         // a touch source is delivering frames
-    BOOL refused;      // the shell declined this contact (a button was down, no canvas under the pointer): the system keeps it
+    BOOL refused;      // the shell declined this contact (a button was down, no canvas under the pointer): for the log only, a bound count is held back all the same
+    BOOL yielded;      // the shell is not in charge of this contact at all (canvas closed, session away): the system keeps it, whatever the count
     NSTimeInterval until; // Sunlight's dropDockControlUntil: Dock control is dropped until then; it moves on with every report of a bound touch, and the tail starts at the lift
     BOOL boundTouch;   // Sunlight's fourFingerTouch: from a bound count landing until the last finger lifts, however the count moves meanwhile (not once it has grown past every bound count)
     BOOL runOpen,runDrop; // a Dock-control stream is in progress, and its beginning was dropped (runDrop) or given to the system
@@ -41,12 +42,13 @@ extern const NSTimeInterval DWDockTail;
 typedef NS_ENUM(NSInteger,DWDockReason){
     DWDockReasonNotLive,    // no touch source delivers: nothing is held back
     DWDockReasonUnbound,    // the fingers on the pad (none, or a count no [gestures] binding takes) are the system's
-    DWDockReasonRefused,    // the shell declined this touch: the system keeps it
+    DWDockReasonRefused,    // the shell declined this touch and its fingers are a bound count: held back all the same
     DWDockReasonFingers,    // the fingers on the pad are a bound count
     DWDockReasonGesture,    // the recogniser's gesture in progress is a bound count
     DWDockReasonTail,       // the fingers lifted, or the gesture ended, a beat ago
     DWDockReasonRunDropped, // the stream this packet belongs to began dropped
     DWDockReasonRunPassed,  // the stream this packet belongs to began with the system
+    DWDockReasonYielded,    // the shell is not the desktop now (the canvas is closed, the session is away): the system keeps the touch
 };
 const char *DWDockReasonName(DWDockReason reason);
 // Whether fingers or a gesture of a bound count are there, ignoring the tail.
@@ -64,8 +66,10 @@ BOOL DWDockGuardDecide(DWDockGuardState *state,DWDockControlKind kind,NSTimeInte
 void DWDockGuardFingers(DWDockGuardState *state,NSUInteger fingers,NSTimeInterval now);
 // The recogniser's gesture of `fingers` fingers began, or (0) ended: the tail starts at its end.
 void DWDockGuardGesture(DWDockGuardState *state,NSUInteger fingers,NSTimeInterval now);
-// The shell declined touch number `contact`; a later touch is not covered by it.
+// The shell declined touch number `contact`; a later touch is not covered by it. A bound count is held back all the same.
 void DWDockGuardRefuse(DWDockGuardState *state,uint32_t contact);
+// The shell is not the desktop for touch number `contact` (the canvas is closed, the session is away, gestures are off): the system keeps it, and only that one.
+void DWDockGuardYield(DWDockGuardState *state,uint32_t contact);
 void DWDockGuardBound(DWDockGuardState *state,uint32_t mask);
 // A touch source starts or stops delivering. Stopping forgets the fingers and the tail.
 void DWDockGuardLive(DWDockGuardState *state,BOOL live);
@@ -83,6 +87,7 @@ void DWDockGuardLive(DWDockGuardState *state,BOOL live);
 - (uint32_t)fingers:(NSUInteger)fingers at:(NSTimeInterval)now;
 - (void)gesture:(NSUInteger)fingers at:(NSTimeInterval)now;
 - (void)refuseContact:(uint32_t)contact;
+- (void)yieldContact:(uint32_t)contact;
 - (BOOL)dropsAt:(NSTimeInterval)now;
 - (DWDockGuardState)state;
 @end

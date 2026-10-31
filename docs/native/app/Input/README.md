@@ -146,10 +146,24 @@ header says which lines.
   closes each callback, and the empty frame the last lift brings ends the
   gesture at once, uncancelled. Fingers before the third are counted and not
   passed on.
+- **"A mouse button is down" is the hardware's state.** The admission reads
+  `DWPhysicalMouseButtons()` (WindowServer's HID system state) and, from the global
+  tap, a native press it tracked from events only while that state still has the
+  button down. Tracking from events alone left a press "native" for the whole of a
+  window drag the canvas had taken over (the application's drag is ended with a
+  tagged release posted ahead of the physical one), and any release that fails to
+  reach the tap (a nested run loop, a tap disabled for a moment, a release swallowed or
+  deduplicated behind the tagged one) would have kept it so until the next click;
+  the owner's log shows three- and four-finger touches refused with "a mouse button
+  is down" for several seconds after such a drag. `INFINIFY_DEBUG=1` serves
+  `{"DebugInput":{}}` on the IPC socket: every button state the gesture code could
+  read (`hid_buttons`, `pressed_mouse_buttons`, `combined_left`, `native_press`) and
+  the refusal a new touch would get now (`refusal`).
 - The third finger of a fresh touch asks the same admission the session tap
   asks (a canvas under the pointer, no button down, no gesture on a view, no
   geometry transition under way); a refusal stands until every finger has
-  lifted, and the system keeps that touch. Whichever of the two sources sees the
+  lifted, and the canvas does not act on that touch (the Dock guard below still
+holds a bound count back from the system). Whichever of the two sources sees the
   third finger first answers for both, so the other does not end the gesture the
   first began. The presses that end gestures (see above) end this one too, and
   the rest of that touch is ignored until the fingers lift.
@@ -194,8 +208,13 @@ those events, and only those:
 
 Never for a count with no binding, and a touch that grows from a bound count to
 an unbound one is handed back to the system at once, with no tail. Never when
-the source is not delivering. Never for a touch the shell declined (a button
-down, no canvas under the pointer, the canvas closed or the session away). The
+the source is not delivering. A touch of a bound count that the shell declined (a
+button down, no canvas under the pointer, a gesture on a view) is held back all the
+same: declining it says only that the canvas does not act on it, and the system reads
+the same fingers as Spaces or Mission Control (the owner's M5 Pro opened the desktop
+view that way, 2026-10-30, when a declined touch was passed on). Only a touch the
+shell yields because it is not the desktop at that moment (the canvas closed, the
+session away) is the system's. The
 decision is a plain function of a small state, `DWDockGuardDrops`, and the tap
 runs on a thread of its own, so a busy main thread cannot make the system
 disable it (a 5 s watchdog turns a tap the system disabled quietly back on).
@@ -259,7 +278,8 @@ the page swipe are not Dock control.
   refused=R tail_ms=T reports=N (+K similar not written) real=.. hid=.. axis=..
   phase=.. [fields: f..=..]`: each stream's first and last packet and any change of
   verdict, otherwise at most one line a quarter second. Reasons are
-  `source-not-delivering`, `count-not-bound`, `touch-refused`, `bound-fingers`,
+  `source-not-delivering`, `count-not-bound`, `bound-refused` (a declined touch of a bound
+  count, held back all the same), `bound-fingers`,
   `bound-gesture`, `tail-after-lift`, `stream-began-dropped`,
   `stream-began-with-system`; the session tap's own rule says what it saw instead.
   `via=annotated-tap ... reached-annotated-tap` is a packet that got past both

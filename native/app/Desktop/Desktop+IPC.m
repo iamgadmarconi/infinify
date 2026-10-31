@@ -80,6 +80,8 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     if(self.debugPointer&&self.native&&DWTyped(DWTyped(request,NSDictionary.class)[@"DebugDecoration"],NSDictionary.class))return [self debugDecoration:DWTyped(request,NSDictionary.class)[@"DebugDecoration"]];
     // {"DebugNative":{}} with --debug-pointer under native presentation: what was sent to the helper and what the helper says it holds.
     if(self.debugPointer&&self.native&&DWTyped(DWTyped(request,NSDictionary.class)[@"DebugNative"],NSDictionary.class))return [self.native debug:DWTyped(request,NSDictionary.class)[@"DebugNative"]];
+    // {"DebugInput":{}} under INFINIFY_DEBUG: every button state the gesture code could read, and the refusal it would give a new touch right now.
+    if(DWDebugTrace()&&DWTyped(DWTyped(request,NSDictionary.class)[@"DebugInput"],NSDictionary.class))return [self debugInput];
     if(self.debugPointer&&DWTyped(DWTyped(request,NSDictionary.class)[@"DebugCapture"],NSDictionary.class))return [self debugCapture:DWTyped(request,NSDictionary.class)[@"DebugCapture"]];
     NSDictionary *command=request?@{@"op":@"ipc",@"output":[self viewOutput]?:NSNull.null,@"request":request,@"pointer":pointJSON(pointer())}:nil;
     if(!command||![NSJSONSerialization isValidJSONObject:command])return ipcError(@"invalid request");
@@ -182,6 +184,12 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     [view.injectedTimer invalidate];__weak DesktopView *weak=view;__weak Desktop *desktop=self;
     view.injectedTimer=[NSTimer timerWithTimeInterval:5 repeats:NO block:^(NSTimer *timer){(void)timer;DesktopView *v=weak;if(!v.injected)return;v.injected=NO;v.injectedTimer=nil;[desktop injected:v phase:2];}];
     [NSRunLoop.mainRunLoop addTimer:view.injectedTimer forMode:NSRunLoopCommonModes];
+}
+// Read-only, and served only when INFINIFY_DEBUG is set: the sources of "a mouse button is down", for a test that cannot move a trackpad.
+- (NSData *)debugInput {
+    return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugInput":@{@"pressed_mouse_buttons":@(NSEvent.pressedMouseButtons),@"hid_buttons":@(DWPhysicalMouseButtons()),
+        @"combined_left":@(CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,kCGMouseButtonLeft)),@"native_press":@(self.globalTrackpad.hasNativeMousePress),
+        @"global_tap_running":@(self.globalTrackpad.running),@"refusal":[self buttonRefusal]?:NSNull.null}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
 }
 - (NSData *)debugCapture:(NSDictionary *)request {
     NSNumber *window=DWTyped(request[@"window"],NSNumber.class);if(!window)return ipcError(@"DebugCapture needs a window id");

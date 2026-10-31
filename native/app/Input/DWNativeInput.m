@@ -25,6 +25,10 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
     (void)proxy;
     @autoreleasepool { return [(__bridge DWGlobalTrackpadInput *)context handleGlobal:type event:event]; }
 }
+NSUInteger DWPhysicalMouseButtons(void) {
+    NSUInteger down=0;for(int button=0;button<32;button++)if(CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,(CGMouseButton)button))down|=1UL<<button;
+    return down;
+}
 @implementation DWGlobalTrackpadInput {
     CFMachPortRef _tap;CFRunLoopSourceRef _source;
     BOOL (^_enabled)(void);BOOL (^_admitTouches)(DWTrackpadTouchFrame *);void (^_touches)(DWTrackpadTouchFrame *);
@@ -41,7 +45,18 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
 }
 - (BOOL)running { return _tap&&CFMachPortIsValid(_tap)&&CGEventTapIsEnabled(_tap); }
 - (BOOL)ownsTouches { return _ownsTouches; }
-- (BOOL)hasNativeMousePress { return _nativeButtons.count!=0; }
+// A native press this tap saw go down and has not seen come up, and the hardware still has down. The pair is tracked from the events, but a release can fail
+// to arrive here (a nested run loop, a tap disabled for a moment, a physical release swallowed or deduplicated after the tagged one a taken-over window drag
+// posts), and a press that outlived its button refused every three- and four-finger touch until the next click (owner's M5 Pro, 2026-10-30, after a window
+// drag the canvas took over). So the buttons WindowServer's HID state has up are let go here, on whatever path they were left.
+- (BOOL)hasNativeMousePress {
+    for(NSUInteger button=_nativeButtons.firstIndex;button!=NSNotFound;){
+        NSUInteger next=[_nativeButtons indexGreaterThanIndex:button];
+        if(!CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,(CGMouseButton)button))[_nativeButtons removeIndex:button];
+        button=next;
+    }
+    return _nativeButtons.count!=0;
+}
 - (BOOL)start {
     if(_tap)return self.running;
     if(!AXIsProcessTrusted())return NO;
@@ -129,7 +144,7 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
                     if(_magnifyOwned&&!_magnifyCancelled)[self cancel];
                     _device=frame.device;
                     NSUInteger epoch=_epoch;BOOL (^admit)(DWTrackpadTouchFrame *)=_admitTouches;
-                    BOOL taken=enabled&&!self.hasNativeMousePress&&!NSEvent.pressedMouseButtons&&admit&&admit(frame);
+                    BOOL taken=enabled&&!self.hasNativeMousePress&&!DWPhysicalMouseButtons()&&admit&&admit(frame);
                     if(epoch==_epoch&&_tap){_ownsTouches=taken;_touchCancelled=NO;}
                 }
                 BOOL owned=_ownsTouches;NSUInteger epoch=_epoch;
@@ -151,7 +166,7 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
             if(phase&NSEventPhaseMayBegin)return event;
             BOOL owned=_magnifyOwned;
             if(!_magnifyDecided&&(!(phase&(NSEventPhaseEnded|NSEventPhaseCancelled)))){_magnifyDecided=YES;NSUInteger epoch=_epoch;
-                BOOL (^magnify)(NSEvent *)=_magnify;BOOL taken=enabled&&!self.hasNativeMousePress&&!NSEvent.pressedMouseButtons&&magnify&&magnify(appkit);
+                BOOL (^magnify)(NSEvent *)=_magnify;BOOL taken=enabled&&!self.hasNativeMousePress&&!DWPhysicalMouseButtons()&&magnify&&magnify(appkit);
                 if(epoch==_epoch&&_tap)_magnifyOwned=taken;
             }else if(owned&&!_magnifyCancelled){BOOL (^magnify)(NSEvent *)=_magnify;if(magnify)magnify(appkit);}
             BOOL taken=_magnifyOwned;
@@ -172,7 +187,7 @@ static CGEventRef globalTrackpadInput(CGEventTapProxy proxy,CGEventType type,CGE
     if(verdict!=DWDockControlUndecided){_dockOwned=NO;return verdict==DWDockControlDrop?NULL:event;}
     NSTimeInterval now=CACurrentMediaTime();BOOL owned;const char *reason;
     if(kind!=DWDockControlOther){
-        if(dockPhase==kCGGesturePhaseBegan||dockPhase==kCGGesturePhaseMayBegin)_dockOwned=enabled&&!self.hasNativeMousePress&&(!NSEvent.pressedMouseButtons||_ownsTouches);
+        if(dockPhase==kCGGesturePhaseBegan||dockPhase==kCGGesturePhaseMayBegin)_dockOwned=enabled&&!self.hasNativeMousePress&&(!DWPhysicalMouseButtons()||_ownsTouches);
         owned=_dockOwned;reason=owned?"dock swipe began while this tap owned the touch":"dock swipe did not begin while this tap owned the touch";
         if(dockPhase==kCGGesturePhaseEnded||dockPhase==kCGGesturePhaseCancelled)_dockOwned=NO;
     }else{

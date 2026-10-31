@@ -113,6 +113,7 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)configureGlobalTrackpad;
 - (BOOL)globalGesturesEnabled;
 - (BOOL)admitContact:(NSUInteger)fingers;
+- (NSString *)buttonRefusal;
 - (BOOL)admitGlobalTouches:(DWTrackpadTouchFrame *)frame;
 - (void)globalTouches:(DWTrackpadTouchFrame *)frame;
 - (BOOL)globalMagnify:(NSEvent *)event;
@@ -277,6 +278,7 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)injected:(DesktopView *)view phase:(int)phase;
 - (void)armInjected:(DesktopView *)view;
 - (NSData *)debugCapture:(NSDictionary *)request;
+- (NSData *)debugInput;
 - (NSData *)debugPointer:(NSDictionary *)request;
 @end
 // Desktop+Rendering.m

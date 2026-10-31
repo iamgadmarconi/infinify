@@ -16,7 +16,9 @@
 //                                                    and cleared when the pad is empty; while it is set the drop time is `now + dockTail` at every report
 // Deviations, each deliberate and none run on a trackpad: "four fingers" is any count a [gestures] binding takes (the shell tells the guard which),
 // where Sunlight's is exactly four; the flag is also cleared, and the drop time with it, when the count grows past every bound one, since the system's
-// gesture of more fingers than any binding is not the canvas's; a touch the shell declined is the system's whole (Sunlight has no admission); the
+// gesture of more fingers than any binding is not the canvas's; a touch the shell declined is held back from the system all the same, for a bound count (Sunlight
+// has no admission; an earlier version passed a declined touch to the Dock, and the owner's M5 Pro, 2026-10-30, opened the desktop view that way after a window drag; only a
+// touch the shell yields, because the canvas is closed or the session away, is the system's whole); the
 // recogniser's gesture in progress also holds; the drop time is set again at the lift, since frames may stop with the last finger; nothing is dropped unless
 // a touch source says it delivers (Sunlight's tap and recogniser are one object); the tap installs on the main thread, the run loop is the thread's, and the
 // shell tries again at its next native-input configuration where Sunlight retries after 3 s (line 217-219); and a stream of Dock-control packets is
@@ -34,16 +36,18 @@
 const NSTimeInterval DWDockTail=DWDockControlTail;
 static BOOL bit(uint32_t mask,NSUInteger count) { return count>0&&count<32&&(mask&(1u<<count))!=0; }
 const char *DWDockReasonName(DWDockReason reason) {
-    static const char *names[]={"source-not-delivering","count-not-bound","touch-refused","bound-fingers","bound-gesture","tail-after-lift","stream-began-dropped","stream-began-with-system"};
+    static const char *names[]={"source-not-delivering","count-not-bound","bound-refused","bound-fingers","bound-gesture","tail-after-lift","stream-began-dropped","stream-began-with-system","touch-yielded"};
     return reason>=0&&reason<(DWDockReason)(sizeof names/sizeof *names)?names[reason]:"?";
 }
-BOOL DWDockGuardHolds(const DWDockGuardState *state) { return state->live&&!state->refused&&(bit(state->bound,state->fingers)||bit(state->bound,state->gesture)); }
+// A refused touch of a bound count is held all the same: the shell declining it (a button thought down, a view in a gesture) says nothing about whether macOS may
+// have it, and the system reads the same fingers as Spaces or Mission Control. `refused` is kept to say why in the log.
+BOOL DWDockGuardHolds(const DWDockGuardState *state) { return state->live&&!state->yielded&&(bit(state->bound,state->fingers)||bit(state->bound,state->gesture)); }
 DWDockReason DWDockGuardReason(const DWDockGuardState *state,NSTimeInterval now,BOOL *drop) {
     DWDockReason reason=DWDockReasonUnbound;BOOL dropped=NO;
     if(!state->live)reason=DWDockReasonNotLive;
-    else if(DWDockGuardHolds(state)){dropped=YES;reason=bit(state->bound,state->fingers)?DWDockReasonFingers:DWDockReasonGesture;}
+    else if(DWDockGuardHolds(state)){dropped=YES;reason=state->refused?DWDockReasonRefused:bit(state->bound,state->fingers)?DWDockReasonFingers:DWDockReasonGesture;}
     else if(now<state->until){dropped=YES;reason=DWDockReasonTail;}
-    else if(state->refused&&(bit(state->bound,state->fingers)||bit(state->bound,state->gesture)))reason=DWDockReasonRefused;
+    else if(state->yielded&&(bit(state->bound,state->fingers)||bit(state->bound,state->gesture)))reason=DWDockReasonYielded;
     if(drop)*drop=dropped;return reason;
 }
 BOOL DWDockGuardDrops(const DWDockGuardState *state,NSTimeInterval now) { BOOL drop=NO;DWDockGuardReason(state,now,&drop);return drop; }
@@ -65,22 +69,23 @@ void DWDockGuardFingers(DWDockGuardState *state,NSUInteger fingers,NSTimeInterva
     // `if fourFingerTouch { dropDockControlUntil = now + TrackpadPan.dockTail }`. Fingers lift one by one, so the count passes through unbound ones on its
     // way to none: the touch is held all the same, to its end. A touch that grew past every bound count was handed to the system, at once and with no tail.
     uint32_t top=state->bound?31u-(uint32_t)__builtin_clz(state->bound):0;
-    if(bit(state->bound,fingers)&&!state->refused)state->boundTouch=YES;
+    if(bit(state->bound,fingers)&&!state->yielded)state->boundTouch=YES;
     else if(fingers>top){state->boundTouch=NO;state->until=0;}
     if(state->boundTouch)state->until=now+DWDockTail;
     // The pad is empty again: the next touch is the shell's to admit afresh. The tail covers the end of the system's swipe.
-    if(!fingers){state->refused=NO;if(held||state->boundTouch)state->until=now+DWDockTail;state->boundTouch=NO;}
+    if(!fingers){state->refused=state->yielded=NO;if(held||state->boundTouch)state->until=now+DWDockTail;state->boundTouch=NO;}
 }
 void DWDockGuardGesture(DWDockGuardState *state,NSUInteger fingers,NSTimeInterval now) {
     BOOL held=DWDockGuardHolds(state);
     state->gesture=(uint32_t)MIN(fingers,(NSUInteger)UINT32_MAX);
     if(held&&!DWDockGuardHolds(state))state->until=now+DWDockTail;
 }
-void DWDockGuardRefuse(DWDockGuardState *state,uint32_t contact) { if(state->fingers&&contact==state->contact){state->refused=YES;state->boundTouch=NO;state->until=0;} }
+void DWDockGuardRefuse(DWDockGuardState *state,uint32_t contact) { if(state->fingers&&contact==state->contact)state->refused=YES; }
+void DWDockGuardYield(DWDockGuardState *state,uint32_t contact) { if(state->fingers&&contact==state->contact){state->yielded=YES;state->boundTouch=NO;state->until=0;} }
 void DWDockGuardBound(DWDockGuardState *state,uint32_t mask) { state->bound=mask; }
 void DWDockGuardLive(DWDockGuardState *state,BOOL live) {
     state->live=live;
-    if(!live){state->fingers=state->gesture=0;state->refused=NO;state->until=0;state->boundTouch=NO;state->runOpen=NO;}
+    if(!live){state->fingers=state->gesture=0;state->refused=state->yielded=NO;state->until=0;state->boundTouch=NO;state->runOpen=NO;}
 }
 
 @implementation DWDockGuard {
@@ -109,6 +114,7 @@ static NSString *boundCounts(uint32_t mask) {
 }
 - (void)gesture:(NSUInteger)fingers at:(NSTimeInterval)now { os_unfair_lock_lock(&_lock);DWDockGuardGesture(&_state,fingers,now);os_unfair_lock_unlock(&_lock); }
 - (void)refuseContact:(uint32_t)contact { os_unfair_lock_lock(&_lock);DWDockGuardRefuse(&_state,contact);os_unfair_lock_unlock(&_lock); }
+- (void)yieldContact:(uint32_t)contact { os_unfair_lock_lock(&_lock);DWDockGuardYield(&_state,contact);os_unfair_lock_unlock(&_lock); }
 - (BOOL)dropsAt:(NSTimeInterval)now { os_unfair_lock_lock(&_lock);BOOL drop=DWDockGuardDrops(&_state,now);os_unfair_lock_unlock(&_lock);return drop; }
 - (DWDockGuardState)state { os_unfair_lock_lock(&_lock);DWDockGuardState state=_state;os_unfair_lock_unlock(&_lock);return state; }
 - (DWDockControlVerdict)decide:(CGEventRef)event via:(const char *)via at:(NSTimeInterval)now {

@@ -260,17 +260,31 @@ int main(void) {@autoreleasepool {
         magnify:^BOOL(NSEvent *event){(void)event;return YES;}
         ignoreEvent:^BOOL(CGEventRef event){return CGEventGetIntegerValueField(event,kCGEventSourceUserData)==771;}
         cancelled:^{}];
+    physicalButtons=1;
     check(unchanged(down,^{return [global handleGlobal:kCGEventLeftMouseDown event:down];})&&global.hasNativeMousePress,@"global tap observes native physical down without consuming it");
     CGEventRef dock=dockPacket(kCGGesturePhaseMayBegin);
     check(unchanged(dock,^{return [global handleGlobal:30 event:dock];}),@"new Dock contact cannot take an existing native drag");
     [global handleGlobal:kCGEventLeftMouseUp event:taggedUp];check(global.hasNativeMousePress,@"tagged up cannot release global physical ownership");
+    physicalButtons=0;
     check(unchanged(up,^{return [global handleGlobal:kCGEventLeftMouseUp event:up];})&&!global.hasNativeMousePress,@"global physical release clears native admission guard");
-    [global handleGlobal:kCGEventLeftMouseDown event:down];[global cancel];
+    physicalButtons=1;[global handleGlobal:kCGEventLeftMouseDown event:down];[global cancel];
     check(global.hasNativeMousePress,@"logical cancellation does not lend held native button to new contact");
     [global handleGlobal:kCGEventTapDisabledByUserInput event:NULL];
     check(!global.hasNativeMousePress,@"disabled global tap retires stale native reservation");
-    [global handleGlobal:kCGEventLeftMouseDown event:down];[global stop];
+    physicalButtons=1;[global handleGlobal:kCGEventLeftMouseDown event:down];[global stop];physicalButtons=0;
     check(!global.hasNativeMousePress,@"stopping global tap clears physical reservation");
+    // A drag the canvas took over: the application's window drag ends with a tagged release posted ahead of the hardware's, and this tap, in front of the
+    // one that swallows the physical tail, may never be shown that release. The press it saw go down is gone with the button all the same.
+    physicalButtons=1;[global handleGlobal:kCGEventLeftMouseDown event:down];
+    check(global.hasNativeMousePress,@"a native press is held while the hardware has the button down");
+    [global handleGlobal:kCGEventLeftMouseDragged event:drag];[global handleGlobal:kCGEventLeftMouseUp event:taggedUp];
+    check(global.hasNativeMousePress,@"a tagged release posted by this process does not end it while the button is physically down");
+    physicalButtons=0;
+    check(!global.hasNativeMousePress,@"the hardware's release ends it though this tap never saw a physical release");
+    physicalButtons=2;[global handleGlobal:kCGEventRightMouseDown event:second];physicalButtons=0;
+    check(!global.hasNativeMousePress,@"and so for any other button");
+    check(DWPhysicalMouseButtons()==0,@"DWPhysicalMouseButtons is the hardware's state: none down");
+    physicalButtons=5;check(DWPhysicalMouseButtons()==5,@"and reports each button by its number");physicalButtons=0;
     // Dock control with no touch source delivering: this tap's own rule. Every DockSwipe whose beginning it saw while it owned the touch is its to drop.
     __block DWDockControlVerdict verdict=DWDockControlUndecided;__block NSUInteger asked=0;
     DWGlobalTrackpadInput *shared=[[DWGlobalTrackpadInput alloc]initWithEnabled:^BOOL{return YES;} admitTouches:^BOOL(DWTrackpadTouchFrame *frame){(void)frame;return NO;}
@@ -349,13 +363,23 @@ int main(void) {@autoreleasepool {
     check([NSEvent eventWithCGEvent:touchDown].subtype==NSEventSubtypeTouch,@"in-memory mouse packet carries public touch subtype");
     @try {
         policyFrame=[PolicyTouchFrame new];policyFrame.testFingers=3;
-        [global handleGlobal:kCGEventLeftMouseDown event:touchDown];
+        physicalButtons=1;[global handleGlobal:kCGEventLeftMouseDown event:touchDown];
         check([global handleGlobal:(CGEventType)NSEventTypeGesture event:contact]==contact&&!global.ownsTouches&&admissions==0,@"native touch-subtype down before contact cannot lend its drag to global gesture");
         check([global handleGlobal:kCGEventLeftMouseDragged event:touchDrag]==touchDrag,@"unadmitted native touch drag remains original");
-        [global handleGlobal:kCGEventLeftMouseUp event:touchUp];policyFrame.testFingers=0;
+        physicalButtons=0;[global handleGlobal:kCGEventLeftMouseUp event:touchUp];policyFrame.testFingers=0;
         [global handleGlobal:(CGEventType)NSEventTypeGesture event:contact];policyFrame.testFingers=3;
         [global handleGlobal:(CGEventType)NSEventTypeGesture event:contact];
         check(admissions==1&&!global.hasNativeMousePress,@"fresh three-finger contact offers admission after native pair ends");
+        // A drag the canvas took over whose physical release this tap never saw: the next contact is still offered for admission, the button being up. While
+        // the hardware has the button down it is not offered, which is the guard's whole purpose.
+        policyFrame.testFingers=0;[global handleGlobal:(CGEventType)NSEventTypeGesture event:contact];
+        physicalButtons=1;[global handleGlobal:kCGEventLeftMouseDown event:touchDown];[global handleGlobal:kCGEventLeftMouseDragged event:touchDrag];
+        policyFrame.testFingers=3;[global handleGlobal:(CGEventType)NSEventTypeGesture event:contact];
+        check(admissions==1,@"a contact begun while the hardware has a native button down is not offered for admission");
+        policyFrame.testFingers=0;[global handleGlobal:(CGEventType)NSEventTypeGesture event:contact];
+        physicalButtons=0;policyFrame.testFingers=3;[global handleGlobal:(CGEventType)NSEventTypeGesture event:contact];
+        check(admissions==2&&!global.hasNativeMousePress,@"and the contact after the release this tap never saw is offered, though a press was left open");
+        policyFrame.testFingers=0;[global handleGlobal:(CGEventType)NSEventTypeGesture event:contact];
         // No event tap is installed, so the real handler deliberately will not
         // commit new ownership. Seed the already-admitted-contact precondition
         // solely in this test object to check its generated mouse pair below.
