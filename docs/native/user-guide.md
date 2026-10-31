@@ -93,8 +93,10 @@ DriftWM is a compositor: it is the session, not an app one launches. A normal ru
     macOS's default), kept if the user changed it meanwhile, put back at the
     next launch after a crash. Why: with the macOS default the double-click
     zooms the *native* frame, which the canvas does not draw. On a window whose
-    own title bar the canvas does not recognise (Chromium's tab strip, for
-    one: `native title cache … reason=missing_top_toolbar`) the click goes to
+    own title bar the canvas does not recognise (an Electron window with a
+    hidden title bar, for one: `native title cache … reason=missing_top_toolbar`;
+    Chromium's tab strip is recognised since the caption audit, see
+    NATIVE-DRAG-ROUTING.md) the click goes to
     the application and the native frame jumps to the display while the drawn
     copy stays where it is, then is adopted: the owner's "double-clicking the
     title bar expands the window to the whole viewport and it jumps around"

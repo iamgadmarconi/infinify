@@ -213,7 +213,7 @@ window, event, permission or Dock; the live ones start disposable fixture window
 | `multitouch-source.sh` | synthetic MultitouchSupport records and the Dock-control decision | no |
 | `native-daemon.sh` | the launch daemon's and Dock reloader's decisions, caller requirement and artifact checks | no |
 | `native-launcher.sh` | the bundled launcher's modes against stub tools and a throwaway HOME | no |
-| `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-frame-restore.sh`, `native-input-policy.sh`, `native-placement-validation.sh`, `native-presenter-readiness.sh`, `native-view-transfer.sh` | the native presenter, views, placement, input policy and recovery logic with substituted native calls | no |
+| `native-decorations.sh`, `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-frame-restore.sh`, `native-input-policy.sh`, `native-placement-validation.sh`, `native-presenter-readiness.sh`, `native-view-transfer.sh` | the native presenter, views, placement, input policy and recovery logic with substituted native calls | no |
 | `native-focus.sh` | the focus adapter refuses an identity that is not a live window | no |
 | `privileged-regression.sh` | the Dock payload and its C client with substituted native calls | no |
 | `root-capture-mailbox.sh` | the root capture mailbox and captured-input acceptance code | no |

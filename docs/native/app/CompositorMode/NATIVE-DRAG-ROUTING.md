@@ -211,6 +211,59 @@ helper restores the window's original placement-1 layer, which is relative to th
 with its frame (COMPOSITOR-MODE.md section "Restore after a native-origin move"). The takeover decides "transformed" from the placement the controller drew (`planned_screen`, read when the press is owned), not from the window list's bounds, which read back the native frame for some windows (Finder drawn at half size) and so hid the transform; see [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper) for the flicker it caused and what remains. A press on the empty strip of a toolbar group (Safari's address-field group,
 for example) is the window's, not the application's, so it is claimed as a title press and never becomes a takeover.
 
+**Chromium's caption (tab strip).** Chrome (and Aside, which is the same toolkit) draws its own title bar: the tab strip row. AppKit
+reports no title element, and the window's own children hold no `AXToolbar` (it sits several wrapper groups down), so the unified-toolbar
+audit answered `missing_top_toolbar` and a press on the empty strip went to the application, which calls
+`-[NSWindow performWindowDragWithEvent:]` on it. WindowServer then dragged the transformed window from where it is drawn: the picture was at scale 1
+for 11 (fast) and 27 (slow) drag samples at zoom 0.5 before the takeover, the native frame moved (105 and 240 points), and a plain single click
+without motion moved it too (native origin -45,408 to -190,466 at zoom 0.5, 205,159 to 360,97 at zoom 1: the pointer's offset from the top edge
+is read from where the window is drawn, not from its native frame). `AXUIElementCopyElementAtPosition` cannot separate caption from tab: a
+point on a tab and a point on the empty strip both return an unlabelled leaf `AXGroup` (Chrome 156, recorded in the guest). The classifier
+(`decorationBrowserCaption` in `DWNativeDecorations.m`, entered where `missing_top_toolbar` was returned) therefore reads frames. It walks
+only the elements that start above the traffic lights' bottom, finds exactly one `AXTabGroup` whose top is the window's top (its bottom
+is the strip row's bottom, never a guessed height), and takes the row from the window's top edge to that bottom, full width, as the
+caption, minus: the traffic lights, the whole `AXTabGroup` (tabs, their close buttons, tab-group chips), every other control in the row
+(tab search, New Tab and any other button, pop-up, text field or checkbox) and any leaf group with a press action. What is left is the space
+around the traffic lights, the empty strip and the space right of New Tab. The toolbar (omnibox, buttons), infobars and web content start
+below the row and stay the application's. The audit rejects, exactly as before, on: no tab group (`missing_top_toolbar`), several tab groups,
+a web area, scroll area, toolbar, split group or text area inside the row, a tab group that is not the top row, an element inside the
+row that is unreadable or belongs to another window, a measured element below the lights that reaches into the row, a node or time
+budget exhausted (96 nodes, the lookup's 150 ms), or more than 64 children of a group. An accepted caption is reported as
+`reason=accepted_browser_caption`. The press path is the unchanged title press: a drag moves the window on the canvas, a click focuses
+it and delivers nothing to the application, and a double-click runs the canvas's own title double-click action (Fill).
+
+Measured in the macOS 27.0.1 guest (vm2) on Google Chrome 156 with a 1200x1036 window of three tabs, real HID at `kCGHIDEventTap`, a press on the empty strip
+at window-local (1100,20), sampling the placement-0/1 and catenated transforms and the native bounds every 0.5 ms; before = this tree without the
+caption audit, after = with it (`INFINIFY_DEBUG=1`, `AppleActionOnDoubleClick` `None` throughout):
+
+| Chrome, empty strip | before | after |
+| --- | --- | --- |
+| zoom 0.5 drag, fast (15 steps, 60 ms), samples at scale 1 | 24, 7, 11 (three runs) | 0 |
+| zoom 0.5 drag, slow (60 steps, 960 ms), samples at scale 1 | 22, 21, 27 (three runs) | 0 |
+| zoom 0.5 drag, native frame moved by WindowServer (max over the run) | 105 and 240 points (last run) | 0 and 0 |
+| zoom 1 drag (nothing to flicker), native frame moved | 550 and 145 points | 0 and 0 |
+| zoom 0.5 single click, no motion | native -45,408 to -190,466 (-145, +58); `native title miss ... reason=no_region`, `end=final geometry did not settle within two seconds` | native unchanged; `native chrome owned window=#42 kind=title` |
+| zoom 1 single click | native 205,159 to 360,97 | native unchanged |
+| zoom 0.5 and 1 double-click | native frame unchanged (the macOS action is off), two `end=unchanged native click`; no canvas action | `native resize origin operation=native_decoration action=fullscreen` (Fill): native 360,97 1200x1036 to 0,30 1920x1080 at both zooms |
+| click on the second tab (local 480,20) | selected (AX: Tab two selected) | selected (it is excluded: `native title miss ... excluded=113,-1,734,43`) |
+| click in the omnibox (local 600,63) | focused (AX `AXFocused`) | focused (`outside title=0,0,1200,41`) |
+| TextEdit title (586x488), zoom 0.5 and 1, fast and slow | 0 samples at scale 1, native moved 0 (4 of 4) | the same (4 of 4) |
+| Finder title (700x500, unified toolbar), zoom 0.5, fast and slow | 0 samples, native moved 0 | the same |
+
+The `before` double-click and tab/omnibox rows show that the application kept getting its own presses; the single-click rows are the owner's
+"a click moves the window" symptom. Finder at zoom 1 was also run (0 samples before and after) but the harness's window pick at that zoom is not
+reliable, so that row is not claimed. Not measured: Aside's browser window (the guest's Aside only reached its sign-in screen), Electron windows with a hidden
+title bar, a window with many tabs (the 150 ms lookup was not timed; no `title_deadline` reason was logged in the after run with three tabs), and the owner's Mac.
+
+`sh tests/e2e/native-decorations.sh` runs the classifier over the Accessibility shapes recorded in the guest (Chrome with three tabs, one tab and an infobar, Aside's sign-in window, TextEdit, Finder; 57 checks: caption points owned, tab, close button, New Tab, tab search, traffic lights, omnibox, toolbar and web content points the application's, the TextEdit and Finder cases unchanged, and mutations of the Chrome tree that must keep the old rejection). With the audit disabled 16 of those checks fail. It substitutes the AX calls, so it is a statement about the classifier, not about a live press.
+
+COMPOSITOR-MODE.md's numbers row for the drag lane lists "Chrome tab strip" at 0 samples before and after at zoom 0.5; the points of that row are not
+recorded, and the empty-strip points of this section are the ones that showed 11 and 27.
+
+Electron windows with a hidden title bar (Orca, Marengo) and Aside's real browser window are NOT covered or measured: an Electron page draws its
+drag area with CSS (`-webkit-app-region`), which Accessibility does not expose, so there is no caption signal to read, and such a window keeps
+today's rejection; Aside was only reachable at its sign-in window in the guest (no tab group, close button outside the window: rejected as before).
+
 Managed root chrome now has a separate session-stage ownership decision.
 An independently recognized titlebar or green button, or a controller-qualified
 resize border at the exact native recipient, reserves the entire mouse pair

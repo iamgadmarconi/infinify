@@ -11,7 +11,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-static BOOL decorationFrame(AXUIElementRef element,CGRect *out){
+static BOOL decorationFrameRead(AXUIElementRef element,CGRect *out,BOOL allowEmpty){
     // Chrome refresh visits several elements every 200 ms. Fetch each frame in
     // one AX message instead of two; no geometry or freshness result is cached.
     static CFArrayRef attributes;static dispatch_once_t once;
@@ -31,10 +31,11 @@ static BOOL decorationFrame(AXUIElementRef element,CGRect *out){
     if(position&&size&&CFGetTypeID(position)==AXValueGetTypeID()&&CFGetTypeID(size)==AXValueGetTypeID()
         &&AXValueGetType(position)==kAXValueCGPointType&&AXValueGetType(size)==kAXValueCGSizeType
         &&AXValueGetValue(position,kAXValueCGPointType,&p)&&AXValueGetValue(size,kAXValueCGSizeType,&s)
-        &&isfinite(p.x)&&isfinite(p.y)&&isfinite(s.width)&&isfinite(s.height)&&s.width>0&&s.height>0){*out=CGRectMake(p.x,p.y,s.width,s.height);valid=YES;}
+        &&isfinite(p.x)&&isfinite(p.y)&&isfinite(s.width)&&isfinite(s.height)&&(allowEmpty?s.width>=0&&s.height>=0:s.width>0&&s.height>0)){*out=CGRectMake(p.x,p.y,s.width,s.height);valid=YES;}
     if(error==kAXErrorNotImplemented){if(position)CFRelease(position);if(size)CFRelease(size);}
     if(values)CFRelease(values);return valid;
 }
+static BOOL decorationFrame(AXUIElementRef element,CGRect *out){return decorationFrameRead(element,out,NO);}
 static BOOL decorationNear(CGRect a,CGRect b){return fabs(a.origin.x-b.origin.x)<=1&&fabs(a.origin.y-b.origin.y)<=1&&fabs(a.size.width-b.size.width)<=1&&fabs(a.size.height-b.size.height)<=1;}
 static id decorationAttribute(AXUIElementRef element,CFStringRef name,AXError *error){
     CFTypeRef value=NULL;AXError result=AXUIElementCopyAttributeValue(element,name,&value);if(error)*error=result;
@@ -130,6 +131,62 @@ static CGRect decorationGroupExtent(AXUIElementRef item,CGRect frame,uint32_t wi
     }
     CGRect extent;return DWToolbarGroupExtent(frame,frames,count,&extent)?extent:frame;
 }
+// Chromium browsers (Chrome; Aside is the same toolkit) draw their own caption: the tab strip row is the title bar, and Chromium calls
+// -[NSWindow performWindowDragWithEvent:] for a press on its empty part. AppKit exposes no title element and no AXToolbar among the
+// window's own children (the toolbar sits several wrapper groups down), so the unified-toolbar audit finds nothing. What the views
+// toolkit does expose is an AXTabGroup whose top is the window's top and whose bottom is the strip row's bottom, with every tab an
+// AXRadioButton inside it, and the strip's other controls (tab search, new tab) as sibling AXButton/AXPopUpButton. The caption is that row
+// (the window's top edge to the AXTabGroup's bottom, the full width) minus the traffic lights, the whole AXTabGroup (tabs, their close
+// buttons, tab-group chips), and every control the walk meets in the row. AXUIElementCopyElementAtPosition cannot tell the two apart: a
+// point on a tab and a point on the empty strip both return an unlabelled leaf AXGroup (measured on Chrome 156, 2026-10-30), so this reads frames.
+// Only elements that start above the traffic lights' bottom are walked; the toolbar and the web content start below it and are only
+// measured, and anything measured that reaches into the row rejects the audit. Web content, a toolbar or a scroll area inside the row,
+// several tab groups, an unreadable or foreign element, or an exhausted budget keeps the window's rejection exactly as before.
+typedef struct{CGRect own,lights;uint32_t wid;AXError(*getWindow)(AXUIElementRef,uint32_t *);CFTimeInterval deadline;int budget;NSMutableArray *controls,*below;NSUInteger tabGroups;CGRect tabGroup;}DecorationCaption;
+static NSString *decorationCaptionWalk(AXUIElementRef element,int depth,DecorationCaption *c){
+    if(--c->budget<0)return @"caption_node_budget";if(CACurrentMediaTime()>=c->deadline)return @"caption_deadline";if(depth>8)return @"caption_depth";
+    uint32_t window=0;CGRect frame;
+    if(AXUIElementSetMessagingTimeout(element,.02)||c->getWindow(element,&window)||window!=c->wid||!decorationFrameRead(element,&frame,YES))return @"caption_geometry_or_owner";
+    if(frame.size.width<=0||frame.size.height<=0)return nil;
+    if(CGRectGetMinY(frame)>=CGRectGetMaxY(c->lights)){[c->below addObject:DWRectJSON(frame)];return nil;}
+    id role=decorationAttribute(element,kAXRoleAttribute,NULL);if(![role isKindOfClass:NSString.class])return @"caption_role";
+    if([role isEqual:@"AXWebArea"]||[role isEqual:(__bridge NSString *)kAXScrollAreaRole]||[role isEqual:(__bridge NSString *)kAXToolbarRole]
+        ||[role isEqual:(__bridge NSString *)kAXSplitGroupRole]||[role isEqual:(__bridge NSString *)kAXTextAreaRole])return @"caption_content_or_toolbar_in_row";
+    if([role isEqual:(__bridge NSString *)kAXTabGroupRole]){if(c->tabGroups++)return @"caption_multiple_tab_groups";c->tabGroup=frame;[c->controls addObject:DWRectJSON(frame)];return nil;}
+    if(![role isEqual:(__bridge NSString *)kAXGroupRole]){[c->controls addObject:DWRectJSON(frame)];return nil;}
+    id children=decorationAttribute(element,kAXChildrenAttribute,NULL);
+    if(children&&![children isKindOfClass:NSArray.class])return @"caption_children";
+    if([children count]>64)return @"caption_children_unbounded";
+    if(![children count]){
+        // A leaf group is the empty strip unless it offers an action of its own (a chip or a button drawn as a group).
+        CFArrayRef names=NULL;if(AXUIElementCopyActionNames(element,&names)||!names)return @"caption_actions";
+        NSArray *actions=CFBridgingRelease(names);
+        for(NSString *name in @[(__bridge NSString *)kAXPressAction,(__bridge NSString *)kAXPickAction,(__bridge NSString *)kAXConfirmAction,(__bridge NSString *)kAXIncrementAction,(__bridge NSString *)kAXDecrementAction])
+            if([actions containsObject:name]){[c->controls addObject:DWRectJSON(frame)];break;}
+        return nil;
+    }
+    for(id value in children){
+        if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return @"caption_child_type";
+        NSString *failure=decorationCaptionWalk((__bridge AXUIElementRef)value,depth+1,c);if(failure)return failure;
+    }
+    return nil;
+}
+static NSDictionary *decorationBrowserCaption(NSArray *children,CGRect own,CGRect lights,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline,NSArray *chrome,NSMutableArray *excluded,NSString **reason){
+    DecorationCaption c={.own=own,.lights=lights,.wid=wid,.getWindow=getWindow,.deadline=deadline,.budget=96,.controls=[NSMutableArray array],.below=[NSMutableArray array],.tabGroup=CGRectNull};
+    for(id value in children){
+        if([chrome containsObject:value])continue;
+        if(CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return decorationRejected(reason,@"caption_child_type");
+        NSString *failure=decorationCaptionWalk((__bridge AXUIElementRef)value,0,&c);if(failure)return decorationRejected(reason,failure);
+    }
+    if(!c.tabGroups)return decorationRejected(reason,@"missing_top_toolbar");
+    CGRect tabs=c.tabGroup;CGFloat bottom=CGRectGetMaxY(tabs);
+    if(fabs(CGRectGetMinY(tabs)-CGRectGetMinY(own))>1||!CGRectContainsRect(CGRectInset(own,-1,-1),tabs)||bottom<CGRectGetMaxY(lights)-1||bottom>=CGRectGetMaxY(own)
+        ||CGRectGetMinY(lights)<CGRectGetMinY(own)-1)return decorationRejected(reason,@"caption_tab_group_not_top_row");
+    for(NSDictionary *value in c.below)if(CGRectGetMinY(DWRectFromJSON(value))<bottom-1.5)return decorationRejected(reason,@"caption_control_below_lights");
+    for(NSDictionary *value in c.controls)[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(DWRectFromJSON(value),-1,-1),own))];
+    if(reason)*reason=@"accepted_browser_caption";
+    return @{@"region":DWRectJSON(CGRectMake(0,0,own.size.width,bottom-CGRectGetMinY(own))),@"excluded":excluded};
+}
 // A modern AppKit unified toolbar can contain or omit AXTitleUIElement. Its measured
 // toolbar rectangle supplies the chrome boundary; whole child rectangles
 // remain native. A group item is native where its children are (its full width,
@@ -157,7 +214,7 @@ static NSDictionary *decorationToolbar(AXUIElementRef window,CGRect own,CGRect l
             ||([role isEqual:(__bridge NSString *)kAXGroupRole]&&[decorationAttribute(child,kAXSubroleAttribute,NULL)isEqual:@"AXHostingView"]));
         if(!wrapper)[otherFrames addObject:DWRectJSON(frame)];
     }
-    if(!toolbar)return decorationRejected(reason,@"missing_top_toolbar");
+    if(!toolbar)return decorationBrowserCaption(children,own,lights,wid,getWindow,deadline,chrome,excluded,reason);
     for(NSDictionary *value in otherFrames){
         CGRect frame=DWRectFromJSON(value);
         frame=CGRectIntersection(frame,toolbarFrame);if(!CGRectIsNull(frame)&&!CGRectIsEmpty(frame))[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];
@@ -306,6 +363,20 @@ static BOOL decorationDragMiss(NSDictionary *identity,CGPoint point,const char *
     if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title miss pid=%d wid=%u point=%g,%g reason=%s\n",[identity[@"pid"]intValue],[identity[@"wid"]unsignedIntValue],point.x,point.y,reason);
     return NO;
 }
+// The one rule that turns a title report into "canvas-owned" or not, for a point in window-local native points: nil when the point is
+// inside the title region (or one of its additional regions) and in none of the native control rectangles, else why not. Shared by the
+// live press path and the recorded-shape tests.
+static NSString *decorationRegionVerdict(NSDictionary *title,CGPoint local){
+    NSArray *regions=[@[title]arrayByAddingObjectsFromArray:[title[@"additional_regions"]isKindOfClass:NSArray.class]?title[@"additional_regions"]:@[]];
+    BOOL inside=NO;
+    for(NSDictionary *candidate in regions){
+        if(CGRectContainsPoint(DWRectFromJSON(candidate[@"region"]),local))inside=YES;
+        for(NSDictionary *excluded in candidate[@"excluded"])if(CGRectContainsPoint(DWRectFromJSON(excluded),local)){CGRect frame=DWRectFromJSON(excluded);
+            return [NSString stringWithFormat:@"excluded=%g,%g,%g,%g",frame.origin.x,frame.origin.y,frame.size.width,frame.size.height];}
+    }
+    if(inside)return nil;CGRect region=DWRectFromJSON(title[@"region"]);
+    return [NSString stringWithFormat:@"outside title=%g,%g,%g,%g",region.origin.x,region.origin.y,region.size.width,region.size.height];
+}
 BOOL DWNativeWindowDragHit(NSDictionary *identity,NSDictionary *report,CGPoint point){
     if(!NSThread.isMainThread||![report[@"identity"]isEqual:identity]||CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]>.5)return decorationDragMiss(identity,point,"stale_report");
     NSDictionary *title=report[@"title"];CGRect region=DWRectFromJSON(title[@"region"]);if(CGRectIsEmpty(region))return decorationDragMiss(identity,point,"no_region");
@@ -323,18 +394,10 @@ BOOL DWNativeWindowDragHit(NSDictionary *identity,NSDictionary *report,CGPoint p
     if([row[(id)kCGWindowOwnerPID]intValue]!=selected.pid||![row[(id)kCGWindowIsOnscreen]boolValue]||[row[(id)kCGWindowAlpha]doubleValue]<=0
         ||!row[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)||CGRectIsEmpty(displayed)||!CGRectContainsPoint(displayed,point))return decorationDragMiss(identity,point,"not_in_displayed_window");
     CGPoint local=CGPointMake((point.x-displayed.origin.x)*own.size.width/displayed.size.width,(point.y-displayed.origin.y)*own.size.height/displayed.size.height);
-    NSArray *regions=[@[title]arrayByAddingObjectsFromArray:[title[@"additional_regions"]isKindOfClass:NSArray.class]?title[@"additional_regions"]:@[]];
-    BOOL inside=NO;
-    for(NSDictionary *candidate in regions){
-        if(CGRectContainsPoint(DWRectFromJSON(candidate[@"region"]),local))inside=YES;
-        for(NSDictionary *excluded in candidate[@"excluded"])if(CGRectContainsPoint(DWRectFromJSON(excluded),local)){
-            if(getenv("INFINIFY_DEBUG")){CGRect frame=DWRectFromJSON(excluded);fprintf(stderr,"debug: native title miss local=%g,%g excluded=%g,%g,%g,%g\n",local.x,local.y,frame.origin.x,frame.origin.y,frame.size.width,frame.size.height);}
-            return decorationDragMiss(identity,point,"native_control");
-        }
-    }
-    if(!inside){
-        if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title miss local=%g,%g title=%g,%g,%g,%g displayed=%g,%g,%g,%g\n",local.x,local.y,region.origin.x,region.origin.y,region.size.width,region.size.height,displayed.origin.x,displayed.origin.y,displayed.size.width,displayed.size.height);
-        return decorationDragMiss(identity,point,"outside_title");
+    NSString *verdict=decorationRegionVerdict(title,local);
+    if(verdict){
+        if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title miss local=%g,%g %s\n",local.x,local.y,verdict.UTF8String);
+        return decorationDragMiss(identity,point,[verdict hasPrefix:@"excluded"]?"native_control":"outside_title");
     }
     CGRect after;if(!dw_focus_owner(selected,&after)||!CGRectEqualToRect(own,after)
         ||![recipient isEqual:DWNativeEventRecipientAtPoint(point)])return decorationDragMiss(identity,point,"changed_during_hit");
