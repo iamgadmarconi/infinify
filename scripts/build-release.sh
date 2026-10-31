@@ -79,12 +79,13 @@ cask "infinify" do
   end
 
   depends_on arch: :arm64
-  depends_on macos: ">= :tahoe"
+  depends_on macos: :tahoe
 
   app "Infinify.app"
 
-  # brew upgrade runs uninstall too (all but signal): quit lets the new copy replace a running one, and brew opens it again
-  # afterwards. Taking the login item and the launch daemon away is for a real removal only, so it is zap's.
+  # brew upgrade runs uninstall too (all but signal): quit lets the new copy replace a running one,
+  # and brew opens it again afterwards. Taking the login item and the launch daemon away is for a real
+  # removal only, so it is zap's.
   uninstall quit: "com.marengox.infinify"
 
   zap early_script: {
