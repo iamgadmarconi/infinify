@@ -4,6 +4,7 @@
 #import <AppKit/AppKit.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Carbon/Carbon.h>
+#import <UserNotifications/UserNotifications.h>
 #import "DWCanvasRenderer.h"
 #import "DWCanvasCursor.h"
 #import "DWConfigWatcher.h"
@@ -267,4 +268,11 @@
 - (void)cleanup;
 - (void)onboard;
 - (void)runAutostart;
+// The setup assistant beside this run (Desktop+Session.m): what opening Infinify again, or its update notification, shows.
+- (void)openSetupAssistant;
+@end
+// A newer release (DWUpdateCheck.h), read when a desktop run starts and every six hours after, told once per version by a
+// notification whose click opens the setup assistant (Desktop+Updates.m). Windowed, chooser and scoped runs never look.
+@interface Desktop (Updates) <UNUserNotificationCenterDelegate>
+- (void)watchForUpdates;
 @end

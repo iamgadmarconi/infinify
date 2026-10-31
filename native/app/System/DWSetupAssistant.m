@@ -9,6 +9,7 @@
 #import "DWNativeDesktopCLI.h"
 #import "DWOwnerFile.h"
 #import "DWUninstall.h"
+#import "DWUpdateCheck.h"
 #import <ApplicationServices/ApplicationServices.h>
 #import <ServiceManagement/ServiceManagement.h>
 #include <signal.h>
@@ -72,6 +73,9 @@ static NSView *row(NSString *name,NSView *trailing) {
     _original=original;
     _installPlace=^NSString *{return DWInstallIsInstalled(bundle)?nil:DWInstallPlace(DWSetupCopyCandidates());};
     _otherCopies=^NSArray<NSString *> *{return DWSetupOtherCopies(original,DWSetupCopyCandidates());};
+    NSString *running=NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"];
+    _update=^NSDictionary<NSString *,NSString *> *{return DWUpdateNewerRecorded(supportDirectory,running);};
+    _updateCommand=^NSString *{return DWUpdateCommand(DWUpdateHomebrewCaskrooms());};
     return self;
 }
 - (DWSetupMode)mode { return DWSetupModeAt(_support,self.compositorAtLogin()); }
@@ -89,6 +93,7 @@ static NSView *row(NSString *name,NSView *trailing) {
         case DWSetupPanePermissions:return [NSString stringWithFormat:@"%d%d",self.accessibility(),self.screenRecording()];
         case DWSetupPaneLogin:return [NSString stringWithFormat:@"%ld",(long)self.loginItemStatus()];
         case DWSetupPaneCompositor:{DWSetupPolicy p=self.policy();return [NSString stringWithFormat:@"%d%d%d%ld%d",p.known,p.sipRelaxed,p.bootArgument,(long)self.daemonState(),self.compositorAtLogin()];}
+        case DWSetupPaneReady:return self.update()[@"version"]?:@"";
         default:return @"";
     }
 }
@@ -215,6 +220,17 @@ static NSView *closeBelow(NSView *view) { view.identifier=kCloseBelow;return vie
     BOOL compositor=self.mode==DWSetupCompositor;
     [views addObject:text(compositor?@"Infinify is your desktop":@"The demo",12,YES,DWSetupTextColor())];
     if(!compositor)[views addObject:body(@"Infinify shows live copies of your windows on the canvas. Clicks and typing reach them, but menus and popups open where the real window is. Once SIP is relaxed, open Infinify again to finish compositor mode.")];
+    NSDictionary<NSString *,NSString *> *update=self.update();
+    if(update){
+        NSString *command=self.updateCommand();
+        if(command){
+            [views addObject:closeBelow(body([NSString stringWithFormat:@"Infinify %@ is out. To update, run in Terminal:",update[@"version"]]))];
+            [views addObject:code(command)];
+        }else{
+            [views addObject:body([NSString stringWithFormat:@"Infinify %@ is out. Download it, then drag it into Applications over this copy.",update[@"version"]])];
+            [actions addObject:[self button:@"Download" role:DWSetupButtonSecondary action:@selector(download:)]];
+        }
+    }
     for(NSArray<NSString *> *key in @[@[@"Pan",@"Drag empty canvas, or ⌃⌥-drag anywhere"],@[@"Zoom",@"⌃⌥-scroll"],@[@"Switch windows",@"⌥Tab"],@[@"Go home",@"⌃⌥A"],@[@"Quit Infinify",@"⌃⌥⌘⇧Q"]])
         [views addObject:row(key[0],quiet(key[1]))];
     [views addObject:quiet(@"Bindings and settings are in ~/.config/infinify/config.toml. Open Infinify again to see this window.")];
@@ -258,6 +274,10 @@ static NSView *closeBelow(NSView *view) { view.identifier=kCloseBelow;return vie
     [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"]];
 }
 - (void)restart:(id)sender { (void)sender;if(_onRelaunch)_onRelaunch(); }
+- (void)download:(id)sender {
+    (void)sender;NSURL *page=[NSURL URLWithString:self.update()[@"page"]?:@""];
+    if(page)[NSWorkspace.sharedWorkspace openURL:page];
+}
 - (void)toLogin:(id)sender { (void)sender;[self showPane:DWSetupPaneLogin]; }
 - (void)toReady:(id)sender { (void)sender;[self showPane:DWSetupPaneReady]; }
 - (void)openLoginItems:(id)sender { (void)sender;[SMAppService openSystemSettingsLoginItems]; }
@@ -366,6 +386,8 @@ int DWSetupRun(int argc,const char **argv) { @autoreleasepool {
     assistant.onRelaunch=^{next=DWSetupNextRelaunch;done=YES;};
     signal(SIGTERM,setupStop);signal(SIGINT,setupStop);signal(SIGHUP,setupStop);
     [assistant show];
+    // A newer release read now shows on the Ready pane at the next look (its signature is the version).
+    DWUpdateCheckIfDue(support,^(NSDictionary<NSString *,NSString *> *newer){(void)newer;});
     while(!done&&!setupSignal){@autoreleasepool{
         NSEvent *event=[NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:.25] inMode:NSDefaultRunLoopMode dequeue:YES];
         if(event)[NSApp sendEvent:event];

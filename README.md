@@ -28,6 +28,19 @@ login and left running until you quit it. Literal Wayland and X11 client hosting
 
 ## Install
 
+```sh
+brew install --cask iamgadmarconi/tap/infinify
+```
+
+or download `Infinify-VERSION.dmg` from the [releases](https://github.com/iamgadmarconi/infinify/releases) and drag
+Infinify into Applications, then open it; setup takes it from there. `brew upgrade --cask infinify` updates it. Once a
+day a release build reads GitHub's latest release (no account, nothing sent but the request; `defaults write
+com.marengox.infinify CheckForUpdates -bool NO` turns it off), and when a newer one is out the running desktop says so
+once in a notification, and the setup window, opened from it or by opening Infinify again, shows how to update: the
+Homebrew command, or a Download button for a copy from the disk image.
+
+### From source
+
 These steps are for you to run; no script here registers a login item or a launch daemon on its own.
 
 ```sh
@@ -77,8 +90,19 @@ the notary service refuses an ad hoc Mach-O: in the guest (macOS 27.0.1, SIP rel
 by team PBKWRHQV74 through the sudo path on 2026-10-30, launch outcome `ready`, the desktop presented natively. The
 notary service accepted 0.2.0 that day with no issues, the arm64e loader and payload included, and a quarantined copy
 of the stapled image passed Gatekeeper in the guest as `Notarized Developer ID`. The release
-build replaces `target/app`. The script ends with the `gh release` and tap steps for when the repository is
-public; friends then install with `brew install --cask iamgadmarconi/tap/infinify`.
+build replaces `target/app` and names this repository in its `Info.plist` (`InfinifyReleaseRepository`), the one its
+update check reads; a development build names none and never checks.
+
+```sh
+./scripts/publish-release.sh 0.2.3
+```
+
+publishes what `build-release.sh` left: a signed tag on the commit the release was built from, a GitHub release with
+the image, the source archive and `SHA256SUMS` (its notes list the commits since the previous tag), and the cask,
+committed to `Casks/infinify.rb` in [iamgadmarconi/homebrew-tap](https://github.com/iamgadmarconi/homebrew-tap). It
+refuses a release that is not notarized and stapled, files that do not match their checksums, a commit that is not on
+`origin/main`, a repository that is not public, and a version already tagged or released. The cask has a `livecheck`
+on the latest GitHub release and a caveat about compositor mode.
 
 ## Run
 
@@ -183,7 +207,7 @@ compositor mode does to windows, popups and drags is in
 | `native/app` | the Objective-C shell and renderer, linked with the controller, one directory per module (Desktop, Canvas, Windows, Input, CompositorMode, Navigation (with the Accessibility focus and resize adapters), System, Support, Resources); [README](docs/native/README.md) |
 | `native/dock-helper` | the Dock helper (Payload), loader and doctor (Loader), launch daemon (Daemon) and client library (Client); [README](docs/native/dock-helper/README.md) |
 | `tests/native` | the headless regressions and the disposable AppKit fixtures that the live tests start, one directory per module of `native/app` and `native/dock-helper`; [how they run](docs/native/testing.md) |
-| `scripts` | `build-app.sh`, `build-privileged.sh`, `install-app.sh`, `build-release.sh`, `package-dmg.sh`, the launcher and packaging helpers |
+| `scripts` | `build-app.sh`, `build-privileged.sh`, `install-app.sh`, `build-release.sh`, `publish-release.sh`, `package-dmg.sh`, the launcher and packaging helpers |
 | `docs` | all Markdown documentation outside this file and `AGENTS.md`: `docs/native` (user guide, module docs), `docs/crates` (each crate's contracts), `docs/parity`; [index](docs/README.md) |
 | `docs/parity` | the parity contract |
 

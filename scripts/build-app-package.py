@@ -51,6 +51,7 @@ BUILD_MANIFEST_KEYS = {
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 RELEASE_VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 RELEASE_BUILD_RE = re.compile(r"[1-9][0-9]*\Z")
+RELEASE_REPOSITORY_RE = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+\Z")
 
 
 def release_version() -> tuple[str, str] | None:
@@ -363,6 +364,13 @@ def copy_resources(root: Path, app: Path, privileged_dir: Path) -> None:
         info_path = app / "Contents/Info.plist"
         info = plistlib.loads(info_path.read_bytes())
         info["CFBundleShortVersionString"], info["CFBundleVersion"] = release
+        # The GitHub repository whose latest release the app compares itself with (native/app/System/DWUpdateCheck.h);
+        # a development build names none and never checks.
+        repository = os.environ.get("INFINIFY_RELEASE_REPOSITORY") or ""
+        if repository:
+            if not RELEASE_REPOSITORY_RE.fullmatch(repository):
+                raise RuntimeError("INFINIFY_RELEASE_REPOSITORY must be OWNER/REPOSITORY")
+            info["InfinifyReleaseRepository"] = repository
         info_path.write_bytes(plistlib.dumps(info, fmt=plistlib.FMT_XML))
 
     native = native_desktop_dir(app)

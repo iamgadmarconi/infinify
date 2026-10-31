@@ -13,7 +13,8 @@
 //   Login        the login item is registered, not offered: Infinify starts at every login and after a crash
 //   Compositor   the doctor's reading of SIP and the boot argument; while it fails, the Recovery steps, what each changes
 //                and how to undo it, and the demo; once it passes, the launch daemon is registered and approved
-//   Ready        the keys to find one's way; Start hands over to compositor mode, or opens the demo
+//   Ready        the keys to find one's way; Start hands over to compositor mode, or opens the demo; a newer release, when
+//                there is one (DWUpdateCheck.h), with the Homebrew command or a Download button
 //
 // Every pane reached is recorded (DWSetupState.h), so setup resumes there after the Screen Recording relaunch and after
 // the restart Recovery needs (the login item, registered by then, opens it). The assistant changes nothing by itself: each
@@ -45,7 +46,7 @@
 
 // Seams, for the fixture that draws every pane (tests/native/app/System/DWSetupAssistantFixture.m). Each defaults to the
 // real thing: the two grants, the doctor's policy, the launch daemon, the login item, where a move puts this copy, the
-// other copies and their removal.
+// other copies and their removal, and the newer release with the command that installs it.
 @property(copy) BOOL (^accessibility)(void);
 @property(copy) BOOL (^screenRecording)(void);
 @property(copy) DWSetupPolicy (^policy)(void);
@@ -54,6 +55,8 @@
 @property(copy) BOOL (^compositorAtLogin)(void);    // the login-mode record exists (DWNativeDesktopCLI.h)
 @property(copy) NSString *(^installPlace)(void);    // nil when this copy is installed (DWInstallIsInstalled)
 @property(copy) NSArray<NSString *> *(^otherCopies)(void);
+@property(copy) NSDictionary<NSString *,NSString *> *(^update)(void); // the newer release recorded, nil for none
+@property(copy) NSString *(^updateCommand)(void);                     // nil when Homebrew did not install this copy
 // Builds the pane into the window without showing it or recording it; for the fixture's pictures.
 - (void)buildPane:(DWSetupPane)pane;
 @end

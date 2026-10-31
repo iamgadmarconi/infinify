@@ -281,6 +281,17 @@ hand, which also lifts a pause of automatic loading after Dock restarts) and Try
 `Infinify setup` beside it, with launchd's job name taken out of its environment; Ready then says Done for the mode
 already running. Windowed, chooser and scoped runs open nothing.
 
+**Updates.** A release build names its GitHub repository in `Info.plist` (`InfinifyReleaseRepository`, stamped by
+`scripts/build-release.sh`); a development build names none and never checks (`native/app/System/DWUpdateCheck.h`). A
+desktop run (not windowed, chooser or scoped) and the setup assistant read GitHub's latest release at most once a day,
+with no account and nothing sent but the request, and keep it in `updates.plist` in the support directory (owner-only)
+with the newest version the owner was told about; a draft, a prerelease or a tag that is no version is never offered.
+When the release is newer than the running version, the desktop run posts one notification for that version ("Infinify
+0.2.3 is out", macOS asking once whether Infinify may notify), whose click opens the setup assistant as opening Infinify
+again does, and the Ready pane shows the version with `brew upgrade --cask infinify` when Homebrew's Caskroom holds
+infinify, or a Download button that opens the release page. `defaults write com.marengox.infinify CheckForUpdates -bool
+NO` turns checking off. Nothing is downloaded or installed by the app itself: Homebrew is the update channel.
+
 **Uninstall.** `Infinify uninstall [--leave-app]` turns the login item off (which ends the instance launchd started),
 sends SIGTERM to every other process of this bundle's executable and waits ten seconds, turns compositor mode off as
 `native-desktop disable` does, puts back window settings an unorderly end left changed, forgets setup, and moves the

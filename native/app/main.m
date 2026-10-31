@@ -207,6 +207,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     // Upstream runs autostart on every backend, its nested one included: a managed, a windowed and a chooser-first launch all do.
     // A launch held at the onboarding window runs it when its canvas opens (-onboard).
     if(!desktop.onboarding)[desktop runAutostart];
+    // A desktop run looks for a newer release now and every six hours (DWUpdateCheck.h); other runs never do.
+    [desktop watchForUpdates];
     // A pool per turn: what a poll, its controller calls and the events it pumps autorelease ends with the turn.
     while(!DWStopSignal){@autoreleasepool{[desktop poll];DWDesktopPump(.08);}}
     // Stopped first: the pending quit reply is written, and no request can arrive during cleanup.

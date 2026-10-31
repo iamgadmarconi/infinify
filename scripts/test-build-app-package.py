@@ -380,6 +380,8 @@ def main() -> int:
             raise AssertionError("the manifest binds the launch daemon before it was signed")
         if any("--timestamp" in call for call in signed_calls):
             raise AssertionError(f"a development build was timestamped, which needs the network: {signed_calls}")
+        if b"InfinifyReleaseRepository" in (signed_bundle / "Contents/Info.plist").read_bytes():
+            raise AssertionError("a development build names a release repository, so it would check for updates")
 
         # A release build (INFINIFY_VERSION and INFINIFY_BUILD_NUMBER) carries that version and is timestamped for notarization.
         write(
@@ -396,7 +398,8 @@ def main() -> int:
         release_snapshot = release_stage / "source-before.json"
         run([sys.executable, str(PACKAGE), "snapshot", "--root", str(repo), "--output", str(release_snapshot)], cwd=ROOT)
         release_log = base / "codesign-release.log"
-        release_env = dict(signed_env, PACKAGE_TEST_CODESIGN_LOG=str(release_log), INFINIFY_VERSION="0.2.0", INFINIFY_BUILD_NUMBER="42")
+        release_env = dict(signed_env, PACKAGE_TEST_CODESIGN_LOG=str(release_log), INFINIFY_VERSION="0.2.0", INFINIFY_BUILD_NUMBER="42",
+                           INFINIFY_RELEASE_REPOSITORY="example/infinify")
         release_publish = [
             sys.executable, str(PACKAGE), "publish", "--root", str(repo), "--snapshot", str(release_snapshot),
             "--staged-app", str(release_app), "--privileged-dir", str(release_privileged),
@@ -411,6 +414,8 @@ def main() -> int:
             raise AssertionError(f"a release build does not carry its version: {release_info}")
         if release_info.get("CFBundleIdentifier") != "com.marengox.infinify":
             raise AssertionError("stamping the version lost the rest of Info.plist")
+        if release_info.get("InfinifyReleaseRepository") != "example/infinify":
+            raise AssertionError(f"a release build does not name the repository it updates from: {release_info}")
         for bad_version, bad_build in (("0.2", "42"), ("0.2.0", ""), ("v0.2.0", "42"), ("0.2.0", "0")):
             rejected = subprocess.run(
                 release_publish[:-1] + [str(base / "rejected-release-publish")],

@@ -151,11 +151,14 @@
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible {
     (void)sender;(void)visible;
     if(self.windowed||!self.managing||self.scope)return NO;
+    [self openSetupAssistant];
+    return NO;
+}
+- (void)openSetupAssistant {
     NSTask *setup=[NSTask new];setup.executableURL=NSBundle.mainBundle.executableURL;setup.arguments=@[@"setup"];
     NSMutableDictionary<NSString *,NSString *> *environment=[NSProcessInfo.processInfo.environment mutableCopy];
     [environment removeObjectForKey:@"XPC_SERVICE_NAME"];setup.environment=environment;
     NSError *error=nil;if(![setup launchAndReturnError:&error])[self say:[NSString stringWithFormat:@"The setup assistant did not start: %@",error.localizedDescription]];
-    return NO;
 }
 // macOS platform rule: applications outlive Infinify, where upstream's clients end with the compositor. A window still fullscreen, or
 // still owed its size by a fullscreen that has ended, would keep the display's size after the canvas is gone, so each fullscreen is

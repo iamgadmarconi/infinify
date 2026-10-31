@@ -8,13 +8,15 @@
 # --notarize submits the image to Apple's notary service with the notarytool keychain profile PROFILE (created once with
 # `xcrun notarytool store-credentials PROFILE --apple-id … --team-id …`), waits, keeps the service's log beside the image,
 # then staples the ticket and checks the image with spctl. Without it the image is signed but not notarized.
-# It replaces target/app with the release build and publishes nothing: the GitHub release and the tap are yours to update
-# with the files it leaves.
+# It replaces target/app with the release build and publishes nothing: scripts/publish-release.sh VERSION puts the files
+# it leaves on GitHub and in the tap. The app it builds names this repository (INFINIFY_RELEASE_REPOSITORY), whose latest
+# release it compares itself with once a day (native/app/System/DWUpdateCheck.h).
 set -eu
 cd "$(dirname "$0")/.."
 test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
 usage='usage: scripts/build-release.sh VERSION [--notarize PROFILE]'
 fail() { printf 'build-release: %s\n' "$*" >&2; exit 1; }
+repository=iamgadmarconi/infinify
 if [ $# -eq 1 ]; then profile=
 elif [ $# -eq 3 ] && [ "$2" = --notarize ] && [ -n "$3" ]; then profile=$3
 else printf '%s\n' "$usage" >&2; exit 64; fi
@@ -34,7 +36,7 @@ dist=target/dist/$version
 # that the Dock loads it so. INFINIFY_SIGN_PAYLOAD=0 keeps it ad hoc.
 INFINIFY_SIGN_PAYLOAD=${INFINIFY_SIGN_PAYLOAD:-1}
 export INFINIFY_SIGN_PAYLOAD
-INFINIFY_VERSION=$version INFINIFY_BUILD_NUMBER=$build ./scripts/build-app.sh
+INFINIFY_VERSION=$version INFINIFY_BUILD_NUMBER=$build INFINIFY_RELEASE_REPOSITORY=$repository ./scripts/build-app.sh
 python3 -I scripts/build-app-package.py verify-source --root "$PWD" >/dev/null
 
 mkdir -p "$dist"
@@ -66,10 +68,15 @@ cask "infinify" do
   version "$version"
   sha256 "$dmg_sha256"
 
-  url "https://github.com/iamgadmarconi/infinify/releases/download/v#{version}/Infinify-#{version}.dmg"
+  url "https://github.com/$repository/releases/download/v#{version}/Infinify-#{version}.dmg"
   name "Infinify"
   desc "Infinite canvas desktop, ported from DriftWM"
-  homepage "https://github.com/iamgadmarconi/infinify"
+  homepage "https://github.com/$repository"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
 
   depends_on arch: :arm64
   depends_on macos: ">= :tahoe"
@@ -86,12 +93,14 @@ cask "infinify" do
         must_succeed: false,
       },
       trash:        "~/Library/Application Support/Infinify"
+
+  caveats <<~CAVEATS
+    Open Infinify to set it up. Compositor mode, where your real windows live on the canvas, needs System Integrity
+    Protection partly relaxed in Recovery; setup shows the steps, and runs a demo until then.
+  CAVEATS
 end
 EOF
 
 printf '\n%s\n' "Infinify $version (build $build, $commit), $notarized, in $dist:"
 printf '  %s\n' "Infinify-$version.dmg" "infinify-$version-source.tar.gz" SHA256SUMS "infinify.rb (the cask; goes in Casks/ of your homebrew-tap repository)"
-printf '%s\n' 'Nothing was published. Once the repository is public:' \
-  "  git tag v$version $commit && git push origin v$version" \
-  "  gh release create v$version $dmg $source_archive $dist/SHA256SUMS --title 'Infinify $version'" \
-  "  then commit $dist/infinify.rb as Casks/infinify.rb in iamgadmarconi/homebrew-tap; friends run: brew install --cask iamgadmarconi/tap/infinify"
+printf '%s\n' "Nothing was published. To publish it: scripts/publish-release.sh $version"
