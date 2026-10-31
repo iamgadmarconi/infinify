@@ -158,6 +158,25 @@ int main(void) {@autoreleasepool {
         CGRect finder=CGRectMake(300,200,800,600),listed=finder,placed=CGRectMake(560,746,400,300),dragged=CGRectMake(448,296,800,600);CGPoint from=CGPointMake(640,760),to=CGPointMake(600,790);
         check(!DWNativeWindowDragStarted(finder,listed,dragged,from,to),@"the window list's bounds alone cannot show that the window is drawn elsewhere (the failing sequence)");
         check(DWNativeWindowDragStarted(finder,placed,dragged,from,to),@"the placement the controller drew shows it, and the application's drag is taken over");}
+    // A press that ends as a click but whose native origin WindowServer moved (Chrome's empty tab strip at zoom 0.5 in the guest, 2026-10-30:
+    // the window drawn at 550,355 600x400 from the native frame 210,393 1200x800; the click left the frame at 100,348, the next click at
+    // 160,468). The click is reverted, not adopted; a real drag is still the takeover's; an unchanged click stays unchanged.
+    {CGRect press=CGRectMake(210,393,1200,800),drawn=CGRectMake(550,355,600,400),after=CGRectMake(100,348,1200,800);
+        check(DWNativeClickSettleKind(YES,NO,press,after,NO)==DWNativeClickSettleRevert,@"a click whose native origin moved with the extent unchanged is reverted (the failing sequence)");
+        check(DWNativeClickSettleKind(YES,NO,press,after,YES)==DWNativeClickSettleRevert,@"a displaced frame is reverted whatever the window list's bounds say");
+        check(DWNativeClickSettleKind(YES,NO,press,press,YES)==DWNativeClickSettleUnchanged,@"a click that moved nothing still ends as an unchanged native click");
+        check(DWNativeClickSettleKind(YES,NO,press,press,NO)==DWNativeClickSettleAdopt,@"unchanged frame with other window-list bounds is left to the adoption");
+        check(DWNativeClickSettleKind(NO,NO,press,after,NO)==DWNativeClickSettleAdopt,@"a press that was a drag (not a click) is adopted as before, never reverted");
+        check(DWNativeClickSettleKind(YES,YES,press,after,NO)==DWNativeClickSettleAdopt,@"a taken-over press is the canvas's and is never reverted");
+        check(DWNativeClickSettleKind(YES,NO,press,CGRectMake(100,348,1230,800),NO)==DWNativeClickSettleAdopt&&DWNativeClickSettleKind(YES,NO,press,CGRectMake(210.5,393.5,1200,800),NO)==DWNativeClickSettleAdopt,@"a changed extent is a resize and a move of a point or less is no move: neither is reverted");
+        // The same press, seen while the button is still down: the application's drag has already moved the origin with the pointer at rest.
+        CGPoint start=CGPointMake(1000,362);
+        check(DWNativeWindowDragBegunInPlace(press,drawn,after,start,start),@"the origin moving at the down, pointer at rest, is the application's drag begun in place");
+        check(DWNativeWindowDragBegunInPlace(press,drawn,after,start,CGPointMake(1002,363)),@"a pointer within the click slop is still at rest");
+        check(!DWNativeWindowDragBegunInPlace(press,drawn,after,start,CGPointMake(1010,362)),@"a pointer past 4 points is the ordinary takeover's (the drag packets), not this one's");
+        check(!DWNativeWindowDragBegunInPlace(press,drawn,press,start,start),@"nothing moved natively: a content press stays the application's");
+        check(!DWNativeWindowDragBegunInPlace(press,press,after,start,start),@"an identity placement drags natively without trouble");
+        check(!DWNativeWindowDragBegunInPlace(press,drawn,CGRectMake(100,348,1230,800),start,start),@"a changed extent is a resize, left native");}
     // Which part of a toolbar group is native (DWNativeToolbarExtent.h). Safari 27.0.1's centre group, read with Accessibility in the guest:
     // the group is 541,0 753x52; its children are the search button 547,11.5 23.5x30 and the address field 568,18 720x31.
     {CGRect group=CGRectMake(541,0,753,52),kids[]={CGRectMake(547,11.5,23.5,30),CGRectMake(568,18,720,31)},extent;

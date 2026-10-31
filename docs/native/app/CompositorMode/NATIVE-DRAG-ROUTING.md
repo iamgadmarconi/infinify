@@ -186,7 +186,7 @@ The desktop also withholds that window from helper placement for the entire
 native-owned pair. Frame reconciliation and native resize do not write to it
 while macOS owns the gesture. After physical release, it waits for settled
 geometry and adopts the displayed displacement into world coordinates before
-resuming helper placement. A captured titlebar pair remains canvas-owned from
+resuming helper placement (not for a click: see "A press the shell does not recognise" below). A captured titlebar pair remains canvas-owned from
 down through up. Tap cancellation cannot start the release deadline while a
 physical button is still held, or admit a competing second-button canvas action.
 In the macOS 27 VM, the owner manually dragged TextEdit and
@@ -263,6 +263,77 @@ recorded, and the empty-strip points of this section are the ones that showed 11
 Electron windows with a hidden title bar (Orca, Marengo) and Aside's real browser window are NOT covered or measured: an Electron page draws its
 drag area with CSS (`-webkit-app-region`), which Accessibility does not expose, so there is no caption signal to read, and such a window keeps
 today's rejection; Aside was only reachable at its sign-in window in the guest (no tab group, close button outside the window: rejected as before).
+The next section was measured on a tree WITHOUT the caption audit above, so Chrome's empty tab strip was then a press the shell did not recognise. With both
+changes merged, Chrome's strip is a title press and this path is not reached there; it stays as the net for presses the classifier cannot own (Aside's
+signed-in window, Electron `-webkit-app-region` areas and other applications that call `performWindowDragWithEvent:`).
+
+
+### A press the shell does not recognise (clicks, double-clicks and the first 50 ms of a press)
+
+Measured on 2026-10-30 in the disposable macOS 27.0.1 guest (vm2, Infinify in compositor mode, `INFINIFY_DEBUG=1`, zoom 0.5,
+Google Chrome 1200x800 with an empty tab strip, which the shell does not recognise as a title: `native title miss ... reason=no_region`),
+with real HID events at `kCGHIDEventTap` and a sampler reading the catenated transform and the native bounds every 0.5 ms
+(`target/lanes/tools/clk.c`, `crlib.py`; raw CSV in `target/lanes/ev/`, git-ignored).
+
+What Chromium and WindowServer do. Chromium calls `-[NSWindow performWindowDragWithEvent:]` at the mouse down of such a press, and
+WindowServer starts its own window drag of the transformed window with no pointer motion at all. It places the native frame so that
+the pointer is at the same offset in the NATIVE frame as it is in the DRAWN window (the frame moved to pointer minus (900,14) for a press
+at 0.75 of the width and 14 points down, in every run), so a click moved the native origin by the distance between where the window is
+drawn and where it is. The origin moved 6 to 65 ms after the down, in the middle of the press if the button was still down and after
+the release if it was not (hold of 15 ms: the move came 44 to 48 ms after the down, about 30 ms after the up), and the picture went to
+scale 1 from then on. Baseline (this tree without the change, `base-chrome-*` and `base-chrome-tabstrip-*`): a single click moved the
+native frame by (+110,+293), (-110,-45) and (-140,+40); a double-click by (+200,+80); each was adopted as a world move
+(`end=adopted displayed origin`; the drawn rectangle moved by the same amount); the picture was at scale 1 for 41 to 68 ms per click (34 to 59
+samples) and for 112 and 125 ms during a drag press (106 and 109 samples) before the takeover. A click exactly where the previous click had left the frame moved nothing
+(the frame was already where the pointer put it), which is why the same point cannot be clicked twice to reproduce this.
+
+Two changes, both in `native/app/Desktop/Desktop+NativeMouse.m`:
+
+1. A click never moves the window. A press that ended within the click slop (5 points, the button released, no second button, not taken
+   over) is remembered as `click_ended`. When its native origin has moved with the extent unchanged
+   (`DWNativeClickSettleKind` in `native/app/CompositorMode/DWNativeDragTakeover.h`), the settled geometry is not adopted: the native frame is
+   put back at the origin the press found, by the AX position write the fill rebase already uses (`dw_resize_reposition`, which writes
+   only if the native frame still exactly equals the one just read and fails otherwise), on a background queue with its 350 ms bound.
+   The world rectangle is kept and the owner ends with `reverted native click move`. A refused write falls back to the old
+   adoption path with the displacement set to zero (the world rectangle is still kept; the displaced native frame becomes the basis) and
+   ends with `native click move kept, revert <outcome>; basis only`. Each press of a double-click answers for itself.
+2. A press whose native origin moves with the pointer at rest is taken over there and then, not at the first pointer packet. While the
+   button is down a 4 ms timer reads the native bounds and, when `DWNativeWindowDragBegunInPlace` holds (transformed, origin moved by more
+   than a point, extent unchanged, pointer within 4 points of the press), runs `-takeOverNativeDrag:at:early:` with every safety check of the
+   packet path (view, pose, generation, owner, resize busy, begin_drag) and the same tagged release. The press stays the canvas's as an unmoved
+   title press: no `gesture_to` (a zero delta can magnetically snap), a motion past the slop moves the window by the pointer, and a release
+   is the title click. A native origin that moved before the poll saw it, or after the release, is case 1.
+
+Measured with the change (`fix1-chrome-*`, `fix1-aside-*`; Chrome native frame and drawn rectangle read before and after):
+- Single click and double-click on Chrome's empty tab strip: the drawn rectangle did not move in any of 10 runs (0 points; baseline: the native
+  moves above, adopted); five runs ended `native window drag taken over at the press`, four `reverted native click move` (all four logged
+  `native click move revert ... outcome=applied`, e.g. `from=335,333 to=132,424 now=132,424`, and the AX readback was the press's origin), and the
+  second press of the double-click ended `unchanged native click` because the first had left the frame where the pointer puts it.
+- Time at scale 1 per press, first to last sample: 24 ms for three early takeovers (the native move came 29.8, 47.2 and 51.2 ms after the
+  down; 22 to 23 samples), 49 and 50 ms for two where it came 9 and 16 ms after the down, 13 to 29 ms for the four clicks that were
+  reverted (the application's drag runs after the up; 5 to 21 samples), against 41 to 125 ms before. One early takeover (the first click) landed
+  in the same millisecond as the release and the picture stayed at scale 1 for 86 ms (46 samples). So the time at scale 1 is bounded by
+  the takeover's own latency (about 25 ms from the origin move to the restored picture, 4 ms of it the poll), not removed.
+- A drag from the same tab strip is still taken over (two drags, 15 steps in 60 ms and 60 steps in 960 ms): the fast one at the press
+  (`native window drag taken over at the press`, 22 samples at scale 1, 24 ms, against 106 samples and 112 ms), the slow one by the ordinary takeover
+  because the origin did not move at the down (first native move 155 ms after the down, at the first pointer packet; 16 samples at scale 1, 32 ms,
+  against 109 and 125 ms). Both drawn windows ended (-150,+60) from where they started, the pointer's displacement, with 0 samples at scale 1
+  after the takeover.
+- Aside (`at.studio.AsideBrowser`, the onboarding window, 900x560): presses at 8, 12 and 22 points of height began WindowServer's
+  drag (native move 6.5 to 26 ms after the down) and were taken over at the press with an unmoved drawn rectangle; presses at 3, 30 and
+  16 points left the native frame alone (`unchanged native click`). Only the onboarding window was reachable (no sign-in was made), so this
+  is not the signed-in browser.
+- TextEdit as the control (Chrome closed so that its native frame did not cover the press): a click and a double-click on the content
+  ended `unchanged native click` with the native frame and the drawn rectangle unchanged; a title click made no native move, and a
+  title double-click went to Infinify's own fullscreen, as before.
+
+Not verified: a taken-over press leaves the native frame where WindowServer put it, as every takeover does, so after an early
+takeover the native origin differs from the press's while the world rectangle does not (it is a basis change, `reconcile=basis_only`);
+nothing here puts it back. Electron `-webkit-app-region: drag` areas were reached only through Aside's onboarding window; other AppKit
+apps that call `performWindowDragWithEvent:` were not tried. The Dock helper's transform restore and macOS tiling behaviour after a
+reverted click were not examined beyond the sampled transforms. The AX write needs Accessibility, which the guest process had.
+`sh tests/e2e/native-input-policy.sh` covers the decision functions (`DWNativeClickSettleKind`, `DWNativeWindowDragBegunInPlace`) on the
+measured rectangles only; it posts nothing and does not show that WindowServer or Chromium accept the tagged release.
 
 Managed root chrome now has a separate session-stage ownership decision.
 An independently recognized titlebar or green button, or a controller-qualified
