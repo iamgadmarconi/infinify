@@ -21,6 +21,8 @@ static bool valid_rect(CGRect r) {
 }
 static bool (*own_bounds)(uint32_t, CGRect *);
 void dw_resize_set_bounds(bool (*read)(uint32_t, CGRect *)) { own_bounds=read; }
+static DWResizeMoveOutcome (*mover)(DWResizeIdentity, CGPoint);
+void dw_resize_set_mover(DWResizeMoveOutcome (*move)(DWResizeIdentity, CGPoint)) { mover=move; }
 static bool owner(DWResizeIdentity i, CGRect *rect) {
     uint64_t s=0,u=0;
     if (!i.window || !birth(i.pid,&s,&u) || s!=i.birth_seconds || u!=i.birth_microseconds) return false;
@@ -347,8 +349,12 @@ static DWResizeResult apply_size(DWResizeIdentity i, CGSize size, double deadlin
     // A write that fails or is not honoured changes nothing below: the size is asked from wherever the window then is.
     CGPoint origin=before.origin, to=origin; bool positioned=false;
     if (room(before,size,&to)) {
-        AXValueRef p=AXValueCreate(kAXValueCGPointType,&to); DWResizeResult kept=r; bool seen=false;
-        if (p) { positioned=true; record_mutation(mutation,AXUIElementSetAttributeValue(w,kAXPositionAttribute,p)); CFRelease(p); }
+        DWResizeResult kept=r; bool seen=false;
+        // The helper's move first, where there is one: it keeps a transformed window drawn where it is (dw_resize_set_mover).
+        DWResizeMoveOutcome helped=mover?mover(i,to):DWResizeMoveDeclined;
+        if (helped!=DWResizeMoveDeclined) { positioned=true; record_mutation(mutation,helped==DWResizeMoveMoved?kAXErrorSuccess:kAXErrorCannotComplete); }
+        else { AXValueRef p=AXValueCreate(kAXValueCGPointType,&to);
+            if (p) { positioned=true; record_mutation(mutation,AXUIElementSetAttributeValue(w,kAXPositionAttribute,p)); CFRelease(p); } }
         // As after the size: AX has the new origin when the setter returns and the window list a few ms later, so a read where they
         // disagree is retried in 2ms. An agreed origin that is not the one asked (the menu bar, a limit) holds when a second read,
         // 8ms on, shows it again. The shell re-bases the canvas on the origin this call reports; every ms spent here is a ms the drawn

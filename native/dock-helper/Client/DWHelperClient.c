@@ -47,7 +47,7 @@ struct dw_client {
     uint32_t pendingHead, pendingCount;
     // The one inspection, probe, enrollment audit, veil request or restore-all in flight.
     uint16_t request;
-    uint8_t requestBody[sizeof(struct dw2_identity)];
+    uint8_t requestBody[sizeof(struct dw2_move)]; // the largest request body (MOVE)
     size_t requestLength;
     uint64_t requestSeq;
     bool requestWritten, replyReady;
@@ -213,7 +213,7 @@ static void *reader_main(void *argument) {
             pthread_mutex_unlock(&c->lock);
             if(!valid){reason=DW_LOST_PROTOCOL;break;}
             if(head.disposition==DW2_FRAME_APPLIED && c->callbacks.frame_result)c->callbacks.frame_result(c->callbacks.context,header.seq,status,head.count);
-        } else if(type==DW2_PROBE || type==DW2_RESTORE_ALL || type==DW2_ENROLLMENT || type==DW2_INSPECT || type==DW2_VEIL) {
+        } else if(type==DW2_PROBE || type==DW2_RESTORE_ALL || type==DW2_ENROLLMENT || type==DW2_INSPECT || type==DW2_VEIL || type==DW2_MOVE) {
             pthread_mutex_lock(&c->lock);
             if(c->request==type && c->requestSeq==header.seq && !c->replyReady) {
                 c->replyLength=header.length;
@@ -461,6 +461,23 @@ int dw_client_inspect(dw_client *c, uint32_t timeout_ms, const struct dw2_identi
         if(observed.owner<=0 || observed.bounds[2]<=0 || observed.bounds[3]<=0 || observed.screen_rect[2]<=0 || observed.screen_rect[3]<=0)return DW_CLIENT_INVALID;
         for(size_t i=0;i<6;i++)if(!isfinite(observed.transform[i]))return DW_CLIENT_INVALID;
         for(size_t i=0;i<4;i++)if(!isfinite(observed.bounds[i]) || !isfinite(observed.screen_rect[i]))return DW_CLIENT_INVALID;
+    }
+    *reply=observed;return DW_CLIENT_OK;
+}
+int dw_client_move(dw_client *c, uint32_t timeout_ms, const struct dw2_identity *identity, double x, double y, struct dw2_move_reply *reply) {
+    if(!c || !identity || !reply || !(c->info.caps&DW2_CAP_MOVE) || !isfinite(x) || !isfinite(y))return DW_CLIENT_INVALID;
+    struct dw2_move request={.id=*identity,.origin={x,y}};struct dw2_move_reply observed={0};size_t length=0;
+    int result=ask(c,DW2_MOVE,&request,sizeof(request),timeout_ms,&observed,sizeof(observed),&length);
+    if(result!=DW_CLIENT_OK)return result;
+    if(length!=sizeof(observed) || memcmp(&observed.id,identity,sizeof(*identity)))return DW_CLIENT_INVALID;
+    if(observed.status==DW2_APPLIED || observed.status==DW2_NOT_APPLIED) {
+        if(observed.path>DW2_MOVE_DIRECT || (observed.status==DW2_APPLIED && (observed.path==DW2_MOVE_NONE || observed.bounds[2]<=0 || observed.bounds[3]<=0)))return DW_CLIENT_INVALID;
+        for(size_t i=0;i<4;i++)if(!isfinite(observed.bounds[i]))return DW_CLIENT_INVALID;
+    } else {
+        // A refusal changed nothing and says nothing more.
+        if(observed.status!=DW2_SCOPE && observed.status!=DW2_IDENTITY && observed.status!=DW2_SNAPSHOT && observed.status!=DW2_MALFORMED)return DW_CLIENT_INVALID;
+        struct dw2_move_reply refused={.id=*identity,.status=observed.status};
+        if(memcmp(&observed,&refused,sizeof(observed)))return DW_CLIENT_INVALID;
     }
     *reply=observed;return DW_CLIENT_OK;
 }

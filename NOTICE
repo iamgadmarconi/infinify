@@ -76,7 +76,8 @@ block or section):
 Sunlight
 --------
 Upstream: https://github.com/spacefarm-digital/sunlight
-Commit: afeea74b18e70ca49bf462d6fe462cf65deb2b32
+Commit: afeea74b18e70ca49bf462d6fe462cf65deb2b32 (and, where a file says so,
+7e28956adeeaafc28b22ba6b062a84b9a10aa825)
 Licence: MIT, Copyright (c) 2026 spacefarm. The licence text is
 native/app/Resources/SUNLIGHT-NOTICE.txt, which the app bundle carries beside this
 file. Each adapted file names what it took. Files derived from Sunlight:
@@ -102,6 +103,11 @@ file. Each adapted file names what it took. Files derived from Sunlight:
   DWPayload.m) adapts the same event source and the aim of
   LiveWindows/osax/sunbeam.h that a new window is never seen before it is placed
   (native/dock-helper/Client/DWHelperProtocol.h carries its constants).
+  The helper's native move (native/dock-helper/Payload/DWPayloadMove.m, its request
+  in DWPayload.m and DW2_MOVE in DWHelperProtocol.h) adapts, at commit
+  7e28956adeeaafc28b22ba6b062a84b9a10aa825, LiveWindows/osax/sunbeam.h: a native
+  move made in one SkyLight transaction with the window's transform, and a commit
+  status that is not taken as the verdict.
   Compositor mode at login: native/dock-helper/Daemon/Daemon.m copies LiveWindows/helper.m
   (the daemon, its XPC listener and caller requirement, with the edits its header
   lists); native/dock-helper/Daemon/DWLoaddRequest.m borrows the caller-requirement form;

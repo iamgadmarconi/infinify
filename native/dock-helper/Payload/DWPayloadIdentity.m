@@ -26,7 +26,8 @@ static BOOL v2Listed(const struct dw2_identity *who) {
     return NO;
 }
 static BOOL v2SpaceAPI(void) { return copyWindowSpaces&&copySpaceDisplay&&displayCurrentSpace&&getSpaceType&&moveWindowsToSpace&&createDisplayUUID; }
-static uint32_t v2Caps(void) { return DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0)|(v2SpaceAPI()?DW2_CAP_SPACE:0)|(v2SublevelAPI()?DW2_CAP_PINNED:0)|(v2VeilAvailable()?DW2_CAP_VEIL:0); }
+static BOOL v2MoveAPI(void); // DWPayloadMove.m
+static uint32_t v2Caps(void) { return (v2MoveAPI()?DW2_CAP_MOVE:0)|DW2_CAP_RESTORE_WINDOW|DW2_CAP_ENROLLMENT|DW2_CAP_INSPECT|(setAlpha&&getAlpha?DW2_CAP_ALPHA:0)|(fixtureOnly&&fixtureNativeFamilies?DW2_CAP_FIXTURE_FAMILY:0)|(v2SpaceAPI()?DW2_CAP_SPACE:0)|(v2SublevelAPI()?DW2_CAP_PINNED:0)|(v2VeilAvailable()?DW2_CAP_VEIL:0); }
 // Scope, allowlist first: decided from the record alone, before
 // any window-server lookup, and again for every record of every frame and restore.
 static BOOL v2InScope(const struct dw2_identity *who) {

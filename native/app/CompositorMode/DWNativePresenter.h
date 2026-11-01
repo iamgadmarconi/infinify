@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import "DWNativeWindowServer.h"
+#import "DWNativeResize.h"
 // The second way to present (`--native-helper`): the window server draws each real window
 // where the canvas places it, moved and scaled by the transform helper of
 // native/dock-helper (protocol v2, through dwclient). DWNativeViews selects its one
@@ -184,3 +185,8 @@
 // getters or event-hit queries and never establishes usable input by itself.
 - (BOOL)isAcknowledgedPlacementCurrent:(DWNativeAppliedPlacement *)placement;
 @end
+// The resize adapter's room move (dw_resize_set_mover, DWNativeResize.h): asks the helper of every live session that offers
+// DW2_CAP_MOVE, in turn, to move the window to origin while keeping it drawn where it is. Declined when no session holds the
+// window or none can; Moved when a helper asked the window server; Uncertain when one may have (no answer within 150 ms).
+// Any queue; it waits for at most one helper answer per session.
+DWResizeMoveOutcome DWNativePresenterMove(DWResizeIdentity identity, CGPoint origin);

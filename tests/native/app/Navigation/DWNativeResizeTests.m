@@ -134,6 +134,11 @@ static NSDictionary *nestedMenuTree(NSArray *items){return menuTree(@[@{@"role":
 #import "DWNativeResizeDriver.m"
 
 static void check(BOOL condition,NSString *why) {if(!condition){fprintf(stderr,"FAIL: %s\n",why.UTF8String);exit(1);}}
+// The helper's move (dw_resize_set_mover): it moves the native frame itself, as the Dock helper does, or declines, or answers too late.
+static DWResizeMoveOutcome helperAnswer;static BOOL helperMoves;static CGPoint helperAskedTo;static int helperCalls;
+static DWResizeMoveOutcome helperMove(DWResizeIdentity identity,CGPoint origin) {
+    (void)identity;helperCalls++;helperAskedTo=origin;[writes addObject:@"helper"];if(helperMoves)nativeFrame.origin=origin;return helperAnswer;
+}
 static DWResizeIdentity reset(CGRect frame) {
     nativeFrame=frame;writes=[NSMutableArray array];positionSettable=sizeSettable=YES;axWindows=nil;
     ignorePosition=resizeOnPosition=staleAfterSize=disagreeAfterSize=stale=disagree=NO;
@@ -169,6 +174,20 @@ int main(void) {@autoreleasepool {
     // Room is made once and as large as the screen has: the frame's origin on each axis the request overflows, not the least move.
     identity=reset(original);postSizeReadSeconds=.001;restored=dw_resize_apply(identity,CGSizeMake(900,600));
     check(restored.outcome==DWResizeApplied&&restored.moved&&CGPointEqualToPoint(restored.actual_ax.origin,CGPointMake(0,30))&&[writes isEqual:@[@"position",@"size"]],@"a size that overflows is given the frame's origin on that axis in one move");
+    // Under native presentation the room move is the helper's, which keeps the window drawn where it is; Accessibility is not asked.
+    dw_resize_set_mover(helperMove);
+    identity=reset(original);postSizeReadSeconds=.001;helperCalls=0;helperMoves=YES;helperAnswer=DWResizeMoveMoved;restored=dw_resize_apply(identity,CGSizeMake(900,600));
+    check(restored.outcome==DWResizeApplied&&restored.moved&&CGPointEqualToPoint(restored.actual_ax.origin,CGPointMake(0,30))&&helperCalls==1&&CGPointEqualToPoint(helperAskedTo,CGPointMake(0,30))&&[writes isEqual:@[@"helper",@"size"]],@"the helper makes the room move and Accessibility sizes the window from there");
+    // A helper that does not hold the window declines: Accessibility moves it, as before.
+    identity=reset(original);postSizeReadSeconds=.001;helperCalls=0;helperMoves=NO;helperAnswer=DWResizeMoveDeclined;restored=dw_resize_apply(identity,CGSizeMake(900,600));
+    check(restored.outcome==DWResizeApplied&&restored.moved&&helperCalls==1&&[writes isEqual:@[@"helper",@"position",@"size"]],@"a declined helper move falls back to the Accessibility position write");
+    // No answer in time: the move may have been made, so no second setter is sent; the size is asked from wherever the window is read.
+    identity=reset(original);postSizeReadSeconds=.001;helperCalls=0;helperMoves=NO;helperAnswer=DWResizeMoveUncertain;restored=dw_resize_apply(identity,CGSizeMake(900,600));
+    check(restored.observed&&!restored.moved&&helperCalls==1&&[writes isEqual:@[@"helper",@"size"]],@"an uncertain helper move is never followed by an Accessibility position write");
+    // No room needed, no move asked of anyone.
+    identity=reset(original);postSizeReadSeconds=.001;helperCalls=0;helperMoves=YES;helperAnswer=DWResizeMoveMoved;restored=dw_resize_apply(identity,CGSizeMake(600,400));
+    check(restored.outcome==DWResizeApplied&&!helperCalls&&[writes isEqual:@[@"size"]],@"a size that fits asks the helper for nothing");
+    dw_resize_set_mover(NULL);
     identity=reset(CGRectMake(0,30,586,488));postSizeReadSeconds=.001;restored=dw_resize_apply(identity,CGSizeMake(600,700));
     check(restored.outcome==DWResizeApplied&&!restored.moved&&[writes isEqual:@[@"size"]],@"a window already at the frame's origin needs no second move for a larger size");
     // A frame still moving (an app's own animation) is followed until two reads agree.

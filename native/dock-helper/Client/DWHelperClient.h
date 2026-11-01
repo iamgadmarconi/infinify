@@ -56,6 +56,13 @@ int dw_client_enrollment(dw_client *client, uint32_t timeout_ms, struct dw2_proc
 // Transport success can still carry a refused reply.status with zero geometry.
 int dw_client_inspect(dw_client *client, uint32_t timeout_ms, const struct dw2_identity *identity,
                       struct dw2_inspect_reply *reply);
+// Asks a helper that offers DW2_CAP_MOVE to move a window this session holds to the native origin (x, y), global top-left points,
+// keeping it drawn where it is (DW2_MOVE in DWHelperProtocol.h). DW_CLIENT_OK carries the helper's reply: APPLIED, NOT_APPLIED (the
+// window server was asked; reply->bounds is the native frame read afterwards), or a refusal that changed nothing (SCOPE, IDENTITY,
+// SNAPSHOT, MALFORMED). DW_CLIENT_INVALID: no such capability, bad arguments (nothing sent) or an invalid reply. On DW_CLIENT_TIMEOUT
+// or DW_CLIENT_LOST the move may have been made.
+int dw_client_move(dw_client *client, uint32_t timeout_ms, const struct dw2_identity *identity, double x, double y,
+                   struct dw2_move_reply *reply);
 // Asks a helper that offers DW2_CAP_VEIL to hold every ordinary window an application opens afterwards
 // invisible (alpha 0) from the moment the window server announces it, until a frame for it places it, a
 // RESTORE record for it or RESTORE_ALL releases it, or *held_ms (the helper's own bound, DW2_VEIL_TIMEOUT_MS)

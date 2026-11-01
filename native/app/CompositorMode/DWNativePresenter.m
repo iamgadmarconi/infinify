@@ -8,6 +8,7 @@
 // Split from native/desktop/native-presenter.m (37b27b1): session admission and lifetime, restoration, watchdog, debug, and the receipt classes.
 #import "DWNativePresenter+Private.h"
 #import "DWNativeFocus.h"
+#import "DWAXLookup.h"
 #import <Security/Security.h>
 #include <libproc.h>
 #include <unistd.h>
@@ -204,6 +205,7 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
     atomic_store(&presenter->_preparing,false);
     if(presenter.ended){id activity;dw_client *client=[presenter takeActivity:&activity];DWDisposeNativeClient(client,activity);if(why)*why=@"the helper was lost before native admission completed";return nil;}
     if(watch)[presenter watch];
+    [presenter offerMoves];
     return presenter;
 }
 + (instancetype)presentersAt:(NSArray<NSDictionary *> *)endpoints scope:(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *)scope why:(NSString *__autoreleasing *)why {
@@ -271,6 +273,33 @@ static void turned(CFRunLoopObserverRef observer,CFRunLoopActivity activity,void
 // Transfer the session and its activity together: only the closer owns either
 // after this lock. A concurrent loss/suspend cannot end an activity while the
 // first closer is still restoring windows or joining the heartbeat thread.
+// The sessions whose helper can move a held window, for DWNativePresenterMove. Weak: a presenter that is gone is simply not asked,
+// and one that has ended has no client left to ask.
+static NSHashTable<DWNativePresenter *> *DWNativeMovers;
+static os_unfair_lock DWNativeMoversLock=OS_UNFAIR_LOCK_INIT;
+- (void)offerMoves {
+    if(!(_info.caps&DW2_CAP_MOVE))return;
+    os_unfair_lock_lock(&DWNativeMoversLock);if(!DWNativeMovers)DWNativeMovers=[NSHashTable weakObjectsHashTable];[DWNativeMovers addObject:self];os_unfair_lock_unlock(&DWNativeMoversLock);
+}
+- (DWResizeMoveOutcome)moveHeld:(struct dw2_identity)who to:(CGPoint)origin {
+    struct dw2_move_reply reply={0};double began=DWMonotonicSeconds();
+    os_unfair_lock_lock(&_lock);
+    BOOL asked=_client!=NULL&&(_info.caps&DW2_CAP_MOVE);
+    int result=asked?dw_client_move(_client,150,&who,origin.x,origin.y,&reply):DW_CLIENT_INVALID;
+    os_unfair_lock_unlock(&_lock);
+    if(!asked)return DWResizeMoveDeclined;
+    DWResizeMoveOutcome outcome=result!=DW_CLIENT_OK?DWResizeMoveUncertain // sent, and maybe carried out
+        :reply.status==DW2_APPLIED||reply.status==DW2_NOT_APPLIED?DWResizeMoveMoved:DWResizeMoveDeclined;
+    if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native helper move pid=%d wid=%u to=%g,%g result=%d status=%u path=%u bounds=%g,%g %gx%g elapsed_ms=%.3f\n",
+        who.pid,who.wid,origin.x,origin.y,result,reply.status,reply.path,reply.bounds[0],reply.bounds[1],reply.bounds[2],reply.bounds[3],(DWMonotonicSeconds()-began)*1000);
+    return outcome;
+}
+DWResizeMoveOutcome DWNativePresenterMove(DWResizeIdentity identity,CGPoint origin) {
+    os_unfair_lock_lock(&DWNativeMoversLock);NSArray<DWNativePresenter *> *movers=DWNativeMovers.allObjects;os_unfair_lock_unlock(&DWNativeMoversLock);
+    struct dw2_identity who={.pid=identity.pid,.wid=identity.window,.birth_sec=identity.birth_seconds,.birth_usec=identity.birth_microseconds};
+    for(DWNativePresenter *presenter in movers){DWResizeMoveOutcome outcome=[presenter moveHeld:who to:origin];if(outcome!=DWResizeMoveDeclined)return outcome;}
+    return DWResizeMoveDeclined;
+}
 - (dw_client *)takeActivity:(id __strong *)activity {
     os_unfair_lock_lock(&_lock);dw_client *client=_client;_client=NULL;
     *activity=_activity;_activity=nil;if(client)atomic_store(&_ended,true);

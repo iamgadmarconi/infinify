@@ -28,6 +28,14 @@ typedef struct {
 // window list's kCGWindowBounds. Under native presentation (native/app/CompositorMode/DWNativePresenter.h) the shell sets a reader of the
 // window's own, untransformed frame; a window it cannot read is then no owner. Set once, before any other call here.
 void dw_resize_set_bounds(bool (*read)(uint32_t window, CGRect *bounds));
+// Who makes the one native position write that may precede a size (room(), below). NULL (the default): Accessibility. Under native
+// presentation the shell sets the Dock helper's move (DW2_MOVE), which moves a window the helper holds together with the transform that
+// draws it, so the drawn window does not jump by the move until the next frame. Declined: the mover did nothing (not a held window, no
+// such capability, a refusal), and Accessibility moves the window as before. Moved: the mover asked the window server, and the reads
+// that follow say where the window is. Uncertain: it may have moved it (no answer in time); nothing else is asked, as for a setter
+// that timed out. Called on the caller's queue, synchronously. Set once, before any other call here.
+typedef enum { DWResizeMoveDeclined, DWResizeMoveMoved, DWResizeMoveUncertain } DWResizeMoveOutcome;
+void dw_resize_set_mover(DWResizeMoveOutcome (*move)(DWResizeIdentity identity, CGPoint origin));
 DWResizeResult dw_resize_observe(DWResizeIdentity identity);
 // A size that does not fit the visible frame of the window's screen from where the window sits is preceded by one native
 // position write, the least that makes room (DWNativeResize.m, room()).

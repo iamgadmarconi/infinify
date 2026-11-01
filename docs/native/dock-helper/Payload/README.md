@@ -94,6 +94,36 @@ windows, the request and the announcement payload through the real handler on a 
 covers the arrival placement cases (`arrivalCases`). `DWHelperClientTests.py` checks the C client's request, refusal and invalid-reply
 handling against a fake peer. These are not native evidence.
 
+## Native move
+
+A window's placement-1 layer is relative to placement 0, which follows the native frame, so a window that moves natively while it is
+held is drawn shifted by the move until the next frame writes the layer again. The resize adapter's one preparatory position write
+(`room()` in `native/app/Navigation/DWNativeResize.m`) was such a move: each showed as a jump of the drawn window (165 ms at zoom 0.5 on
+the owner's drag, until the shell re-based). The `MOVE` request (capability 256, `DWPayloadMove.m`) moves a held window and writes the
+layer for its new origin in one SkyLight transaction, the move first (`SLSTransactionMoveWindowWithGroup`, then
+`SLSTransactionSetWindowTransform` at placement 1, flags 0; a synchronous `SLSTransactionCommit`), so the drawn matrix never changes. The
+technique and the warning that the commit's return code is not the verdict are Sunlight's (MIT), commit
+7e28956adeeaafc28b22ba6b062a84b9a10aa825, `LiveWindows/osax/sunbeam.h`; the file header gives the lines.
+
+- **Only a held window of the live session**, held (not restoring or reattaching), current, and with the plain placement 0
+  `[1,0,0,1,-x,-y]` of its native frame: the layer for a new origin is only known for such a window. Anything else is refused before any
+  native call.
+- **The verdict is a read-back**: the native bounds and the drawn (absolute) matrix after the commit. A window the application holds
+  elsewhere, or a layer that did not land, is given the layer for wherever it now is (the drawn matrix again), and the reply is
+  `NOT_APPLIED` with the bounds it has. Without the transaction calls the helper moves directly (`SLSMoveWindowWithGroup`) and writes the
+  layer at once: the same verdicts, not atomic.
+- **Nothing a restore depends on changes**: the original (the layer) and the journal are untouched, and a restore puts the identity layer
+  back, so the window is natural where it now is, as after any application move.
+- **Measured in the guest** (macOS 27.0.1, 2026-11-01, the production payload in the Dock, an owned fixture window of another process
+  drawn 150 points right of its native place, its screen rectangle sampled about 60 000 times a second): the application moving its own
+  window 200 points drew it 200 points off until a frame; `MOVE` by 200 points drew it at one place throughout, answered status 0 on
+  the transaction path in 0.5 ms, and AppKit's own frame of the window read the new origin 50 and 500 ms later, so the application's
+  next resize kept it. The commit returned a meaningless nonzero number each time. Not measured: a third-party application, a resize
+  driven by the shell (`dw_resize_apply`) end to end.
+
+`DWPayloadMoveTests.m` covers the rules above on the placement model, through the real handler on a socket pair; the C client's reply
+checks are in `DWHelperClientTests.py`. These are not native evidence.
+
 One control `HELLO` creates the session and a random token. A second heartbeat
 connection uses that token; requests on either renew the 2000 ms lease. The C
 client heartbeats every quarter lease.

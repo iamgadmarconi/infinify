@@ -24,10 +24,11 @@ matches the reported helper PID with the kernel socket peer PID.
 | 7 `INSPECT` | one 24-byte window identity | one 144-byte inspection result |
 | 8 `FRAME_SPACE` | u32 count, u32 zero, count × 88-byte Space record | same frame reply, matching opcode |
 | 9 `VEIL` | u32 mode (1 on, 0 off), u32 zero | u32 status (0, or 1 = refused), u32 bound in ms |
+| 10 `MOVE` | one 24-byte window identity, f64 origin x, y (global top-left points) | identity, u32 status, u32 path (0 none, 1 transaction, 2 direct), f64 bounds[4] |
 
 Capabilities are alpha=1, per-window restoration=2, enrollment audit=4, explicit
-fixture family=8, inspection=16, Space migration=32, pinned sublevel=64 and
-arrival veil=128. Scopes are cooperative=1, allowlist=2, and
+fixture family=8, inspection=16, Space migration=32, pinned sublevel=64,
+arrival veil=128 and native move=256. Scopes are cooperative=1, allowlist=2, and
 same user=3. Queue is own=0: the helper runs its native calls on its own queue and always
 reports 0 (clients accept 0 or 1). Current clients require the relevant current
 capabilities and refuse unsupported helpers. Protocol v2 advertises no native clipping
@@ -50,6 +51,14 @@ afterward. The requested identity is echoed. Success is status 0; refusal is sco
 serialized on the native queue and neither mutates nor journals. It provides
 original geometry before the first frame and authoritative readback after table
 removal. It is not visual validation.
+
+`MOVE` (capability 256) moves a window the session holds to a new native origin and keeps it drawn where it
+is: the helper writes the placement-1 layer for the new origin in the same SkyLight transaction as the move
+([Payload README, "Native move"](../Payload/README.md#native-move)). Status 0 means the origin and the drawn matrix both read back as
+asked; 7 (`NOT_APPLIED`) means the window server was asked and the window is elsewhere (bounds say where; the drawn matrix is put
+back where it can be). Refusals change nothing and carry path 0 and zero bounds: scope 1 (also a window this session does not hold),
+identity 2, snapshot 5 and malformed 10 (a non-finite origin). `dw_client_move` validates this shape; a timeout or a lost helper
+may still have moved the window. The shell uses it for the resize adapter's room move (`dw_resize_set_mover`).
 
 `PROBE`'s 72-byte summary is scope/caps/queue/lease, i32 server PID,
 held/restoring/journal_pending, four u64 counters (received/applied/superseded

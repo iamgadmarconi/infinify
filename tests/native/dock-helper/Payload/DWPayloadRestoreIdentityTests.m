@@ -42,6 +42,7 @@ static CGDirectDisplayID displayMirror(CGDirectDisplayID display);
 #import "DWPayloadArrivalTests.m"
 #import "DWPayloadPlacementTests.m"
 #import "DWPayloadLayerTests.m"
+#import "DWPayloadMoveTests.m"
 int main(void) { @autoreleasepool {
     mainConnection=mainCID;getOwner=windowOwner;connectionPID=ownerPID;
     fixtureOnly=NO;processUID=getuid();
@@ -366,6 +367,7 @@ int main(void) { @autoreleasepool {
     veilCases(recorded);
     placementCases(recorded);
     layerCases(recorded);
+    moveCases(recorded);
     arrivalCases(recorded);
     // Malformed private paths are refused without waiting for a FIFO writer.
     assert(!mkfifoat(directoryFD,"recovery-source.json",0600));BOOL absent=YES;

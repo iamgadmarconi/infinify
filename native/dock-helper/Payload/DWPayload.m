@@ -41,6 +41,7 @@
 #import "DWPayloadRestore.m"
 #import "DWPayloadFrames.m"
 #import "DWPayloadArrival.m"
+#import "DWPayloadMove.m"
 
 static NSData *v2Enrollment(void) {
     struct dw2_enrollment_reply head={.scope=fixtureOnly ? DW2_SCOPE_COOPERATIVE : allowlist ? DW2_SCOPE_ALLOWLIST : DW2_SCOPE_SAME_USER,.server_pid=getpid()};
@@ -231,6 +232,22 @@ static BOOL v2Handle(DW2Connection *c,const struct dw2_header *h,const void *bod
         pthread_mutex_unlock(&v2Lock);
         return YES;
     }
+    if(h->type==DW2_MOVE) {
+        struct dw2_move request;
+        if(h->length!=sizeof(request))return NO;
+        memcpy(&request,body,sizeof(request));
+        pthread_mutex_lock(&v2Lock);
+        atomic_store(&v2Deadline,v2Now()+DW2_LEASE_MS);
+        dispatch_async(v2q,^{
+            // A move is a change to a held window: only for the session that holds it, checked on the queue that applies frames.
+            pthread_mutex_lock(&v2Lock);BOOL live=c->session==v2Session;pthread_mutex_unlock(&v2Lock);
+            struct dw2_move_reply reply={.id=request.id,.status=DW2_SCOPE};
+            if(live)reply=v2Move(request.id,CGPointMake(request.origin[0],request.origin[1]));
+            v2Send(c,DW2_MOVE,seq,&reply,sizeof(reply));
+        });
+        pthread_mutex_unlock(&v2Lock);
+        return YES;
+    }
     if(h->type==DW2_VEIL) {
         struct dw2_veil request;
         if(h->length!=sizeof(request))return NO;
@@ -353,6 +370,7 @@ static void *v2Serve(void *argument) { @autoreleasepool {
 static int v2Start(const char *directory,NSDictionary *recovery) {
     v2ResolveSublevels();
     v2ResolveFamily();
+    v2ResolveMove();
     v2WriterIdentity=v2CurrentWriterIdentity();if(!v2WriterIdentity)return -__LINE__;
     v2q=dispatch_queue_create("dw.v2",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INTERACTIVE,0));
     v2Table=[NSMutableDictionary dictionary];v2Released=[NSMutableDictionary dictionary];

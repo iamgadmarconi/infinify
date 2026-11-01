@@ -160,6 +160,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if(!desktop.native){fprintf(stderr,"Infinify: native helper %s\n",why.UTF8String);[desktop.ipc stop];return 69;}
         NSMutableArray *savedEndpoints=[NSMutableArray array];for(NSDictionary *endpoint in helperEndpoints)[savedEndpoints addObject:@{@"runtime":endpoint[@"runtime"],@"nonce":endpoint[@"nonce"]}];desktop.nativeEndpoints=savedEndpoints.copy;
         dw_focus_set_bounds(DWNativeBounds);dw_resize_set_bounds(DWNativeBounds);
+        // A window drawn through the helper's transform is moved by the helper, with that transform, so the drawn window stays put.
+        dw_resize_set_mover(DWNativePresenterMove);
         // Compositor mode with the launch daemon on (the launcher says so by environment): the Dock is watched, and the payload that
         // went with a Dock that restarted is loaded into the new one by the launcher's --reload, whose helper then replaces the lost
         // endpoint and the ordinary authenticated re-admission puts the windows back (DWDockReloader.h).

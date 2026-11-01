@@ -20,7 +20,10 @@ RESTORE_RESULT = struct.Struct("<iIQQIi")
 SPACE_RECORD = struct.Struct("<iIQQ6dfIQ")
 VEIL_REQUEST = struct.Struct("<II")
 VEIL_REPLY = struct.Struct("<II")
-HELLO_TYPE, FRAME, HEARTBEAT, RESTORE_ALL, FRAME_SPACE, VEIL, REPLY = 1, 2, 3, 4, 8, 9, 0x8000
+MOVE_REQUEST = struct.Struct("<iIQQ2d")
+MOVE_REPLY = struct.Struct("<iIQQII4d")
+HELLO_TYPE, FRAME, HEARTBEAT, RESTORE_ALL, FRAME_SPACE, VEIL, MOVE, REPLY = 1, 2, 3, 4, 8, 9, 10, 0x8000
+MOVE_WINDOW = (123, 456, 1700000000, 123456)
 NONCE = "7" * 64
 TOKEN = b"\x13" * 16
 
@@ -51,6 +54,7 @@ class FakePeer:
         self.space |= mode == "plain_bad_opcode"
         self.pinned = "pinned" in mode and not mode.endswith("no_cap")
         self.veil = mode.startswith("veil_") and mode != "veil_no_cap"
+        self.move = mode.startswith("move_") and mode != "move_no_cap"
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(runtime / "v2.sock"))
         self.listener.listen(4)
@@ -68,7 +72,7 @@ class FakePeer:
         if magic != b"DWv2" or version != 2 or role != expected_role or nonce != NONCE.encode():
             raise AssertionError((magic, version, role, nonce))
         record_size = 88 if self.space and self.mode != "space_bad_max_body" else 80
-        reply = HELLO_REPLY.pack(0, 2000, 16, 8 + 16 * record_size, (32 if self.space else 0) | (64 if self.pinned else 0) | (128 if self.veil else 0), 3, 0, os.getpid(), TOKEN)
+        reply = HELLO_REPLY.pack(0, 2000, 16, 8 + 16 * record_size, (32 if self.space else 0) | (64 if self.pinned else 0) | (128 if self.veil else 0) | (256 if self.move else 0), 3, 0, os.getpid(), TOKEN)
         send_message(connection, HELLO_TYPE, 0, reply)
 
     def serve(self):
@@ -128,6 +132,25 @@ class FakePeer:
                     status, timeout = {"veil_refused": (1, 1000), "veil_bad_status": (5, 1000), "veil_bad_timeout": (0, 0)}.get(self.mode, (0, 1000))
                     reply = VEIL_REPLY.pack(status, timeout) + (b"\x00" if self.mode == "veil_bad_length" else b"")
                     send_message(connection, VEIL, seq, reply)
+                while recv_exact(connection, 1):
+                    pass
+            elif self.mode.startswith("move_"):
+                # One request, the window and the origin asked; a helper without the capability is never sent one.
+                if self.mode != "move_no_cap":
+                    kind, flags, seq, body = recv_message(connection)
+                    if kind != MOVE or flags or not seq or body != MOVE_REQUEST.pack(*MOVE_WINDOW, 225.0, -35.5):
+                        raise AssertionError((kind, flags, seq, body))
+                    window = (MOVE_WINDOW[0], MOVE_WINDOW[1] + 1) + MOVE_WINDOW[2:] if self.mode == "move_bad_id" else MOVE_WINDOW
+                    status, path, bounds = {
+                        "move_applied": (0, 1, (225.0, -35.5, 300.0, 200.0)),
+                        "move_not_applied": (7, 2, (225.0, 0.0, 300.0, 200.0)),
+                        "move_refused": (1, 0, (0.0, 0.0, 0.0, 0.0)),
+                        "move_bad_refusal": (1, 0, (225.0, 0.0, 0.0, 0.0)),
+                        "move_bad_path": (0, 0, (225.0, -35.5, 300.0, 200.0)),
+                        "move_bad_status": (5, 1, (225.0, -35.5, 300.0, 200.0)),
+                        "move_bad_id": (0, 1, (225.0, -35.5, 300.0, 200.0)),
+                    }[self.mode]
+                    send_message(connection, MOVE, seq, MOVE_REPLY.pack(*window, status, path, *bounds))
                 while recv_exact(connection, 1):
                     pass
             elif self.mode in ("coalesced_apply", "space_coalesced_apply", "space_coalesced_plain"):
@@ -285,6 +308,30 @@ int main(int argc, char **argv) {
         if (atomic_load(&lost_reason)) return 77;
         dw_client_close(client);return 0;
     }
+    if (!strncmp(argv[3],"move_",5)) {
+        struct dw2_identity window={123,456,1700000000,123456};struct dw2_move_reply reply;memset(&reply,0x5a,sizeof(reply));
+        int hasCap=(info.caps&DW2_CAP_MOVE)!=0;
+        if (!strcmp(argv[3],"move_no_cap")) {
+            // Without the capability nothing is asked, so a peer that would answer is never sent a request.
+            if (hasCap || dw_client_move(client,2000,&window,225,-35.5,&reply)!=DW_CLIENT_INVALID) return 80;
+            dw_client_close(client);return 0;
+        }
+        if (!hasCap) return 81;
+        if (dw_client_move(client,2000,&window,__builtin_nan(""),-35.5,&reply)!=DW_CLIENT_INVALID) return 82; // never sent
+        int result=dw_client_move(client,2000,&window,225,-35.5,&reply);
+        if (!strcmp(argv[3],"move_applied")) {
+            if (result!=DW_CLIENT_OK || reply.status!=DW2_APPLIED || reply.path!=DW2_MOVE_TRANSACTION || reply.bounds[0]!=225 || reply.bounds[1]!=-35.5) return 83;
+        } else if (!strcmp(argv[3],"move_not_applied")) {
+            if (result!=DW_CLIENT_OK || reply.status!=DW2_NOT_APPLIED || reply.path!=DW2_MOVE_DIRECT || reply.bounds[1]!=0) return 84;
+        } else if (!strcmp(argv[3],"move_refused")) {
+            if (result!=DW_CLIENT_OK || reply.status!=DW2_SCOPE || reply.path || reply.bounds[0] || reply.bounds[2]) return 85;
+        } else {
+            // A refusal that says more, an applied move with no path, an unknown status or another window: not an answer.
+            if (result!=DW_CLIENT_INVALID) return 86;
+        }
+        if (atomic_load(&lost_reason)) return 87;
+        dw_client_close(client);return 0;
+    }
     if (strstr(argv[3],"pinned") || !strcmp(argv[3],"plain_pin_status")) {
         int noCap=strstr(argv[3],"no_cap")!=NULL;
         int bad=!strcmp(argv[3],"plain_pin_status") || !strcmp(argv[3],"pinned_bad_space_status");
@@ -382,7 +429,9 @@ def main():
                      "plain_bad_opcode", "space_bad_status", "plain_space_status", "space_status", "space_restore_pending",
                      "pinned_apply", "space_pinned_apply", "pinned_no_cap", "space_pinned_no_cap",
                      "pinned_status", "plain_pin_status", "pinned_bad_space_status",
-                     "veil_apply", "veil_refused", "veil_no_cap", "veil_bad_status", "veil_bad_timeout", "veil_bad_length"):
+                     "veil_apply", "veil_refused", "veil_no_cap", "veil_bad_status", "veil_bad_timeout", "veil_bad_length",
+                     "move_applied", "move_not_applied", "move_refused", "move_no_cap", "move_bad_refusal", "move_bad_path",
+                     "move_bad_status", "move_bad_id"):
             with tempfile.TemporaryDirectory(prefix="dw2-run-", dir="/tmp") as runtime_dir:
                 runtime = Path(runtime_dir)
                 peer = FakePeer(mode, runtime)

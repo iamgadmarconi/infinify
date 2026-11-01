@@ -48,6 +48,10 @@ frame is then asked as it is and comes back clamped. The identity and settable c
 the move, identity and timeout again between the move and the size, and a move that
 fails or is not honoured does not stop the size from being asked. The position read after the move
 is polled as the size read is (2 ms on disagreement, a second read 8 ms later for an origin other than the one asked).
+Under native presentation the shell sets a mover (`dw_resize_set_mover`, `DWNativePresenterMove`): the move is then the Dock
+helper's `MOVE`, which moves a window it holds together with the transform that draws it, so the drawn window does not jump
+([Payload README, "Native move"](../../dock-helper/Payload/README.md#native-move)). A helper that does not hold the window declines and
+Accessibility moves it as before; one that does not answer within 150 ms may have moved it, so no Accessibility write follows.
 `moved` in the result says that the window was read at another origin afterwards;
 `mutation_attempted` remains the size setter's alone.
 

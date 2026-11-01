@@ -58,6 +58,13 @@ int dw_client_restore_all(dw_client *client,uint32_t timeout,struct dw2_restore_
 int dw_client_veil(dw_client *client,uint32_t timeout,bool enable,uint32_t *held) {
     (void)client;(void)timeout;(void)enable;(void)held;return DW_CLIENT_INVALID;
 }
+// The helper's move: the answer the case asks for, and what was asked.
+static int moveAnswer,moveRequests;static uint32_t moveStatus;static struct dw2_identity movedWindow;static double movedX,movedY;
+int dw_client_move(dw_client *client,uint32_t timeout,const struct dw2_identity *identity,double x,double y,struct dw2_move_reply *reply) {
+    check(client&&identity&&reply&&timeout<=150,@"a helper move is bounded and names its window");moveRequests++;movedWindow=*identity;movedX=x;movedY=y;
+    if(moveAnswer==DW_CLIENT_OK)*reply=(struct dw2_move_reply){.id=*identity,.status=moveStatus,.path=moveStatus<=DW2_APPLIED||moveStatus==DW2_NOT_APPLIED?DW2_MOVE_TRANSACTION:DW2_MOVE_NONE};
+    return moveAnswer;
+}
 void dw_client_stats(dw_client *client,struct dw_client_stats *stats) { (void)client;memset(stats,0,sizeof(*stats)); }
 void dw_client_close(dw_client *client) { if(client){closed++;free(client);} }
 NSDictionary *DWNativeWindowFamily(NSDictionary *identity,NSString *__autoreleasing *why) {
@@ -80,6 +87,7 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureSpaceFrames;
 - (void)fixturePinned;
 - (void)fixtureVeiling;
+- (void)fixtureMoves;
 - (NSUInteger)fixtureReleases;
 - (DWNativeSpaceReflow *)fixtureSpaceReflow:(NSNumber *)wid;
 - (void)fixtureBound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family;
@@ -110,6 +118,7 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureSpaceFrames { _desktopWide=YES;_info.caps|=DW2_CAP_SPACE; }
 - (void)fixturePinned { _info.caps|=DW2_CAP_PINNED|DW2_CAP_ALPHA; }
 - (void)fixtureVeiling { _veiling=YES; }
+- (void)fixtureMoves { _info.caps|=DW2_CAP_MOVE;[self offerMoves]; }
 // The root's family was last audited longer ago than the grace a failed read is given.
 - (void)fixtureAgeFamily:(NSNumber *)root { _windows[root]->familyAt=0; }
 - (NSUInteger)fixtureReleases { return _releases.count; }
@@ -520,6 +529,23 @@ int main(void) {@autoreleasepool {
         [declining declineWindow:identity(123,100)];[declining fixtureExpire];
         check([declining fixtureReleases]==1,@"queued before the session ended");
         [plain finish];[declining finish];
+    }
+    // The resize adapter's room move goes to a session whose helper offers DW2_CAP_MOVE; what comes back decides who moves next.
+    {
+        DWNativePresenter *mover=[DWNativePresenter fixturePID:@124];
+        DWResizeIdentity window={.pid=124,.birth_seconds=100,.birth_microseconds=20,.window=77};
+        moveRequests=0;[mover offerMoves];
+        check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveDeclined&&!moveRequests,@"a helper without the capability is never asked to move");
+        [mover fixtureMoves];moveAnswer=DW_CLIENT_OK;moveStatus=DW2_APPLIED;
+        check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveMoved&&moveRequests==1&&movedWindow.pid==124&&movedWindow.wid==77
+            &&movedWindow.birth_sec==100&&movedWindow.birth_usec==20&&movedX==0&&movedY==30,@"an applied helper move is the room move, of the window and origin asked");
+        moveStatus=DW2_NOT_APPLIED;check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveMoved,@"a move the window server was asked for is not repeated by Accessibility");
+        moveStatus=DW2_SCOPE;check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveDeclined,@"a window the helper does not hold is Accessibility's to move");
+        moveStatus=DW2_SNAPSHOT;check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveDeclined,@"a refusal that changed nothing is declined");
+        moveAnswer=DW_CLIENT_TIMEOUT;check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveUncertain,@"no answer in time may still be a move");
+        moveAnswer=DW_CLIENT_INVALID;check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveUncertain,@"an unreadable answer may still be a move");
+        moveAnswer=DW_CLIENT_OK;moveStatus=DW2_APPLIED;[mover finish];moveRequests=0;
+        check(DWNativePresenterMove(window,CGPointMake(0,30))==DWResizeMoveDeclined&&!moveRequests,@"an ended session is asked nothing");
     }
     printf("PASS: %lu presenter readiness checks; no native mutation or input-usability claim\n",(unsigned long)checks);
 }return 0;}

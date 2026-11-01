@@ -22,13 +22,14 @@
 // without a frame naming it, before it releases the window itself (VEIL below, DWPayloadArrival.m v2ArrivalPlace).
 #define DW2_ARRIVAL_TIMEOUT_MS 500
 
-enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7, DW2_FRAME_SPACE=8, DW2_VEIL=9 };
+enum { DW2_HELLO=1, DW2_FRAME=2, DW2_HEARTBEAT=3, DW2_RESTORE_ALL=4, DW2_PROBE=5, DW2_ENROLLMENT=6, DW2_INSPECT=7, DW2_FRAME_SPACE=8, DW2_VEIL=9,
+       DW2_MOVE=10 };
 enum { DW2_ROLE_CONTROL=1, DW2_ROLE_HEARTBEAT=2 };
 enum { DW2_HELLO_OK=0, DW2_HELLO_AUTH=1, DW2_HELLO_VERSION=2, DW2_HELLO_BUSY=3, DW2_HELLO_TOKEN=4, DW2_HELLO_MALFORMED=5 };
 // RESTORE_WINDOW, ENROLLMENT and INSPECT are advertised by every helper and required by every client:
 // there is no older helper to fall back on, so a helper without them is refused.
 enum { DW2_CAP_ALPHA=1, DW2_CAP_RESTORE_WINDOW=2, DW2_CAP_ENROLLMENT=4, DW2_CAP_FIXTURE_FAMILY=8, DW2_CAP_INSPECT=16, DW2_CAP_SPACE=32, DW2_CAP_PINNED=64,
-       DW2_CAP_VEIL=128 };
+       DW2_CAP_VEIL=128, DW2_CAP_MOVE=256 };
 // FIXTURE_FAMILY asks a client to exercise native root/child presentation on
 // the host's finite, explicitly created window list. It expands no process or
 // window authority and says nothing about third-party family compositing.
@@ -72,6 +73,18 @@ enum { DW2_APPLIED=0, DW2_SCOPE=1, DW2_IDENTITY=2, DW2_MATRIX=3, DW2_ALPHA=4, DW
 // with the session. The idea, and the window server announcement it rests on, are adapted
 // from Sunlight (MIT), https://github.com/spacefarm-digital/sunlight commit
 // afeea74b18e70ca49bf462d6fe462cf65deb2b32; exact source provenance is in the headers of native/dock-helper/Payload/*.m.
+// MOVE is negotiated by CAP_MOVE. It moves a window this session holds to a new native origin (global top-left points) and keeps it
+// drawn where it is: the window server keeps the placement-1 layer relative to the native origin, so a native move alone shifts the
+// drawn window by the move until the layer is written again. The helper writes the layer for the new origin together with the move,
+// in one SkyLight transaction (path TRANSACTION), or, where SkyLight has no transactions, the move and then at once the layer (path
+// DIRECT, not atomic). APPLIED: the native origin reads back as requested and the drawn matrix as it was before. NOT_APPLIED: something
+// was asked of the window server and either differs (an application may hold its window elsewhere); bounds are the native frame read
+// afterwards, and the drawn matrix is put back where it can be. SCOPE: no such capability, out of scope, or a window this session does
+// not hold; IDENTITY: the window is not the one named; SNAPSHOT: its state could not be read; MALFORMED: a non-finite origin. These four
+// change nothing and carry path NONE and zero bounds. The commit's own status is never the verdict (it is not kCGErrorSuccess on
+// macOS 27 even when the transaction lands). Technique: Sunlight (MIT), https://github.com/spacefarm-digital/sunlight commit
+// 7e28956adeeaafc28b22ba6b062a84b9a10aa825, LiveWindows/osax/sunbeam.h; provenance in native/dock-helper/Payload/DWPayloadMove.m.
+enum { DW2_MOVE_NONE=0, DW2_MOVE_TRANSACTION=1, DW2_MOVE_DIRECT=2 };
 enum { DW2_FRAME_APPLIED=0, DW2_FRAME_DROPPED=1 };
 enum { DW2_RESTORED=0, DW2_GONE=1, DW2_PENDING=2 };
 enum { DW2_HELD=0, DW2_RESTORING=1 };
@@ -92,6 +105,8 @@ struct dw2_frame_reply { uint32_t disposition, count, superseded, reserved; uint
 struct dw2_heartbeat_reply { uint32_t status, lease_ms, held, restoring; };
 struct dw2_veil { uint32_t mode, reserved; };
 struct dw2_veil_reply { uint32_t status, timeout_ms; };
+struct dw2_move { struct dw2_identity id; double origin[2]; };
+struct dw2_move_reply { struct dw2_identity id; uint32_t status, path; double bounds[4]; };
 struct dw2_restore_result { struct dw2_identity id; uint32_t outcome; int32_t set_status; };
 struct dw2_restore_reply { uint32_t count, pending, journal_persisted, reserved; }; // then count results
 struct dw2_probe_entry { struct dw2_identity id; uint32_t state; float alpha; double transform[6], screen_rect[4]; };
@@ -119,6 +134,8 @@ _Static_assert(sizeof(struct dw2_frame_reply)==24,"frame reply");
 _Static_assert(sizeof(struct dw2_heartbeat_reply)==16,"heartbeat reply");
 _Static_assert(sizeof(struct dw2_veil)==8,"veil request");
 _Static_assert(sizeof(struct dw2_veil_reply)==8,"veil reply");
+_Static_assert(sizeof(struct dw2_move)==40,"move request");
+_Static_assert(sizeof(struct dw2_move_reply)==64,"move reply");
 _Static_assert(sizeof(struct dw2_restore_result)==32,"restore result");
 _Static_assert(sizeof(struct dw2_restore_reply)==16,"restore reply");
 _Static_assert(sizeof(struct dw2_probe_entry)==112,"probe entry");
