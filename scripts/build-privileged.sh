@@ -57,7 +57,7 @@ if [ "$mode" = all ]; then
     tests/native/dock-helper/Client/ClientFixture.c "$out/dwclient.o" -o "$out/fixture-client"
 fi
 xcrun clang -O2 -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra -Werror $helper_includes \
-  native/dock-helper/Loader/DWLoader.m "$out/dwclient-arm64e.o" -framework AppKit -o "$out/loader-arm64e"
+  native/dock-helper/Loader/DWLoader.m "$out/dwclient-arm64e.o" -framework AppKit -framework Security -o "$out/loader-arm64e"
 # Ad-hoc sign the standalone production tools and Dock payload, exactly as yabai
 # signs its scripting addition binaries (yabai dd845723416f5fe92af49fad5ebab00369e07edd
 # src/sa.m scripting_addition_prepare_binaries: "codesign -f -s -"). An ad hoc build signs every one of them so.

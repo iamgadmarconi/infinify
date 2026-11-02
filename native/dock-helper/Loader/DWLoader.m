@@ -9,6 +9,9 @@
  * (DWStagedPayload.h: root-owned, in a root-owned directory, below directories only root writes, so that
  * nothing the login user can write is on the path the Dock opens); every other payload must still be the
  * login user's own, as before.
+ * Infinify upgrade change: two verbs for the launcher's same-Dock decision after an update, --payload-identity (the
+ * read-only code identity of a payload: CodeDirectory hash, identifier, team, signing authorities) and --restart-dock
+ * (SIGTERM to the login user's Dock, only when its PID and process birth are exactly the ones the launch record names).
  *
  * The MIT License (MIT)
  *
@@ -45,6 +48,8 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <CommonCrypto/CommonDigest.h>
+#include <Security/Security.h>
+#include <signal.h>
 #include "DWPreflight.h"
 #include "DWJournalFields.h"
 #include "DWStagedPayload.h"
@@ -363,12 +368,75 @@ static BOOL wait_for_helper(const char *runtime,const char *nonce,pid_t pid,
 }
 static int usage(void) {
     fprintf(stderr,"usage: loader --dock-identity\n"
+        "       loader --payload-identity ABS_PAYLOAD\n"
+        "       loader --restart-dock PID SEC USEC\n"
         "       loader --inject-dock PAYLOAD RUNTIME --nonce-file ABS_FILE --desktop [--expected-dock PID SEC USEC] [--recover-journal ABS_PATH --expected-retired-dock PID SEC USEC]\n"
         "Paths must be absolute. Explicit scope is required; run doctor first. No SIP/boot settings are changed.\n"
         "--desktop authorizes same-login-user scope.\n");
     return 2;
 }
+// The code identity of a payload, read-only, for the launcher's same-Dock reuse decision. Every release signs the payload again
+// (Developer ID and a secure timestamp), so its bytes and SHA-256 change while its code does not; its CodeDirectory, which hashes
+// every page of the code, the identifier, the flags and the Info/requirements slots, does not, and its hash (the cdhash, what the
+// kernel itself names a signed image by) is the same. The signature must be valid (strict). Prints, one per line: identifier=,
+// team= (empty when ad hoc), one authority= per certificate from the leaf up (none when ad hoc), and cdhash= (40 lowercase hex).
+static void print_identity_field(const char *key,NSString *value) {
+    printf("%s=",key);
+    for(const char *p=value.UTF8String?:"";*p;p++)putchar(((unsigned char)*p<0x20 || *p==0x7f)?'?':*p);
+    putchar('\n');
+}
+static int payload_identity(const char *path) {
+    struct stat st;
+    if(path[0]!='/' || lstat(path,&st)!=0 || !S_ISREG(st.st_mode)){fprintf(stderr,"the payload must be an absolute path to a regular file\n");return 2;}
+    SecStaticCodeRef code=NULL;CFDictionaryRef info=NULL;
+    CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8 *)path,(CFIndex)strlen(path),false);
+    OSStatus status=url?SecStaticCodeCreateWithPath(url,kSecCSDefaultFlags,&code):errSecParam;
+    if(url)CFRelease(url);
+    if(status==errSecSuccess)status=SecStaticCodeCheckValidity(code,kSecCSStrictValidate|kSecCSCheckAllArchitectures,NULL);
+    if(status==errSecSuccess)status=SecCodeCopySigningInformation(code,kSecCSSigningInformation,&info);
+    if(code)CFRelease(code);
+    if(status!=errSecSuccess || !info){if(info)CFRelease(info);fprintf(stderr,"payload signature is not valid (%d)\n",(int)status);return 1;}
+    NSDictionary *signing=(NSDictionary *)info;
+    NSData *cdhash=signing[(NSString *)kSecCodeInfoUnique];
+    NSString *identifier=signing[(NSString *)kSecCodeInfoIdentifier],*team=signing[(NSString *)kSecCodeInfoTeamIdentifier];
+    NSArray *certificates=signing[(NSString *)kSecCodeInfoCertificates];
+    if(![cdhash isKindOfClass:NSData.class] || cdhash.length!=CC_SHA1_DIGEST_LENGTH || ![identifier isKindOfClass:NSString.class] || !identifier.length
+        || (team && ![team isKindOfClass:NSString.class]) || (certificates && ![certificates isKindOfClass:NSArray.class])) {
+        CFRelease(info);fprintf(stderr,"payload signature has no complete code identity\n");return 1;
+    }
+    print_identity_field("identifier",identifier);
+    print_identity_field("team",team?:@"");
+    for(id certificate in certificates) {
+        CFStringRef summary=SecCertificateCopySubjectSummary((SecCertificateRef)certificate);
+        print_identity_field("authority",(NSString *)summary?:@"?");
+        if(summary)CFRelease(summary);
+    }
+    printf("cdhash=");
+    for(NSUInteger i=0;i<cdhash.length;i++)printf("%02x",((const uint8_t *)cdhash.bytes)[i]);
+    putchar('\n');
+    CFRelease(info);
+    return 0;
+}
+// Ends the login user's Dock so that launchd starts a new one, as `killall Dock` would, but only the Dock the launcher's record names:
+// it must be the Dock now (found as for --dock-identity), owned by this user, with exactly this PID and process birth, read just
+// before the signal. Run as the login user, never as root. The launcher waits for the next Dock itself.
+static int restart_dock(const char *pidText,const char *secText,const char *usecText) {
+    uint64_t expectedPID=0,expectedSec=0,expectedUsec=0;
+    if(!parse_decimal(pidText,INT_MAX,&expectedPID) || expectedPID<=1 || !parse_decimal(secText,UINT64_MAX,&expectedSec) || !expectedSec
+        || !parse_decimal(usecText,999999,&expectedUsec))return usage();
+    if(getuid()==0 || geteuid()==0){fprintf(stderr,"the Dock is restarted by its login user, never as root\n");return 1;}
+    pid_t pid=get_dock_pid();struct proc_bsdinfo info;
+    if(!process_info(pid,&info) || !current_dock(pid,&info)){fprintf(stderr,"could not locate stable Dock identity; nothing was restarted\n");return 1;}
+    if(pid!=(pid_t)expectedPID || info.pbi_start_tvsec!=expectedSec || info.pbi_start_tvusec!=expectedUsec || info.pbi_uid!=getuid()) {
+        fprintf(stderr,"the Dock is not the one the launch record names; nothing was restarted\n");return 1;
+    }
+    if(kill(pid,SIGTERM)!=0){fprintf(stderr,"could not signal the Dock: %s\n",strerror(errno));return 1;}
+    printf("{\"restarted_pid\":%d,\"birth_sec\":%" PRIu64 ",\"birth_usec\":%" PRIu64 "}\n",pid,expectedSec,expectedUsec);
+    return 0;
+}
 int main(int argc, char **argv) { @autoreleasepool {
+    if(argc==3 && !strcmp(argv[1],"--payload-identity"))return payload_identity(argv[2]);
+    if(argc==5 && !strcmp(argv[1],"--restart-dock"))return restart_dock(argv[2],argv[3],argv[4]);
     if(argc==2 && !strcmp(argv[1],"--dock-identity")) {
         pid_t pid=get_dock_pid();struct proc_bsdinfo info;
         if(!process_info(pid,&info) || !current_dock(pid,&info)){fprintf(stderr,"could not locate stable Dock identity\n");return 1;}

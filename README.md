@@ -179,6 +179,14 @@ noticed and reloaded from the helper's journal; three Dock restarts in a row aro
 until you run `Infinify native-desktop` by hand. `status` changes nothing; `disable` reverts it. Builds signed ad
 hoc cannot use the daemon.
 
+**Updating while compositor mode runs.** `brew upgrade --cask infinify` quits Infinify, and the Dock keeps the earlier
+build's helper. Every release signs that helper again, so its file differs even when its code does not. The next start
+(brew reopens Infinify, or the next login) compares code, not files: the same code is reused as it is; a helper whose
+code changed makes Infinify restart the Dock once (with the launch daemon enabled) and load the new helper, putting the
+windows back from the journal, and it says so in one line (`native-desktop/login.log` for a login start). Without the
+daemon, or when the helper in the Dock was signed by someone else, Infinify does not restart the Dock itself and says what
+to do: restart it (`killall Dock`) or log out and in, then start Infinify again.
+
 The safety model (journal before every mutation, identity fences, the daemon accepting only this signed app, a
 root-owned staged copy of the payload) is in [docs/native/dock-helper/README.md](docs/native/dock-helper/README.md); what
 compositor mode does to windows, popups and drags is in

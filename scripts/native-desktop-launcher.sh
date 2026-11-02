@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Bundled, checkout-independent launcher for the full desktop helper: run by the owner in a terminal, by the login item
 # when the owner enabled compositor mode (--login), and by the running app after a Dock restart (--reload).
-# No Dock restart, settings change, automatic retry of an uncertain injection or runtime cleanup.
+# No settings change, automatic retry of an uncertain injection or runtime cleanup. The one Dock restart it makes is after an update
+# whose helper code differs from the code in the recorded, still running Dock (native_restart_recorded_dock, below).
 set +x
 set -eu
 umask 077
@@ -198,31 +199,42 @@ fi
 # identity must read the same twice, three seconds apart (one second for a reload, whose app has already let the new Dock
 # settle), before it is trusted (Sunlight lets a new Dock settle too). The load itself is pinned to that identity.
 native_dock_wait=1
-native_dock_confirm=3
-case "$native_mode" in login) native_dock_wait=60 ;; reload) native_dock_wait=15; native_dock_confirm=1 ;; esac
-native_dock=
-native_dock_stable=false
-native_attempt=0
-while :; do
-  native_attempt=$((native_attempt + 1))
-  if native_dock=$("$native_loader" --dock-identity 2>/dev/null); then
-    if [ "$native_mode" = launch ]; then native_dock_stable=true; break; fi
-    native_dock_again=$(/bin/sleep "$native_dock_confirm"; "$native_loader" --dock-identity 2>/dev/null) || native_dock_again=
-    if [ "$native_dock" = "$native_dock_again" ]; then native_dock_stable=true; break; fi
-  fi
-  [ "$native_attempt" -lt "$native_dock_wait" ] || break
-  [ "$native_mode" = launch ] || /bin/sleep 2
-done
-[ -n "$native_dock" ] || fail 'could not resolve the current Dock process identity.'
-[ "$native_dock_stable" = true ] || fail 'the Dock process identity did not settle.'
+native_dock_confirm=0
+case "$native_mode" in login) native_dock_wait=60; native_dock_confirm=3 ;; reload) native_dock_wait=15; native_dock_confirm=1 ;; esac
+# native_read_dock ATTEMPTS CONFIRM: up to ATTEMPTS reads, two seconds apart, of an identity that reads the same again CONFIRM seconds
+# later (CONFIRM 0: the first answer, no wait). Leaves the answer in native_dock and whether it settled in native_dock_stable.
+native_read_dock() {
+  native_dock=
+  native_dock_stable=false
+  native_attempt=0
+  while :; do
+    native_attempt=$((native_attempt + 1))
+    if native_dock=$("$native_loader" --dock-identity 2>/dev/null); then
+      if [ "$2" -eq 0 ]; then native_dock_stable=true; break; fi
+      native_dock_again=$(/bin/sleep "$2"; "$native_loader" --dock-identity 2>/dev/null) || native_dock_again=
+      if [ "$native_dock" = "$native_dock_again" ]; then native_dock_stable=true; break; fi
+    fi
+    [ "$native_attempt" -lt "$1" ] || break
+    [ "$2" -eq 0 ] || /bin/sleep 2
+  done
+  [ -n "$native_dock" ] && [ "$native_dock_stable" = true ]
+}
 dock_value() { printf '%s\n' "$native_dock" | /usr/bin/plutil -extract "$1" raw -expect "$2" -o - -; }
-native_dock_pid=$(dock_value pid integer) || fail 'invalid Dock PID report.'
-native_dock_sec=$(dock_value birth_sec integer) || fail 'invalid Dock birth report.'
-native_dock_usec=$(dock_value birth_usec integer) || fail 'invalid Dock birth report.'
-native_dock_uid=$(dock_value uid integer) || fail 'invalid Dock user report.'
-native_boot_uuid=$(dock_value boot_uuid string) || fail 'invalid boot identity report.'
-native_valid_boot_uuid "$native_boot_uuid" || fail 'invalid boot session UUID report.'
-[ "$native_dock_uid" = "$native_uid" ] || fail 'Dock belongs to another login user.'
+# The settled identity in native_dock becomes the Dock this run pins.
+native_take_dock() {
+  native_dock_pid=$(dock_value pid integer) || fail 'invalid Dock PID report.'
+  native_dock_sec=$(dock_value birth_sec integer) || fail 'invalid Dock birth report.'
+  native_dock_usec=$(dock_value birth_usec integer) || fail 'invalid Dock birth report.'
+  native_dock_uid=$(dock_value uid integer) || fail 'invalid Dock user report.'
+  native_boot_uuid=$(dock_value boot_uuid string) || fail 'invalid boot identity report.'
+  native_valid_boot_uuid "$native_boot_uuid" || fail 'invalid boot session UUID report.'
+  [ "$native_dock_uid" = "$native_uid" ] || fail 'Dock belongs to another login user.'
+}
+if ! native_read_dock "$native_dock_wait" "$native_dock_confirm"; then
+  [ -n "$native_dock" ] || fail 'could not resolve the current Dock process identity.'
+  fail 'the Dock process identity did not settle.'
+fi
+native_take_dock
 
 native_record="$native_state_dir/launch.plist"
 native_pending_record="$native_state_dir/launch.pending.plist"
@@ -321,6 +333,7 @@ native_refuse_unrecoverable_journal() {
 }
 
 native_validate_retired_journal() {
+  native_journal_refused=false
   native_journal="$native_runtime/v2-journal.json"
   # A helper that never changed a window never wrote a journal (it journals before every change), and a runtime with none of its
   # journal, staging file or recovery import has nothing to recover; refusing it would block every later start for nothing.
@@ -387,6 +400,69 @@ native_validate_retired_journal() {
   native_recovery_source=$native_journal
 }
 
+# The daemon is started by launchd on the first request. An answer proves the caller check and the bundle before anything is
+# written, pending or restarted; a login start gives it a little while, since nothing has been written yet.
+native_ping_daemon() {
+  native_ping=0
+  while ! "$native_app" native-desktop daemon ping >/dev/null 2>&1; do
+    native_ping=$((native_ping + 1))
+    [ "$native_mode" = login ] && [ "$native_ping" -lt 6 ] || fail 'the launch daemon does not answer this app; nothing was loaded.'
+    /bin/sleep 5
+  done
+}
+
+# The code identity of a payload as the bundled loader reads it (read-only, strict signature check): identifier=, team=, one
+# authority= per certificate, cdhash=. Every release signs the payload again (Developer ID and a secure timestamp), so the bytes
+# and SHA-256 of an unchanged helper differ from release to release; its CodeDirectory hash does not. The signer is everything but
+# the cdhash: identifier, team and authority chain, compared as a whole, so a payload of another team or identifier never counts.
+native_payload_identity() {
+  native_identity=$("$native_loader" --payload-identity "$1" 2>/dev/null) || return 1
+  native_identity_hash=$(printf '%s\n' "$native_identity" | /usr/bin/sed -n 's/^cdhash=//p')
+  [ "${#native_identity_hash}" -eq 40 ] || return 1
+  case "$native_identity_hash" in *[!0-9a-f]*|'') return 1 ;; esac
+  [ "$(printf '%s\n' "$native_identity" | /usr/bin/grep -c '^cdhash=')" = 1 ] || return 1
+  case "$(printf '%s\n' "$native_identity" | /usr/bin/sed -n 1p)" in identifier=?*) ;; *) return 1 ;; esac
+  case "$(printf '%s\n' "$native_identity" | /usr/bin/sed -n 2p)" in team=*) ;; *) return 1 ;; esac
+  printf '%s\n' "$native_identity"
+}
+native_identity_signer() { printf '%s\n' "$1" | /usr/bin/grep -v '^cdhash='; }
+native_identity_cdhash() { printf '%s\n' "$1" | /usr/bin/sed -n 's/^cdhash=//p'; }
+
+# After an update whose helper code differs from the code the recorded, still running Dock holds, the Dock is restarted once, as
+# Sunlight does after an update (it "loads it by itself the first time it starts after the update, which restarts the Dock once"), and
+# the start goes on through the retired-Dock path below: journal handoff, recovery, load through the launch daemon. Only where the load
+# needs no password (the daemon is enabled and answers; a login start or a start by hand, never --reload), only after every check that
+# path makes of the retired runtime has passed, only the Dock the record names (the loader compares its PID and process birth just
+# before the signal), and once per run. No Infinify runs now (checked above), so no app's Dock reloader sees this restart.
+native_dock_restarted=false
+native_restart_recorded_dock() {
+  [ "$native_dock_restarted" = false ] || fail 'the Dock was already restarted once in this start; nothing more was done. Start Infinify again.'
+  case "$native_mode" in
+    login|launch) ;;
+    *) fail 'the running Dock holds the helper of another Infinify build; a reload does not restart the Dock. Quit Infinify and start it again.' ;;
+  esac
+  native_daemon_enabled || fail 'the running Dock holds the helper of an earlier Infinify build, and without the launch daemon a new one cannot be loaded without a password. Run Infinify native-desktop enable in Terminal once, or restart the Dock (killall Dock) and run Infinify native-desktop in Terminal; the windows are restored from the journal.'
+  native_ping_daemon
+  native_validate_retired_journal
+  native_dock_restarted=true
+  "$native_loader" --restart-dock "$native_old_dock_pid" "$native_old_dock_sec" "$native_old_dock_usec" >/dev/null || fail 'the Dock is no longer the one the launch record names, so it was not restarted and nothing was loaded. Start Infinify again.'
+  printf '%s\n' 'Infinify restarted the Dock once: it held the helper of an earlier Infinify build, and this build'"'"'s helper is other code; the new Dock gets this build'"'"'s helper and the windows are restored from the journal.'
+  # The next Dock, launchd's, settled as a login start wants it (the same identity twice, three seconds apart), for up to about three minutes.
+  native_restart_wait=0
+  while :; do
+    native_restart_wait=$((native_restart_wait + 1))
+    /bin/sleep 2
+    if native_read_dock 1 3; then
+      native_take_dock
+      if [ "$native_dock_pid" != "$native_old_dock_pid" ] || [ "$native_dock_sec" != "$native_old_dock_sec" ] || [ "$native_dock_usec" != "$native_old_dock_usec" ]; then
+        [ "$native_boot_uuid" = "$native_record_boot_uuid" ] || fail 'the boot session changed while the Dock restarted; preserve the launch record and inspect it.'
+        return 0
+      fi
+    fi
+    [ "$native_restart_wait" -lt 36 ] || fail 'the Dock was restarted to load this build'"'"'s helper, but no new Dock settled; nothing was loaded. Once the Dock is back, start Infinify again: the windows are restored from the journal.'
+  done
+}
+
 native_reuse=false
 native_recovery=false
 
@@ -426,9 +502,24 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
     [ "${native_loaded##* }" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper.'
     /usr/bin/codesign --verify --strict "$native_loaded_dir/payload-arm64e.dylib" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper.'
     if [ "$native_old_dock_pid" = "$native_dock_pid" ] && [ "$native_old_dock_sec" = "$native_dock_sec" ] && [ "$native_old_dock_usec" = "$native_dock_usec" ]; then
-      [ "$native_record_payload_sha256" = "$native_payload_sha256" ] || fail 'the recorded helper payload differs from this bundle; inspect the old session and do not reuse it.'
-      native_reuse=true
-    else
+      # The same Dock. Its helper is reused when it is this bundle's code: the same bytes, or (after an update that signed the payload
+      # again) the same CodeDirectory hash under the same identifier, team and authority chain. The record keeps describing the copy the
+      # Dock opened (payload_sha256, the bytes checked above), so a reuse leaves it as it is and the next start decides the same way.
+      if [ "$native_record_payload_sha256" = "$native_payload_sha256" ]; then
+        native_reuse=true
+      else
+        native_loaded_identity=$(native_payload_identity "$native_loaded_dir/payload-arm64e.dylib") || fail 'could not read the code identity of the helper payload in the running Dock; nothing was loaded. Restart the Dock (killall Dock) and start Infinify again; the windows are restored from the journal.'
+        native_bundle_identity=$(native_payload_identity "$native_payload") || fail 'could not read the code identity of this bundle'"'"'s payload; reinstall Infinify.'
+        [ "$(native_identity_signer "$native_loaded_identity")" = "$(native_identity_signer "$native_bundle_identity")" ] || fail 'the helper in the running Dock is signed by another developer or under another identifier than this bundle'"'"'s, so it is not reused and the Dock is not restarted by itself. To switch to this build, restart the Dock (killall Dock) or log out and back in, then start Infinify again; the windows are restored from the journal.'
+        if [ "$(native_identity_cdhash "$native_loaded_identity")" = "$(native_identity_cdhash "$native_bundle_identity")" ]; then
+          native_reuse=true
+          native_reuse_signature=$(native_identity_cdhash "$native_bundle_identity")
+        else
+          native_restart_recorded_dock
+        fi
+      fi
+    fi
+    if [ "$native_reuse" != true ]; then
       if native_prior_dock_gone; then
         :
       else
@@ -442,7 +533,9 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
   fi
 fi
 
-if [ "$native_reuse" = true ]; then
+if [ "$native_reuse" = true ] && [ -n "${native_reuse_signature:-}" ]; then
+  printf 'Reusing the recorded same-Dock desktop helper: this bundle'"'"'s payload is the same code (CodeDirectory hash %s, same identifier, team and signing authorities) signed again; the app will authenticate its scope and restoration capabilities.\n' "$native_reuse_signature"
+elif [ "$native_reuse" = true ]; then
   printf '%s\n' 'Reusing the recorded same-Dock desktop helper with the payload hash bound to this bundle; the app will authenticate its scope and restoration capabilities.'
 else
   if [ "$native_recovery" != true ]; then
@@ -455,14 +548,7 @@ else
   case "$native_mode" in
     login|reload)
       [ "$native_load_via" = daemon ] || fail 'the launch daemon is not enabled, so nothing can be loaded without a password; run Infinify native-desktop enable in a terminal.'
-      # The daemon is started by launchd on the first request. An answer proves the caller check and the bundle before anything is
-      # written or pending; a login start gives it a little while, since nothing has been written yet.
-      native_ping=0
-      while ! "$native_app" native-desktop daemon ping >/dev/null 2>&1; do
-        native_ping=$((native_ping + 1))
-        [ "$native_mode" = login ] && [ "$native_ping" -lt 6 ] || fail 'the launch daemon does not answer this app; nothing was loaded.'
-        /bin/sleep 5
-      done
+      native_ping_daemon
       ;;
     *) [ "$native_load_via" = daemon ] || [ -t 0 ] || fail 'start this owner-run launcher in a terminal for the explicit sudo loader step.' ;;
   esac

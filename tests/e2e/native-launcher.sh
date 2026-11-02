@@ -54,19 +54,22 @@ PLIST
 for name in doctor loader-arm64e payload-arm64e.dylib loadd; do codesign --force --sign - "$native/$name" 2>/dev/null; done
 digest() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
 payload_sha=$(digest "$native/payload-arm64e.dylib")
-{
-  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
-  printf '%s\n' '<key>schema_version</key><integer>1</integer><key>git_commit</key><string>stub</string>'
-  printf '<key>source_fingerprint_sha256</key><string>%s</string><key>artifacts</key><dict>\n' "$(printf stub | shasum -a 256 | cut -d ' ' -f 1)"
-  for pair in doctor:doctor loader:loader-arm64e payload:payload-arm64e.dylib daemon:loadd launcher:launch.sh; do
-    key=${pair%%:*}; file=${pair#*:}
-    printf '<key>%s</key><dict><key>path</key><string>Contents/Resources/NativeDesktop/%s</string><key>sha256</key><string>%s</string></dict>\n' "$key" "$file" "$(digest "$native/$file")"
-  done
-  printf '%s\n' '</dict></dict></plist>'
-} > "$native/manifest.plist"
-plutil -lint "$native/manifest.plist" >/dev/null
-codesign --force --sign - "$app" 2>/dev/null
-codesign --verify --deep --strict "$app"
+write_manifest() {
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
+    printf '%s\n' '<key>schema_version</key><integer>1</integer><key>git_commit</key><string>stub</string>'
+    printf '<key>source_fingerprint_sha256</key><string>%s</string><key>artifacts</key><dict>\n' "$(printf stub | shasum -a 256 | cut -d ' ' -f 1)"
+    for pair in doctor:doctor loader:loader-arm64e payload:payload-arm64e.dylib daemon:loadd launcher:launch.sh; do
+      key=${pair%%:*}; file=${pair#*:}
+      printf '<key>%s</key><dict><key>path</key><string>Contents/Resources/NativeDesktop/%s</string><key>sha256</key><string>%s</string></dict>\n' "$key" "$file" "$(digest "$native/$file")"
+    done
+    printf '%s\n' '</dict></dict></plist>'
+  } > "$native/manifest.plist"
+  plutil -lint "$native/manifest.plist" >/dev/null
+  codesign --force --sign - "$app" 2>/dev/null
+  codesign --verify --deep --strict "$app"
+}
+write_manifest
 
 launcher=$native/launch.sh
 state_dir() { printf '%s/Library/Application Support/Infinify/native-desktop' "$HOME"; }
@@ -314,6 +317,122 @@ expect_loads 'recovery import without a journal' 9
 if grep -q 'no private committed v2 journal' "$out.err"; then ok 'a recovery import without its journal is still refused and preserved'; else bad 'wrong refusal'; sed 's/^/     | /' "$out.err"; fi
 exists 'the launch record is untouched' "$(state_dir)/launch.plist"
 absent 'and nothing is pending' "$(state_dir)/launch.pending.plist"
+
+# Updates while the recorded Dock lives (brew upgrade replaces the bundle; the Dock keeps the earlier build's helper). Every release
+# signs the payload again (Developer ID, secure timestamp), so an unchanged helper ships other bytes. The stand-in loader reports a
+# payload's code identity (identifier, team, authorities, cdhash) from $control/identity.SHA256, as the real one reads the signature.
+rm -f "$(state_dir)/launch.plist"   # the refused runtime above was inspected
+D9="9990009 1790000800 999"; D10="9990010 1790000900 101"; D11="9990011 1790001000 102"
+# shellcheck disable=SC2086
+dock $D9
+run 'a fresh start for the update checks' 0 "$launcher"
+expect_loads 'update baseline' 10
+first_sha=$payload_sha
+first_cdhash=$(printf '%.40s' "$first_sha")
+# new_payload NAME: the bundle's payload replaced by other bytes (the stand-in signed again under another identifier), with the
+# manifest digest and the bundle signature renewed, as a new release ships it. identity SHA TEAM CDHASH [IDENTIFIER]: its code identity.
+new_payload() { cp "$work/stub" "$native/payload-arm64e.dylib"; codesign --force --sign - -i "$1" "$native/payload-arm64e.dylib" 2>/dev/null; write_manifest; payload_sha=$(digest "$native/payload-arm64e.dylib"); }
+identity() { printf 'identifier=%s\nteam=%s\nauthority=Stand-in Developer (%s)\ncdhash=%s\n' "${4:-payload-arm64e}" "$2" "$2" "$3" > "$control/identity.$1"; }
+restarts() { if [ -f "$control/dock-restarts" ]; then wc -l < "$control/dock-restarts" | tr -d ' '; else echo 0; fi; }
+expect_restarts() { if [ "$(restarts)" = "$2" ]; then ok "$1: $2 Dock restart(s) so far"; else bad "$1: $(restarts) Dock restarts, wanted $2"; fi; }
+cp "$(state_dir)/launch.plist" "$work/record-before"
+
+new_payload signed-again
+identity "$payload_sha" STUBTEAM01 "$first_cdhash"
+run 'same Dock, this build signed again (same code)' 0 "$launcher"
+says 'same Dock, signed again' "same code (CodeDirectory hash $first_cdhash, same identifier, team and signing authorities)"
+expect_loads 'signed again' 10
+expect_restarts 'signed again' 0
+if cmp -s "$work/record-before" "$(state_dir)/launch.plist"; then ok 'the schema-3 record is left as it was: it still binds the bytes the Dock opened'; else bad 'a reuse rewrote the record'; fi
+if tail -n 1 "$control/app-launch" | grep -q "^env: reload=1 sha=$payload_sha loaded_at=0$"; then ok 'the app is told the bundle payload digest, and that nothing was loaded'; else bad 'the reuse environment after an update'; tail -n 1 "$control/app-launch"; fi
+run 'a login start in the same Dock after that reuse' 0 "$launcher" --login
+logsays 'a later start decides the same way' 'same code (CodeDirectory hash'
+# The record of 0.2.5 (version 3, payload_sha256 only), written key by key as that launcher wrote it.
+old_record=$work/old-record.plist
+printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>' > "$old_record"
+/usr/bin/plutil -insert version -integer 3 "$old_record"
+for key in dock_pid dock_birth_sec dock_birth_usec; do /usr/bin/plutil -insert "$key" -integer "$(record "$key" integer)" "$old_record"; done
+for key in boot_uuid runtime nonce_file payload_sha256 outcome; do /usr/bin/plutil -insert "$key" -string "$(record "$key" string)" "$old_record"; done
+cp "$old_record" "$(state_dir)/launch.plist"; chmod 600 "$(state_dir)/launch.plist"
+run 'a 0.2.5 record (version 3, payload_sha256 only) in the same Dock' 0 "$launcher"
+says 'a 0.2.5 record' 'same code (CodeDirectory hash'
+expect_loads 'a 0.2.5 record' 10
+
+new_payload other-team
+identity "$payload_sha" OTHERTEAM9 "$first_cdhash"
+run 'same Dock, same code signed by another team' 1 "$launcher"
+says 'another team' 'signed by another developer'
+run 'a login start with another team' 0 "$launcher" --login
+handed_to_setup 'a login start with another team' 'signed by another developer'
+new_payload other-identifier
+identity "$payload_sha" STUBTEAM01 "$first_cdhash" com.example.other
+run 'same Dock, same code under another identifier' 1 "$launcher"
+says 'another identifier' 'signed by another developer or under another identifier'
+expect_loads 'another signer' 10
+expect_restarts 'another signer' 0
+
+new_payload new-code   # no identity file: other bytes are other code here, under the stand-in team
+rm -f "$control/daemon-enabled"
+run 'same Dock, other code, from setup without the daemon' 0 env INFINIFY_LAUNCH_FROM_SETUP=1 "$launcher"
+handed_to_setup 'other code without the daemon' 'native-desktop enable in Terminal once, or restart the Dock'
+run 'same Dock, other code, login start without the daemon' 0 "$launcher" --login
+handed_to_setup 'a login start with other code and no daemon' 'without the launch daemon'
+touch "$control/daemon-enabled"
+/usr/bin/plutil -replace outcome -string pending "$(state_dir)/launch.plist"
+run 'same Dock, other code, record not ready' 0 "$launcher" --login
+handed_to_setup 'other code, record not ready' 'pending or unknown'
+/usr/bin/plutil -replace outcome -string ready "$(state_dir)/launch.plist"
+touch "$control/daemon-ping-fails"
+run 'same Dock, other code, the daemon does not answer' 1 "$launcher"
+says 'other code, silent daemon' 'does not answer this app'
+rm -f "$control/daemon-ping-fails"
+upd_runtime=$(record runtime string)
+: > "$upd_runtime/v2-journal.next"; chmod 600 "$upd_runtime/v2-journal.next"
+run 'same Dock, other code, the retired runtime would be refused' 1 "$launcher"
+says 'other code, unrecoverable runtime' 'contains v2-journal.next'
+rm -f "$upd_runtime/v2-journal.next"
+"$app/Contents/MacOS/Infinify" stub-sleep &
+sleeper=$!
+sleep 1
+run 'same Dock, other code, an Infinify is running' 1 "$launcher"
+says 'other code while Infinify runs' 'already running'
+kill "$sleeper" 2>/dev/null || :; sleeper=
+sleep 1
+run_split 'a reload in the recorded Dock with other code' 1 "$app/Contents/MacOS/Infinify" stub-reload-parent
+if grep -q 'a reload does not restart the Dock' "$out.err"; then ok 'a reload never restarts the Dock'; else bad 'the reload refusal'; sed 's/^/     | /' "$out.err"; fi
+expect_loads 'no restart where it may not happen' 10
+expect_restarts 'no restart where it may not happen' 0
+absent 'nothing pending after the refusals' "$(state_dir)/launch.pending.plist"
+
+printf '%s\n' "$D10" > "$control/dock-next"
+run 'same Dock, other code: one Dock restart, then recovery' 0 "$launcher"
+says 'one Dock restart' 'Infinify restarted the Dock once'
+expect_restarts 'one Dock restart' 1
+if [ "$(cat "$control/dock-restarts")" = "$D9" ]; then ok 'the restart named the recorded Dock, PID and birth'; else bad 'the restarted Dock'; cat "$control/dock-restarts" 2>/dev/null || :; fi
+expect_loads 'one Dock restart' 11
+if sed -n 11p "$control/daemon-loads" | grep -q -- "--expected-dock $D10 --recover-journal $upd_runtime/v2-journal.json --expected-retired-dock $D9 "; then ok 'the new Dock is loaded with the journal of the restarted one'; else bad 'the recovery after the restart'; sed -n 11p "$control/daemon-loads"; fi
+if [ "$(record dock_pid integer)" = 9990010 ] && [ "$(record outcome string)" = ready ] && [ "$(record payload_sha256 string)" = "$payload_sha" ] && [ "$(record version integer)" = 3 ]; then ok 'the ready record names the new Dock and this bundle'"'"'s payload'; else bad 'the record after the restart'; fi
+if tail -n 1 "$control/app-launch" | grep -q "^env: reload=1 sha=$payload_sha loaded_at=[1-9][0-9]*$"; then ok 'the app counts that load for its crash guard'; else bad 'the environment after the restart'; tail -n 1 "$control/app-launch"; fi
+absent 'nothing pending after the restart' "$(state_dir)/launch.pending.plist"
+run 'the next start in that Dock reuses the helper' 0 "$launcher"
+says 'after the restart' 'Reusing the recorded same-Dock desktop helper with the payload hash'
+expect_restarts 'after the restart' 1
+
+new_payload newer-code
+printf '%s\n' "$D11" > "$control/dock-next"
+run 'a login start with other code restarts the Dock once too' 0 "$launcher" --login
+logsays 'a login restart' 'Infinify restarted the Dock once'
+expect_restarts 'a login restart' 2
+if sed -n 12p "$control/daemon-loads" | grep -q -- "--expected-dock $D11 --recover-journal .*/v2-journal.json --expected-retired-dock $D10 "; then ok 'the login start recovers from the restarted Dock'; else bad 'the login recovery'; sed -n 12p "$control/daemon-loads"; fi
+
+new_payload newest-code
+printf '%s\n' "9990011 1790001000 555" > "$control/dock-replaced"
+printf '%s\n' "9990012 1790001100 103" > "$control/dock-next"
+run 'another Dock in the recorded one'"'"'s place at the signal' 1 "$launcher"
+says 'a replaced Dock' 'no longer the one the launch record names'
+expect_restarts 'a replaced Dock' 2
+expect_loads 'a replaced Dock' 12
+rm -f "$control/dock-next"
 
 if [ "$fails" -ne 0 ]; then printf 'native-launcher: %s of %s checks FAILED\n' "$fails" "$checks" >&2; exit 1; fi
 printf 'native-launcher: %s checks passed\n' "$checks"

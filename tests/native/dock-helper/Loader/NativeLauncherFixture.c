@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // One signed stand-in for the bundle's doctor, loader, payload and app, for tests/e2e/native-launcher.sh. It does what the
-// launcher can observe of them (the Dock identity query, the daemon's status/ping/load, the exec of the app) and writes what the
-// real helper writes into a runtime (journal, sidecar) so the launcher's recovery checks have something to read. It loads nothing.
-// Behaviour comes from the file name it is run as and from files in $STUB_DIR.
+// launcher can observe of them (the Dock identity query, a payload's code identity, the restart of the recorded Dock, the daemon's
+// status/ping/load, the exec of the app) and writes what the real helper writes into a runtime (journal, sidecar) so the launcher's
+// recovery checks have something to read. It loads nothing and signals no process: a "restart" only moves $STUB_DIR/dock-next into
+// $STUB_DIR/dock. Behaviour comes from the file name it is run as and from files in $STUB_DIR.
 #include <CommonCrypto/CommonDigest.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -98,6 +99,31 @@ int main(int argc, char **argv) {
             if (dock(&pid, &sec, &usec)) { fputs("could not locate stable Dock identity\n", stderr); return 1; }
             bootuuid(boot);
             printf("{\"pid\":%ld,\"birth_sec\":%lld,\"birth_usec\":%lld,\"uid\":%u,\"boot_uuid\":\"%s\"}\n", pid, sec, usec, getuid(), boot);
+            return 0;
+        }
+        if (argc == 3 && !strcmp(argv[1], "--payload-identity")) {
+            // A payload's code identity: $STUB_DIR/identity.SHA256 when the test wrote one for those bytes, else its own bytes are its
+            // code (cdhash: the first 40 hex digits of their SHA-256) under the stand-in team.
+            char digest[65], file[1200], text[4096]; sha256hex(argv[2], digest);
+            snprintf(file, sizeof file, "%s/identity.%s", dir(), digest);
+            if (slurp(file, text, sizeof text) > 0) { fputs(text, stdout); return 0; }
+            printf("identifier=payload-arm64e\nteam=STUBTEAM01\nauthority=Stand-in Developer (STUBTEAM01)\ncdhash=%.40s\n", digest);
+            return 0;
+        }
+        if (argc == 5 && !strcmp(argv[1], "--restart-dock")) {
+            // Only the Dock now, with exactly this PID and birth, is "restarted": launchd's next Dock is $STUB_DIR/dock-next.
+            // $STUB_DIR/dock-replaced stands for another Dock that took the recorded one's place just before the signal.
+            long pid; long long sec, usec; char line[256], next[1024], current[1024], replaced[1024];
+            path(replaced, sizeof replaced, "dock-replaced"); path(current, sizeof current, "dock");
+            if (!access(replaced, F_OK)) rename(replaced, current);
+            if (dock(&pid, &sec, &usec)) { fputs("could not locate stable Dock identity; nothing was restarted\n", stderr); return 1; }
+            snprintf(line, sizeof line, "%ld %lld %lld", pid, sec, usec);
+            char wanted[256]; snprintf(wanted, sizeof wanted, "%s %s %s", argv[2], argv[3], argv[4]);
+            if (strcmp(line, wanted)) { fputs("the Dock is not the one the launch record names; nothing was restarted\n", stderr); return 1; }
+            append("dock-restarts", line);
+            path(next, sizeof next, "dock-next");
+            if (rename(next, current)) unlink(current);
+            printf("{\"restarted_pid\":%ld}\n", pid);
             return 0;
         }
         append("loader-calls", argc > 1 ? argv[1] : "");   // the sudo path: the tests never take it

@@ -158,6 +158,11 @@ automatic retry of an uncertain load. Its modes:
   and `--reload` refuse while it names this payload's digest.
 - An interrupted or uncertain load keeps its pending marker and blocks every mode, including across
   reboots.
+- Updates while the recorded Dock lives: the same code signed again (another release's signature) is reused, by code
+  identity (CodeDirectory hash, identifier, team, authority chain; `loader --payload-identity`); another signer is refused;
+  other code makes a login start or a start by hand with the daemon enabled restart that Dock once (`loader --restart-dock`,
+  only the recorded PID and process birth) and continue through the recovery path above. `--reload` never restarts the Dock.
+  Details: [Loader and launcher](../Loader/README.md#updates-while-the-recorded-dock-lives).
 
 ### Dock reload in the app
 
