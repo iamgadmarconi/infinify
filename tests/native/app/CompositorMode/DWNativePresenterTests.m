@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Exercise the actual presenter with an in-memory transport and declared family
-// reports. No connection, native getter/setter, window, event tap, pasteboard or
-// application is created. ACK receipts are not native/input usability evidence.
+// reports. Snapshot retry checks read the window list; no connection, native
+// setter, window, event tap, pasteboard or application is created. ACK receipts
+// are not native/input usability evidence.
 #import <AppKit/AppKit.h>
 static BOOL readinessNoScreens;
 @interface DWReadinessScreen : NSObject
@@ -82,6 +83,7 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 - (void)fixtureCallback:(NSArray<NSNumber *> *)statuses sequence:(uint64_t)sequence;
 - (void)fixtureExpire;
 - (void)fixtureRetry;
+- (BOOL)fixtureRetrying;
 - (void)fixtureCorruptFrame;
 - (void)fixtureCooperative;
 - (void)fixtureSpaceFrames;
@@ -111,6 +113,7 @@ bool dw_focus_birth(pid_t pid,uint64_t *seconds,uint64_t *microseconds) { (void)
 }
 - (void)fixtureExpire { atomic_store(&_ended,true); }
 - (void)fixtureRetry { _lastSent=0; }
+- (BOOL)fixtureRetrying { return atomic_load(&_retrying); }
 - (void)fixtureCorruptFrame {
     NSMutableData *frame=[_frames[@(_submittedSeq)]mutableCopy];struct dw2_record *records=frame.mutableBytes;records[0].id.wid++;_frames[@(_submittedSeq)]=frame.copy;
 }
@@ -153,6 +156,31 @@ static void ack(DWNativePresenter *presenter) { [presenter fixtureAck:@[@(DW2_AP
 int main(void) {@autoreleasepool {
     check(NSThread.isMainThread,@"run fixture on the main thread");NSDictionary *root=identity(123,42);
     CGRect native=CGRectMake(100,100,320,232),screen=CGRectMake(250,200,160,116);
+    // Borrow only a window number, never its window. All submissions stay in memory.
+    NSArray *windowRows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll,kCGNullWindowID));
+    NSMutableSet<NSNumber *> *windowNumbers=[NSMutableSet set];
+    for(NSDictionary *row in windowRows){NSNumber *wid=row[(id)kCGWindowNumber];if(wid.unsignedIntValue)[windowNumbers addObject:wid];}
+    NSNumber *existingWindow=nil;
+    for(NSNumber *wid in [[windowNumbers allObjects]sortedArrayUsingSelector:@selector(compare:)]){
+        NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid.unsignedIntValue));
+        for(NSDictionary *row in rows)if([row[(id)kCGWindowNumber]isEqual:wid]){existingWindow=wid;break;}
+        if(existingWindow)break;
+    }
+    check(existingWindow!=nil,@"read-only window list supplies a real window number for snapshot retry");
+    uint32_t missingWindow=UINT32_MAX;while([windowNumbers containsObject:@(missingWindow)])--missingWindow;
+    NSArray *missingRows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,missingWindow));
+    check(missingRows!=nil&&missingRows.count==0,@"missing snapshot window is absent from a readable window list");
+    for(NSNumber *wid in @[@(missingWindow),existingWindow]){
+        BOOL exists=[wid isEqual:existingWindow];NSDictionary *snapshotRoot=identity(123,wid.unsignedIntValue);
+        DWNativePresenter *retrying=[DWNativePresenter fixturePID:@123];
+        [retrying bound:snapshotRoot bounds:native family:family(snapshotRoot,native,@[])];describe(retrying,snapshotRoot,1,1,screen);[retrying submit];
+        uint64_t sequence=retrying.fixtureSequence;
+        [retrying fixtureAck:@[@(DW2_SNAPSHOT)] sequence:sequence];BOOL retry=retrying.fixtureRetrying;
+        [retrying fixtureRetry];[retrying submit];
+        check(exists?(retry&&retrying.fixtureSequence>sequence):(!retry&&retrying.fixtureSequence==sequence),
+            exists?@"snapshot refusal for an existing window retries the unchanged frame":@"snapshot refusal for a missing window does not set retrying or resend");
+        [retrying finish];
+    }
     DWNativePresenter *presenter=[DWNativePresenter fixturePID:@123];
     __block NSUInteger transitionWakeups=0;
     __weak DWNativePresenter *notifiedPresenter=presenter;
@@ -497,7 +525,7 @@ int main(void) {@autoreleasepool {
     check([group isAcknowledgedPlacementCurrent:current]&&[group isAcknowledgedPlacementCurrent:otherReceipt],@"new complete session ACKs settle the grouped supersession");
     [presenter unbound:root];check(![group isAcknowledgedPlacementCurrent:current],@"unbinding revokes a grouped receipt");
     [other fixtureExpire];check(!receipt(other,otherRoot,2,1)&&![group isAcknowledgedPlacementCurrent:otherReceipt],@"disconnect revokes receipt before main callback delivery");
-    [group finish];check(closed==10,@"all in-memory sessions drain and close");
+    [group finish];check(closed==12,@"all in-memory sessions drain and close");
     // What an answer to the veil request says about the helper: acceptance, and no or unreadable answer (the helper may have applied it),
     // leave it possibly veiling, so an unmanaged window is released explicitly; a refusal, a lost helper and a bad request do not.
     check(DWNativeVeilMayBeOn(DW_CLIENT_OK)&&DWNativeVeilMayBeOn(DW_CLIENT_TIMEOUT)&&DWNativeVeilMayBeOn(DW_CLIENT_INVALID)

@@ -8,11 +8,22 @@
 // Sources/Canvas/RealWindows/WindowServerEvents.swift (the window-server events 1325/1326, their payload, main-thread delivery once an
 // NSApplication exists).
 // DWWindowEvents core: construction, the poll, window-server notifications, coalesced delivery, stop.
-// Split from native/desktop/window-events.m at 37b27b1, moved verbatim.
+// Split from native/desktop/window-events.m at 37b27b1; PID lanes and teardown adapted here.
 #import "DWWindowEvents+Private.h"
-// Every Accessibility message goes through this one serial queue, a stopped instance's removals ahead of its successor's
-// registrations. yabai sends them from its event-loop thread, likewise not the thread its observers call back on.
-dispatch_queue_t DWWindowEventsQueue(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.window-events",DISPATCH_QUEUE_SERIAL);});return queue; }
+// All AX work for a PID shares a serial lane across instances, including a successor watching while the old observer is
+// being removed. Weak values let idle lanes go; each submitted block retains its lane until it finishes. Lookups
+// and submissions are on main, so an idle lane cannot be replaced between choosing it and submitting work. Different PIDs
+// target the concurrent utility queue and cannot hold one another up. PID reuse is conservatively ordered as well.
+// Registration precedes resolution and teardown, and unwatch precedes a re-watch, even for replacement records and instances.
+// Results and run-loop sources are handled on main; catalog/metadata reads and their revision fences use a separate serial queue.
+dispatch_queue_t DWWindowEventsQueue(pid_t pid) {
+    NSCAssert(NSThread.isMainThread,@"PID lanes are chosen on main");static NSMapTable<NSNumber *,dispatch_queue_t> *queues;static dispatch_once_t once;
+    dispatch_once(&once,^{queues=[NSMapTable strongToWeakObjectsMapTable];});
+    NSNumber *key=@(pid);dispatch_queue_t queue=[queues objectForKey:key];
+    if(!queue){queue=dispatch_queue_create_with_target("org.infinify.window-events",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_UTILITY,0),dispatch_get_global_queue(QOS_CLASS_UTILITY,0));[queues setObject:queue forKey:key];}
+    return queue;
+}
+void DWWindowEventsAsync(pid_t pid,dispatch_block_t block) { dispatch_queue_t queue=DWWindowEventsQueue(pid);dispatch_async(queue,^{(void)queue;block();}); }
 // LaunchServices reads are serial too, but cannot hold up an application's AX work.
 dispatch_queue_t DWWindowEventsApplicationQueue(void) { static dispatch_queue_t queue;static dispatch_once_t once;dispatch_once(&once,^{queue=dispatch_queue_create("org.infinify.application-events",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_UTILITY,0));});return queue; }
 BOOL DWInScope(NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope,pid_t pid) {
@@ -176,13 +187,34 @@ static void windowServerRegister(void) {
     }
     if(next)[self arm:next-NSProcessInfo.processInfo.systemUptime];
 }
-// Nothing here forms a weak reference to self: -dealloc calls it.
+// Teardown is main-thread work: it takes the observers' sources off the main run loop, invalidates the timer and the
+// application watches, and submits each PID's AX removals to its lane. On main it happens here and now, so whatever main
+// registers afterwards (a successor's observers included) is queued behind it on every PID lane. No caller ever waits for
+// main: an off-main -stop schedules the same teardown on main, retaining the instance until it runs, and returns; an
+// off-main -dealloc hands its teardown state to a main-queue block instead (see -dealloc). Either is then ordered before
+// anything main submits after that block. Production stops on main (DWWindowManager -stop and its owner are main-only);
+// the off-main paths exist so that a stray last release on a worker cannot deadlock against a main thread waiting on it.
 - (void)stop {
+    if(!NSThread.isMainThread){DWWindowEvents *events=self;dispatch_async(dispatch_get_main_queue(),^{[events stop];});return;}
     if(self.stopped)return;self.stopped=YES;self.sink=nil;if(windowServerEvents==self)windowServerEvents=nil;
     [self.workspaceNotifications removeObserver:self];self.workspaceNotifications=nil;[self.timer invalidate];self.timer=nil;
     [self clearApplicationWatches];
     for(NSNumber *pid in self.applications.allKeys)[self remove:pid.intValue ended:NO];
     [self.owed removeAllObjects];[self.sent removeAllObjects];[self.moveOnly removeAllObjects];
 }
-- (void)dealloc { [self stop]; }
+// The last release normally lands on main and tears down there. Off main nothing may retain self or wait for main, so the
+// state teardown needs moves into a main-queue block: the timer, the application watches and every observed application,
+// whose AX removals that block submits to their PID lanes (DWWindowEventsUnobserve). The workspace observer goes at once;
+// NSNotificationCenter removal is thread-safe. A stopped instance has nothing left to hand over.
+- (void)dealloc {
+    if(NSThread.isMainThread){[self stop];return;}
+    if(_stopped)return;
+    [_workspaceNotifications removeObserver:self];
+    NSTimer *timer=_timer;DWApplicationCatalogWatch *catalog=_applicationCatalogWatch;
+    NSArray<DWApplicationWatch *> *watches=_applicationWatches.objectEnumerator.allObjects;NSArray<DWObservedApplication *> *applications=_applications.allValues;
+    dispatch_async(dispatch_get_main_queue(),^{
+        [timer invalidate];[catalog invalidate];for(DWApplicationWatch *watch in watches)[watch invalidate];
+        for(DWObservedApplication *application in applications)DWWindowEventsUnobserve(application,NO);
+    });
+}
 @end

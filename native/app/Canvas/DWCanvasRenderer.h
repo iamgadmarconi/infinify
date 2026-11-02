@@ -7,7 +7,7 @@
 // One window's live picture as the shell holds it: the latest pixel buffer of its
 // stream, a counter that moves with every frame, and where the window sits inside
 // that buffer in pixels (CGRectNull: all of it). A NULL buffer draws no content.
-typedef struct { CVPixelBufferRef buffer;uint64_t generation;CGRect rect; } DWCanvasContent;
+typedef struct { CVPixelBufferRef buffer;uint64_t generation;CGRect rect;CGSize pointSize;CGSize nativeSize; } DWCanvasContent;
 // `placement` is the window's entry of snapshot.placements, or, for a window that is
 // on no output, {window,presentation_settled,source} read from snapshot.windows.
 typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placement);

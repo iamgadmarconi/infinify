@@ -29,8 +29,20 @@ and alpha values, plus the destination display's current ordinary Space when
 the helper advertises that capability. Windows outside every output are parked beyond the union of
 the physical displays. Native bounds are read independently of the transform,
 so camera movement does not change world geometry, focus bounds or resize
-readback. A helper frame limit is enforced before submission: exceeding it ends
-presentation and restores the windows instead of silently omitting some.
+readback. The helper frame limit is enforced by selecting whole groups, never
+splitting a logical family. Focus/enter families rank first; restores, changed
+records, parking and withheld phases share the next tier, ahead of unchanged
+placements. Distance to the nearest viewport breaks ties within a tier, with
+restores ahead of placements. Selected records retain their original order.
+Omitted families stay at their last native placement and are logged once per
+family; omitted releases remain pending until capacity permits, without causing
+identical-frame resend loops. A focused/enter family that alone exceeds the
+limit, `max_records == 0`, or an unexpected submit overflow logs and ends
+presentation, restoring the windows.
+
+A `DW2_SNAPSHOT` refusal no longer causes a retry once the window is confirmed
+absent from the window list. An existing window or an unreadable list still
+permits retry.
 
 The owner selected **one independent view per display** on 2026-10-11. `DWNativeViews.m` keeps a root's real placement
 on its existing output while visible, then chooses the largest remaining visible

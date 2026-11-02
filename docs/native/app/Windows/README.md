@@ -503,7 +503,27 @@ does not establish ordinary-application observation or a measured CPU saving.
 
 **A slow application does not hold the canvas.** Every Accessibility message
 the observers send is sent off the main thread with a quarter-second timeout;
-on the main thread an event only looks its window up in a table. An
+on the main thread an event only looks its window up in a table. AX work uses
+serial per-PID lanes, shared across records and instances:
+`DWWindowEventsQueue(pid)` chooses a lane only on main, and
+`DWWindowEventsAsync` submits work there. Removal precedes a successor's
+registration, and unwatch precedes re-watch, even across instances; unwatch
+uses the caller's application PID, not the window's weak application.
+Different PIDs progress independently. Submitted blocks retain their lane;
+idle lanes are released and recreated as needed. Teardown is main-thread work
+and no caller waits for it: `stop` on main takes the observers off the run loop
+and submits each PID's removals before it returns, so anything main registers
+afterwards, a successor's observers included, queues behind them. An off-main
+`stop` schedules the same teardown on main (the block retains the instance) and
+returns at once; an off-main `dealloc`, which cannot retain itself, removes its
+workspace observer at once and hands the timer, the application watches and its
+observed applications to a main-queue block (`DWWindowEventsUnobserve`). Either
+is ordered ahead of whatever main submits after that block runs. Production
+stops on main (`DWWindowManager -stop` is main-only); the off-main paths only
+keep a stray worker release from deadlocking against a main thread waiting for
+it. `DWWindowEventsQueueTests.m` blocks main on an off-main stop and on an
+off-main final release and checks both return, then that the teardown runs on
+main once and stays ahead of a successor. An
 application that does not answer is asked again five times a tenth of a second
 apart and then once a second. A window whose application did not answer when
 an event first named it, or gave no window number for it yet, is asked about

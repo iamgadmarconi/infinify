@@ -340,17 +340,29 @@ static inline simd_float4 IFCColorVector(IFCompositorColor c) {
     id<MTLTexture> content = [self contentTextureFor:element];
     BOOL placeholder = content == nil;
     if (placeholder && frame.placeholderColor.a > 0) content = [self placeholderTextureForColor:frame.placeholderColor];
-    if (content) {
-        double bufW = (double)content.width, bufH = (double)content.height;
+    CGRect tile = CGRectMake(surface.x, surface.y, surface.w, surface.h);
+    CGRect fitted = placeholder ? tile : IFCompositorContentDestination(tile, element.contentPointSize, element.nativePointSize);
+    fitted.size.width = IFCRound(fitted.size.width); fitted.size.height = IFCRound(fitted.size.height);
+    CGRect right, bottom;
+    IFCompositorContentBackdrop(tile, fitted, &right, &bottom);
+    // The placeholder fills only the uncovered strips, never the translucent
+    // picture. All three pieces use the same outer window corner mask.
+    for (int pass = 0; pass < 3; pass++) {
+        BOOL backdrop = pass < 2;
+        CGRect region = pass == 0 ? right : pass == 1 ? bottom : fitted;
+        if (CGRectIsEmpty(region)) continue;
+        id<MTLTexture> image = backdrop ? (frame.placeholderColor.a > 0 ? [self placeholderTextureForColor:frame.placeholderColor] : nil) : content;
+        if (!image) continue;
+        double bufW = (double)image.width, bufH = (double)image.height;
         CGRect source = CGRectMake(0, 0, bufW, bufH);
-        if (!placeholder && !CGRectIsNull(element.contentRect) && element.contentRect.size.width > 0 && element.contentRect.size.height > 0) {
-            source = element.contentRect;
-        }
+        if (!backdrop && !placeholder && !CGRectIsNull(element.contentRect) && element.contentRect.size.width > 0 && element.contentRect.size.height > 0) source = element.contentRect;
+        if (!backdrop && !placeholder) source = IFCompositorContentSource(source, element.contentPointSize, element.nativePointSize);
+        IFCRectI picture = IFCRectIMake(region.origin.x, region.origin.y, region.size.width, region.size.height);
         IFCUniforms u = IFCUniformsZero();
         u.alpha = opacity;
-        u.no_alpha = (!placeholder && element.contentOpaque) ? 1.0f : 0.0f;
+        u.no_alpha = (!backdrop && !placeholder && element.contentOpaque) ? 1.0f : 0.0f;
         IFCSetSource(&u, source, bufW, bufH);
-        IFCRectI dst = IFCCornerRound(surface, zoom);
+        IFCRectI dst = IFCCornerRound(picture, zoom);
         // SSD clips only when there is something to clip against; CSD always
         // clips to the geometry; bare and fullscreen pass through.
         BOOL clip = !bare && (!hasSSD || bw > 0 || radius > 0);
@@ -358,10 +370,10 @@ static inline simd_float4 IFCColorVector(IFCompositorColor c) {
             float r = (float)radius;
             // Only the bottom corners round under a title bar.
             const float radii[4] = {hasSSD ? 0.0f : r, hasSSD ? 0.0f : r, r, r};
-            IFCCornerClipUniforms(surface, g.r, radii, s, zoom, bufW, bufH, source, &u);
-            [self draw:IFCPipeCornerClip dst:dst uniforms:&u texture:content element:element];
+            IFCCornerClipUniforms(picture, g.r, radii, s, zoom, bufW, bufH, source, &u);
+            [self draw:IFCPipeCornerClip dst:dst uniforms:&u texture:image element:element];
         } else {
-            [self draw:IFCPipeTexture dst:dst uniforms:&u texture:content element:element];
+            [self draw:IFCPipeTexture dst:dst uniforms:&u texture:image element:element];
         }
     }
 

@@ -20,6 +20,7 @@ static NSInteger selected(NSArray *list) {
     CFRelease(current);return index;
 }
 NSDictionary *DWCurrentLayout(void) {
+    NSCAssert(NSThread.isMainThread,@"Input source access is main-only");
     NSArray *list=sources();NSInteger index=selected(list);if(index<0)return nil;
     NSString *name=DWTyped(property(list[index],kTISPropertyLocalizedName),NSString.class),*identifier=DWTyped(property(list[index],kTISPropertyInputSourceID),NSString.class);
     NSString *language=DWTyped([DWTyped(property(list[index],kTISPropertyInputSourceLanguages),NSArray.class)firstObject],NSString.class);
@@ -27,6 +28,7 @@ NSDictionary *DWCurrentLayout(void) {
     return @{@"name":name?:identifier?:@"",@"short":code.length?code:name?:@"",@"index":@(index),@"count":@(list.count)};
 }
 NSString *DWSwitchLayout(NSDictionary *effect) {
+    NSCAssert(NSThread.isMainThread,@"Input source access is main-only");
     NSArray *list=sources();NSInteger count=(NSInteger)list.count,current=selected(list),index;
     NSString *target=DWTyped(effect[@"target"],NSString.class);NSNumber *number=DWTyped(effect[@"index"],NSNumber.class);
     if(!count)return @"switch-layout: no keyboard input source is enabled";

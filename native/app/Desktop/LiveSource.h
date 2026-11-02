@@ -28,6 +28,7 @@
 // Pixel crop belongs to the retained picture, including across intentional stops.
 // CGRectNull is reserved for explicit full-buffer export installation.
 @property CGRect contentRect;
+@property CGSize contentPointSize;
 @property (copy) void (^presented)(void);
 // INFINIFY_DEBUG's frame line (-frameStats), since it was last printed: screen frames the stream handed over, frames kept, and
 // complete frames passed over because nothing in them had changed.

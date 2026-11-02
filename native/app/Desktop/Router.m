@@ -1,13 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Split from native/desktop/main.m at 37b27b1, moved verbatim.
+// Split from native/desktop/main.m at 37b27b1; the bounds accessors and their native-size cache are new here.
 // The private SkyLight route to one process's window (per-window input router).
 #import "Router.h"
 #import <dlfcn.h>
+#import <os/lock.h>
 #import "DWDesktopSupport.h"
 // New implementation. Private signatures/routing fields referenced from Cantrip
 // 4da10af479701c8007074c65f9eb6a2db03c8ffc, macos/skylight.rs; no code copied.
 // Source: https://github.com/ArcaneArts/Cantrip/blob/4da10af479701c8007074c65f9eb6a2db03c8ffc/cantrip_cua/src/macos/skylight.rs
-@implementation Router
+@implementation Router {
+    os_unfair_lock _boundsLock;
+    NSDictionary *_bounds;
+    CGSize _nativeSize;
+}
+// The bounds and their decoded size change together: a reader never pairs one window frame with another's size.
+- (NSDictionary *)bounds { os_unfair_lock_lock(&_boundsLock);NSDictionary *bounds=_bounds;os_unfair_lock_unlock(&_boundsLock);return bounds; }
+- (void)setBounds:(NSDictionary *)bounds {
+    CGRect native=CGRectZero;CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)bounds,&native);
+    os_unfair_lock_lock(&_boundsLock);_bounds=bounds;_nativeSize=native.size;os_unfair_lock_unlock(&_boundsLock);
+}
+- (CGSize)nativeSize { os_unfair_lock_lock(&_boundsLock);CGSize size=_nativeSize;os_unfair_lock_unlock(&_boundsLock);return size; }
 - (BOOL)loadPrivate {
     void *sky=dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",RTLD_NOW);
     self.privatePost=sky?dlsym(sky,"SLEventPostToPid"):NULL;

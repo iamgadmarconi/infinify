@@ -60,8 +60,13 @@ static BOOL recoverableCaptureError(NSError *error) {
     // nothing. One that does not say (no dirty rectangles at all) is installed, and so is any frame while no picture is kept,
     // the first of a stream just started or resized, and one whose size is not the kept picture's.
     NSArray *dirty=info[SCStreamFrameInfoDirtyRects];CVImageBufferRef image=CMSampleBufferGetImageBuffer(sample);
-    if(!force&&self.pixels&&!self.restarted&&CGRectEqualToRect(crop,self.contentRect)&&CVPixelBufferGetWidth(image)==CVPixelBufferGetWidth(self.pixels)&&CVPixelBufferGetHeight(image)==CVPixelBufferGetHeight(self.pixels)&&[dirty isKindOfClass:NSArray.class]&&!dirty.count){self.skipped++;return YES;}
+    CGSize points=[self pointSizeForCrop:crop info:info];
+    if(!force&&self.pixels&&!self.restarted&&CGRectEqualToRect(crop,self.contentRect)&&fabs(points.width-self.contentPointSize.width)<.01&&fabs(points.height-self.contentPointSize.height)<.01&&CVPixelBufferGetWidth(image)==CVPixelBufferGetWidth(self.pixels)&&CVPixelBufferGetHeight(image)==CVPixelBufferGetHeight(self.pixels)&&[dirty isKindOfClass:NSArray.class]&&!dirty.count){self.skipped++;return YES;}
     return [self installSample:sample];
+}
+- (CGSize)pointSizeForCrop:(CGRect)crop info:(NSDictionary *)info {
+    double divisor=[info[SCStreamFrameInfoScaleFactor] doubleValue]*[info[SCStreamFrameInfoContentScale] doubleValue];
+    return CGSizeMake(crop.size.width/divisor,crop.size.height/divisor);
 }
 - (BOOL)installSample:(CMSampleBufferRef)sample {
     if(!sample||!CMSampleBufferIsValid(sample))return NO;
@@ -69,10 +74,13 @@ static BOOL recoverableCaptureError(NSError *error) {
     CFArrayRef attachments=CMSampleBufferGetSampleAttachmentsArray(sample,NO);
     NSDictionary *info=attachments&&CFArrayGetCount(attachments)==1?DWTyped((__bridge id)CFArrayGetValueAtIndex(attachments,0),NSDictionary.class):nil;
     if(!DWRootCaptureCrop(info,pixels,&crop))return NO;
+    CGSize points=[self pointSizeForCrop:crop info:info];
+    if(!isfinite(points.width)||!isfinite(points.height)||points.width<=0||points.height<=0)return NO;
+    self.contentPointSize=points;
     return [self installPixels:pixels contentRect:crop];
 }
 - (BOOL)installPixels:(CVPixelBufferRef)pixels {
-    return [self installPixels:pixels contentRect:CGRectNull];
+    self.contentPointSize=CGSizeZero;return [self installPixels:pixels contentRect:CGRectNull];
 }
 - (BOOL)installPixels:(CVPixelBufferRef)pixels contentRect:(CGRect)crop {
     if(!pixels)return NO;
@@ -81,6 +89,6 @@ static BOOL recoverableCaptureError(NSError *error) {
     CVPixelBufferRetain(pixels);if(self.pixels)CVPixelBufferRelease(self.pixels);self.pixels=pixels;self.contentRect=crop;
     self.frames++;self.accepted++;self.restarted=NO;self.captureFailures=0;self.captureRecovering=NO;self.captureRetryAt=0;if(self.presented)self.presented();return YES;
 }
-- (void)clearSample {if(self.pixels){CVPixelBufferRelease(self.pixels);self.pixels=NULL;}self.contentRect=CGRectNull;}
+- (void)clearSample {if(self.pixels){CVPixelBufferRelease(self.pixels);self.pixels=NULL;}self.contentRect=CGRectNull;self.contentPointSize=CGSizeZero;}
 - (void)dealloc { [_captureMailbox cancel];if(_pixels)CVPixelBufferRelease(_pixels);if(_router.eventSource)CFRelease(_router.eventSource); }
 @end

@@ -40,6 +40,7 @@
 @property MailboxImage *installedImage;
 @property(readonly) CVPixelBufferRef pixels;
 @property CGRect contentRect;
+@property CGSize contentPointSize;
 @property(copy) dispatch_block_t duringInstall;
 - (BOOL)acceptCapturedSample:(CMSampleBufferRef)sample stream:(SCStream *)stream received:(NSUInteger)received forceInstall:(BOOL)force;
 - (BOOL)installSample:(CMSampleBufferRef)sample;
@@ -91,6 +92,20 @@ static void deferDispatch(dispatch_queue_t queue,dispatch_block_t block) { (void
 #undef CFRetain
 #undef CFRelease
 #undef dispatch_async
+
+// Compile a separate real source for reset coverage; the mailbox harness above
+// still substitutes installation to exercise publication failures and reentry.
+#define LiveSource DWResetSource
+#define Router DWResetRouter
+#define DWRootCaptureMailbox DWResetMailbox
+#define DWRootCaptureCrop DWResetCaptureCrop
+#define CACurrentMediaTime() 0
+#import "LiveSource.m"
+#undef CACurrentMediaTime
+#undef DWRootCaptureCrop
+#undef DWRootCaptureMailbox
+#undef Router
+#undef LiveSource
 
 static NSUInteger checks;
 static void check(BOOL value,NSString *message) {
@@ -171,6 +186,23 @@ int main(void) {@autoreleasepool {
     check(s.captureMailbox.currentImageAvailable&&s.installs==installed&&s.phase==2&&s.skipped==1,
         @"ordinary unchanged Complete retains the current image without redraw");
 
+    MailboxSample *rescaled=packet(@(SCFrameStatusComplete),YES,NO,300);
+    NSMutableDictionary *rescaledInfo=[rescaled.attachments.firstObject mutableCopy];rescaledInfo[SCStreamFrameInfoContentScale]=@.5;rescaled.attachments=@[rescaledInfo];
+    installed=s.installs;deliverPacket(s,rescaled);drainOne();
+    check(s.installs==installed+1&&s.phase==300&&CGSizeEqualToSize(s.contentPointSize,CGSizeMake(64,48)),@"identical crop with changed point size installs even without dirty rectangles");
+    MailboxSample *jitter=packet(@(SCFrameStatusComplete),YES,NO,301);
+    NSMutableDictionary *jitterInfo=[jitter.attachments.firstObject mutableCopy];jitterInfo[SCStreamFrameInfoContentScale]=@.50001;jitter.attachments=@[jitterInfo];
+    installed=s.installs;NSUInteger skipped=s.skipped;deliverPacket(s,jitter);drainOne();
+    check(s.installs==installed&&s.skipped==skipped+1&&s.phase==300,@"point-size jitter below .01 pt preserves the identical-sample skip");
+
+    DWResetSource *reset=[DWResetSource new];CVPixelBufferRef resetPixels=NULL;
+    check(CVPixelBufferCreate(kCFAllocatorDefault,64,48,kCVPixelFormatType_32BGRA,NULL,&resetPixels)==kCVReturnSuccess,@"reset fixture allocates only an in-memory buffer");
+    reset.contentPointSize=CGSizeMake(32,24);
+    check([reset installPixels:resetPixels]&&CGSizeEqualToSize(reset.contentPointSize,CGSizeZero),@"full-buffer pixel installation resets content point size");
+    reset.contentPointSize=CGSizeMake(32,24);[reset clearSample];
+    check(!reset.pixels&&CGSizeEqualToSize(reset.contentPointSize,CGSizeZero),@"clearSample resets content point size");
+    CVPixelBufferRelease(resetPixels);
+
     deliverPacket(s,packet(@(SCFrameStatusComplete),YES,YES,4));
     deliverPacket(s,packet(@(SCFrameStatusSuspended),NO,NO,4));deliverPacket(s,packet(@(SCFrameStatusIdle),YES,NO,4));
     check(!s.captureMailbox.currentImageAvailable&&jobs.count==1,@"queued old Complete survives Idle coalescing but stays revoked");drainOne();
@@ -227,6 +259,7 @@ int main(void) {@autoreleasepool {
     cropInfo[SCStreamFrameInfoScaleFactor]=@2;cropInfo[SCStreamFrameInfoContentScale]=@.5;cropped.attachments=@[cropInfo];
     deliverPacket(s,cropped);drainOne();installed=s.installs;
     check(CGRectEqualToRect(s.contentRect,CGRectMake(4,6,40,30)),@"surface-point crop uses display density once, not ContentScale twice");
+    check(CGSizeEqualToSize(s.contentPointSize,CGSizeMake(40,30)),@"captured point size reverses content scale and stays paired with pixels");
     MailboxSample *movedCrop=packet(@(SCFrameStatusComplete),YES,NO,601);
     cropInfo=[cropInfo mutableCopy];cropInfo[SCStreamFrameInfoDirtyRects]=@[];cropInfo[SCStreamFrameInfoContentRect]=@{@"X":@3,@"Y":@2,@"Width":@20,@"Height":@15};movedCrop.attachments=@[cropInfo];
     deliverPacket(s,movedCrop);drainOne();

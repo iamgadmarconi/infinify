@@ -54,7 +54,7 @@ static const char *statusName(uint8_t status) {
         }
         if(drained)[self requireFreshPlacementAcknowledgement];
     }
-    BOOL retry=NO;
+    BOOL retry=NO;NSMutableDictionary<NSNumber *,NSNumber *> *snapshotExists=[NSMutableDictionary dictionary];
     for(NSUInteger i=0;i<statuses.length&&i<frame.length/sizeof(*records);i++){
         NSNumber *wid=@(records[i].id.wid);BOOL release=(records[i].flags&DW2_RECORD_RESTORE)!=0;
         // A decline is a hint that spares the helper's own bound: whatever it answers, it is not asked again.
@@ -65,7 +65,17 @@ static const char *statusName(uint8_t status) {
             if(release&&pending&&pending->releaseSeq&&seq>=pending->releaseSeq){[_releases removeObjectForKey:wid];_forced=YES;}
             continue;
         }
-        if(status[i]==DW2_NOT_APPLIED||status[i]==DW2_RESTORE_PENDING||status[i]==DW2_SNAPSHOT||status[i]==DW2_JOURNAL||status[i]==DW2_SPACE)retry=YES;
+        if(status[i]==DW2_SNAPSHOT){
+            NSNumber *exists=snapshotExists[wid];
+            if(!exists){
+                NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid.unsignedIntValue));
+                BOOL found=rows==nil; // An unreadable list is not evidence that the window has gone.
+                for(NSDictionary *row in rows)if([row[(id)kCGWindowNumber]isEqual:wid]){found=YES;break;}
+                exists=@(found);snapshotExists[wid]=exists;
+            }
+        }
+        if(status[i]==DW2_NOT_APPLIED||status[i]==DW2_RESTORE_PENDING||status[i]==DW2_JOURNAL||status[i]==DW2_SPACE
+            ||(status[i]==DW2_SNAPSHOT&&[snapshotExists[wid]boolValue]))retry=YES;
         NSString *key=[NSString stringWithFormat:@"%@:%u:%d",wid,status[i],release];if([_said containsObject:key])continue;[_said addObject:key];
         fprintf(stderr,"Infinify: native presentation: window %u of process %d not %s: %s\n",wid.unsignedIntValue,records[i].id.pid,release?"restored":"placed",statusName(status[i]));
     }

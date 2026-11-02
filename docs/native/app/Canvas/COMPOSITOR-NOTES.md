@@ -132,7 +132,8 @@ the list below is the rest of the API.
   `rect` + `space` (canvas, the default / output points / pinned), `layer`
   (normal / widget / pinned), `hasClipRect` + `clipRect`, `focused`,
   `decoration`, content (`pixelBuffer` or `texture`, `contentRect`,
-  `contentOpaque`, `contentGeneration`), `title`, `appName`, `launching`,
+  `contentPointSize`, `nativePointSize`, `contentOpaque`, `contentGeneration`),
+  `title`, `appName`, `launching`,
   `showsPinnedIndicator`, `hasTransform` + `transform`.
   `IFCompositorStandInBodyRect(windowRect, clientDecorated, titleBarHeight)`
   gives the `rect` of the stand-in that replaces a window.
@@ -201,12 +202,20 @@ layer sets its own `drawableSize`, `contentsScale` and `opaque`.
 | `element.clipRect` | **nothing.** Do not pass `placements[].clip_rect`: the output always clips, and a per-element clip also cuts the shadow and the border |
 | `element.pixelBuffer` | `CMSampleBufferGetImageBuffer(source.latestSample)`; nil until the first sample |
 | `element.contentRect` | `placements[].source.content_rect` (the window content inside the buffer, in buffer pixels) — **not** `buffer_crop`, which is only the visible part |
+| `element.contentPointSize` | the retained picture's content size in points (`LiveSource.contentPointSize`), paired with `contentRect` |
+| `element.nativePointSize` | the current native window size in points: `Router.nativeSize`, which the `router.bounds` setter caches on every assignment, so no frame decodes the bounds dictionary; zero in either size disables stale-frame sizing |
 | `element.contentGeneration` | the actual image generation, advanced when accepted pixel content changes |
 | `element.focused` | `placements[].focused` |
 | `element.decoration` | the ported `effective_*` helpers of `crates/core/src/config/types.rs` (`effective_decoration_mode`, `effective_border_width`, `effective_border_color(_focused)`, `effective_corner_radius`, `effective_shadow_enabled`, `effective_opacity`), then `IFCompositorDecorationDrawn` (below). macOS windows carry their own title bar, so the mode is `client` |
 | `element.kind = StandIn`, `rect`, `appName`, `title` | a placement whose source is gone (today's "Detached window" tile), under the window's identifier. **`rect` is not the window's rectangle:** a stand-in's `rect` is its body and the bar is drawn above it, so for a window that carried its own title bar (every macOS window; upstream's CSD origin) pass `IFCompositorStandInBodyRect(world_rect, YES, chrome.titleBarHeight)` = `(x, y + title_bar_height, w, max(h - title_bar_height, 1))`. Bar + body then cover exactly the placement's rectangle, which is what the shell culls and hit-tests with. Passing `world_rect` itself draws the stand-in 25 px too tall, its bar outside the placement. Set `pixelBuffer` and `texture` to nil (a stand-in draws no content; the renderer lets go of the buffer either way, the element only when cleared). `appName` = the app's display name, `title` = `windows[].metadata.title` (not drawn, see deviations). Its `decoration` comes from the global `[decorations]` table alone — upstream calls `effective_*(None, mode, config)` for a stand-in, no window rule — and it is never passed through `IFCompositorDecorationDrawn` (a stand-in is not subject to the coverage rule) |
 | `placements[].presentation_settled == false` | today the shell hides the surface. Here: keep the last buffer, or set `pixelBuffer = nil` to show the placeholder. Host's choice |
 | `frame.outline`, outline rects | `[output.outline]`; one `IFCompositorOutlineRect(camera, zoom, other.camera, other.size, other.zoom)` per other output |
+
+**A retained frame after a native resize.** Compare captured and native point
+sizes per axis: a difference of at most 1 pt keeps normal sizing. An undersized
+stale axis draws at its own size, anchored top-left; the placeholder fills only
+the uncovered right/bottom strips, never beneath the picture. An oversized stale
+axis crops the source at the same top-left origin instead of stretching it.
 
 **Chrome a window really wears.** Upstream gates the configured chrome on how
 the window's frame covers the output's usable area (`DrawnChrome::drawn`):

@@ -12,8 +12,8 @@ int main(int argc,char **argv) { @autoreleasepool {
     // an application a window manager adopts (a regular one, whose windows have a
     // close, a miniaturize and a resize control) and `--watchdog` gives a longer test
     // its time; neither changes which windows there are or how the helper starts.
-    int count=1,watchdog=90,level=NSNormalWindowLevel;BOOL several=NO,bad=NO,regular=NO,allSpaces=NO,floating=NO;NSString *family=@"none";NSSize contentSize=NSZeroSize;
-    while(argc>=6 && (!strcmp(argv[argc-2],"--windows") || !strcmp(argv[argc-2],"--size") || !strcmp(argv[argc-2],"--activation") || !strcmp(argv[argc-2],"--watchdog") || !strcmp(argv[argc-2],"--level") || !strcmp(argv[argc-2],"--all-spaces") || !strcmp(argv[argc-2],"--family") || !strcmp(argv[argc-2],"--floating-panel"))) {
+    int count=1,watchdog=90,level=NSNormalWindowLevel,churn=0;BOOL several=NO,bad=NO,regular=NO,allSpaces=NO,floating=NO;NSString *family=@"none";NSSize contentSize=NSZeroSize;
+    while(argc>=6 && (!strcmp(argv[argc-2],"--windows") || !strcmp(argv[argc-2],"--size") || !strcmp(argv[argc-2],"--activation") || !strcmp(argv[argc-2],"--watchdog") || !strcmp(argv[argc-2],"--level") || !strcmp(argv[argc-2],"--all-spaces") || !strcmp(argv[argc-2],"--family") || !strcmp(argv[argc-2],"--floating-panel") || !strcmp(argv[argc-2],"--churn"))) {
         if(!strcmp(argv[argc-2],"--size")){char *end=NULL,*tail=NULL;double width=strtod(argv[argc-1],&end),height=0;
             if(end==argv[argc-1]||*end!='x')bad=YES;
             else {height=strtod(end+1,&tail);if(tail==end+1||*tail||!isfinite(width)||!isfinite(height)||width<40||height<40||width>8192||height>8192)bad=YES;else contentSize=NSMakeSize(width,height);}
@@ -22,13 +22,14 @@ int main(int argc,char **argv) { @autoreleasepool {
         if(!strcmp(argv[argc-2],"--family")){family=@(argv[argc-1]);if(![@[@"none",@"popup",@"sheet",@"both"]containsObject:family])bad=YES;argc-=2;continue;}
         if(!strcmp(argv[argc-2],"--activation")){if(!strcmp(argv[argc-1],"regular"))regular=YES;else if(strcmp(argv[argc-1],"accessory"))bad=YES;argc-=2;continue;}
         if(!strcmp(argv[argc-2],"--watchdog")){watchdog=atoi(argv[argc-1]);argc-=2;continue;}
+        if(!strcmp(argv[argc-2],"--churn")){churn=atoi(argv[argc-1]);if(churn<1||churn>8)bad=YES;argc-=2;continue;}
         if(!strcmp(argv[argc-2],"--level")){char *end=NULL;long value=strtol(argv[argc-1],&end,10);if(end==argv[argc-1]||*end||value<NSNormalWindowLevel||value>NSFloatingWindowLevel+1)bad=YES;else level=(int)value;argc-=2;continue;}
         if(!strcmp(argv[argc-2],"--all-spaces")){if(!strcmp(argv[argc-1],"yes"))allSpaces=YES;else if(!strcmp(argv[argc-1],"no"))allSpaces=NO;else bad=YES;argc-=2;continue;}
         count=atoi(argv[argc-1]); // --windows, the only flag left
         several=YES;argc-=2;
     }
     BOOL popup=[family isEqual:@"popup"]||[family isEqual:@"both"],sheet=[family isEqual:@"sheet"]||[family isEqual:@"both"];
-    if((argc!=4 && argc!=5) || bad || count<1 || count+(popup?1:0)+(sheet?1:0)>16 || watchdog<1 || watchdog>900){fprintf(stderr,"usage: host payload.dylib private-runtime nonce [allowlist.json] [--windows 1..16] [--size WIDTHxHEIGHT (40..8192 points)] [--activation accessory|regular] [--watchdog 1..900] [--level 0..4] [--all-spaces yes|no] [--family none|popup|sheet|both] [--floating-panel yes|no]\n");return 2;}
+    if((argc!=4 && argc!=5) || bad || count<1 || count+churn+(popup?1:0)+(sheet?1:0)>16 || (churn&&(popup||sheet)) || watchdog<1 || watchdog>900){fprintf(stderr,"usage: host payload.dylib private-runtime nonce [allowlist.json] [--windows 1..16] [--size WIDTHxHEIGHT (40..8192 points)] [--activation accessory|regular] [--watchdog 1..900] [--level 0..4] [--all-spaces yes|no] [--family none|popup|sheet|both] [--floating-panel yes|no] [--churn 1..8]\n");return 2;}
     [NSApplication sharedApplication];[NSApp setActivationPolicy:regular ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory];
     NSWindowStyleMask style=regular ? NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable : NSWindowStyleMaskTitled;
     NSMutableArray<NSWindow *> *windows=[NSMutableArray array];
@@ -57,6 +58,13 @@ int main(int argc,char **argv) { @autoreleasepool {
     // parent links, rather than these AppKit references, are what the desktop
     // must independently discover. Every child is in the helper's finite list.
     if(popup){NSWindow *root=windows[0];NSPanel *child=[[NSPanel alloc]initWithContentRect:NSMakeRect(root.frame.origin.x-70,NSMaxY(root.frame)-20,190,150) styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];child.title=@"DriftWM disposable child popup";child.level=level;child.hidesOnDeactivate=NO;if(allSpaces)child.collectionBehavior=NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorStationary|NSWindowCollectionBehaviorFullScreenAuxiliary;child.contentView.wantsLayer=YES;child.contentView.layer.backgroundColor=NSColor.systemOrangeColor.CGColor;[root addChildWindow:child ordered:NSWindowAbove];[child orderFrontRegardless];wids[count++]=(uint32_t)child.windowNumber;[windows addObject:child];}
+    // Optional churn windows (--churn K, regular windows of their own family each): in the helper's finite list from the
+    // start, shown while the helper checks its list and ordered out before READY. Each SIGUSR1 shows the next one and closes
+    // it 500 ms + 120 ms per earlier step later (500 to 1340 ms, around the time a desktop takes to adopt a new window), so
+    // a test can close windows at varied moments while frames that name them are in flight. One CHURN line per step.
+    NSMutableArray<NSWindow *> *churned=[NSMutableArray array];
+    for(int i=0;i<churn;i++){NSWindow *window=[[NSWindow alloc]initWithContentRect:NSMakeRect(120+i*30,420+i*20,260,170) styleMask:style backing:NSBackingStoreBuffered defer:NO];
+        window.releasedWhenClosed=NO;window.title=[NSString stringWithFormat:@"DriftWM disposable churn window %d",i+1];[window orderFrontRegardless];[churned addObject:window];wids[count++]=(uint32_t)window.windowNumber;}
     if(sheet){NSWindow *child=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,220,170) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];child.title=@"DriftWM disposable child sheet";child.contentView.wantsLayer=YES;child.contentView.layer.backgroundColor=NSColor.systemBlueColor.CGColor;[windows[0]beginSheet:child completionHandler:nil];wids[count++]=(uint32_t)child.windowNumber;[windows addObject:child];}
     [NSApp finishLaunching];
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
@@ -69,9 +77,18 @@ int main(int argc,char **argv) { @autoreleasepool {
     int (*start)(const char *,const char *,const uint32_t *,uint32_t,const char *)=dlsym(handle,popup||sheet?"dw_privileged_fixture_start_family_windows":"dw_privileged_fixture_start_windows");
     if(start)status=start(argv[2],argv[3],wids,(uint32_t)count,allowlist ? allowlist.UTF8String : NULL);
     if(status){fprintf(stderr,"helper fixture start failed: %d\n",status);return 1;}
+    for(NSWindow *window in churned)[window orderOut:nil];
+    if(churned.count)[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
     printf("READY %d",getpid());for(int i=0;i<count;i++)printf(" %u",wids[i]);printf("\n");fflush(stdout);
     // Watchdog bounds fixture lifetime even if the test runner dies. Payload restores
     // controller disconnect first; closing the process removes its own fixture window.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)watchdog*NSEC_PER_SEC),dispatch_get_main_queue(),^{[NSApp terminate:nil];});
+    __block NSUInteger next=0;dispatch_source_t shown=nil;
+    if(churned.count){signal(SIGUSR1,SIG_IGN);shown=dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL,SIGUSR1,0,dispatch_get_main_queue());
+        dispatch_source_set_event_handler(shown,^{if(next>=churned.count){printf("CHURN none left\n");fflush(stdout);return;}
+            NSWindow *window=churned[next];NSUInteger step=next++;int64_t life=(int64_t)(500+120*step);[window orderFrontRegardless];
+            printf("CHURN %lu shown %u life_ms %lld\n",(unsigned long)step,(uint32_t)window.windowNumber,life);fflush(stdout);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,life*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[window close];printf("CHURN %lu closed %u\n",(unsigned long)step,(uint32_t)window.windowNumber);fflush(stdout);});});
+        dispatch_resume(shown);}
     [NSApp run];return 0;
 } }

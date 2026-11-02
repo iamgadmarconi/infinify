@@ -57,13 +57,17 @@ The cooperative host accepts:
 host ABS_PAYLOAD PRIVATE_RUNTIME NONCE64HEX [ALLOWLIST_JSON_FILE]
      [--windows N] [--size WIDTHxHEIGHT] [--activation accessory|regular]
      [--watchdog SECONDS] [--level 0..4] [--all-spaces yes|no]
-     [--family popup|sheet|both|none] [--floating-panel yes|no]
+     [--family popup|sheet|both|none] [--floating-panel yes|no] [--churn 1..8]
 ```
 
 The runtime must already be a current-user-owned directory with mode 0700. Keep
 its path short: `RUNTIME/v2.sock` must fit macOS's Unix socket path limit. The host
 creates 1..16 windows, with a 90-second watchdog (`--watchdog` takes 1..900 seconds).
 Optional family children count toward that limit and are all listed explicitly.
+`--churn K` (not with `--family`) adds K listed windows that are shown while the
+helper checks its list and ordered out before `READY`; each `SIGUSR1` shows the
+next one and closes it 500 ms + 120 ms per earlier step later, with one `CHURN`
+line per step (`tests/e2e/native-snapshot-race.sh`).
 Capability bit 3 identifies this finite native-family fixture mode; it expands no
 process or window authority. The level, size and Space options apply only to the newly
 created fixture windows. `READY` is printed only after the v2 listener binds and

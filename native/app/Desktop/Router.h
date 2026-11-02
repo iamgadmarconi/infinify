@@ -11,7 +11,12 @@
 @property pid_t pid;
 @property uint32_t wid;
 @property NSArray *processBirth;
+// The window's frame as the window list gives it (kCGWindowBounds). Every assignment goes through the setter, which also
+// caches the decoded native size, so per-frame readers (the compositor source) never decode the dictionary.
 @property NSDictionary *bounds;
+// bounds' size as CGRectMakeWithDictionaryRepresentation decodes it when bounds was set; CGSizeZero for nil or a dictionary
+// that does not decode. Updated together with bounds, under one lock.
+@property (readonly) CGSize nativeSize;
 @property CGEventSourceRef eventSource;
 @property int64_t tag;
 @property void (*privatePost)(pid_t,CGEventRef);

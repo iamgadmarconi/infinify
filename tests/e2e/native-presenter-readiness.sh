@@ -12,3 +12,8 @@ xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werr
   -framework AppKit -framework ApplicationServices -framework Security \
   -o "$task_dir/native-presenter-readiness"
 "$task_dir/native-presenter-readiness"
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  tests/native/app/CompositorMode/DWNativePresenterFrameLimitTests.m \
+  -framework AppKit -framework ApplicationServices -framework Security \
+  -o "$task_dir/native-presenter-frame-limit"
+"$task_dir/native-presenter-frame-limit"

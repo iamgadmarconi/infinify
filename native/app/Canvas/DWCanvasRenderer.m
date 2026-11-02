@@ -171,8 +171,9 @@ double DWCanvasRendererTime(void) { static CFTimeInterval start;static dispatch_
 }
 // The live picture of one window element, or none.
 - (void)content:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)placement {
-    DWCanvasContent content=self.source?self.source(window,placement):(DWCanvasContent){NULL,0,CGRectNull};
+    DWCanvasContent content=self.source?self.source(window,placement):(DWCanvasContent){NULL,0,CGRectNull,CGSizeZero,CGSizeZero};
     element.pixelBuffer=content.buffer;element.contentGeneration=content.buffer?content.generation:0;element.contentRect=content.buffer?content.rect:CGRectNull;
+    element.contentPointSize=content.buffer?content.pointSize:CGSizeZero;element.nativePointSize=content.buffer?content.nativeSize:CGSizeZero;
 }
 // Is the window of this placement, or of this entry of the window list, screen-pinned?
 // A placement says so with a boolean, a window entry with its pin ({output, screen_rect}).
@@ -199,7 +200,7 @@ double DWCanvasRendererTime(void) { static CFTimeInterval start;static dispatch_
     element.focused=[DWTyped(p[@"focused"],NSNumber.class)boolValue];
     element.decoration=decorationOf(DWTyped(p[@"decoration"],NSDictionary.class),self.chrome.cornerRadius);
     element.appName=app;element.launching=[DWTyped(p[@"launching"],NSNumber.class)boolValue];
-    if(standin){element.title=title;element.rect=IFCompositorStandInBodyRect(world,YES,self.chrome.titleBarHeight);element.pixelBuffer=NULL;element.texture=nil;element.contentGeneration=0;element.contentRect=CGRectNull;return YES;}
+    if(standin){element.title=title;element.rect=IFCompositorStandInBodyRect(world,YES,self.chrome.titleBarHeight);element.pixelBuffer=NULL;element.texture=nil;element.contentGeneration=0;element.contentRect=CGRectNull;element.contentPointSize=CGSizeZero;element.nativePointSize=CGSizeZero;return YES;}
     // A server title bar shows the title, else the application's name, as upstream falls back to the app id.
     element.title=title.length?title:app?:@"";element.rect=world;
     [self content:element window:window placement:p];

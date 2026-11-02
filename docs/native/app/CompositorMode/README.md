@@ -41,7 +41,13 @@ path. An independent WindowServer connection checks transforms and alpha before
 and after recovery; a second disposable process checks that the scope excludes
 its windows. Children are removed on every exit.
 
-Under `--only-pid`, the scoped native tests also set `INFINIFY_DEBUG_TEST_PANEL=1` and, with native presentation, `INFINIFY_DEBUG_NATIVE_PANEL=1` (and `INFINIFY_DEBUG_NATIVE_VIEWS=2` with `--debug-pointer` to split the one test panel into two views): the test's canvas panel then stays visible at the floating level, ignores mouse events outside native presentation and keeps ordinary canvas input for its replica destinations inside it. These switches are read in `Desktop+Rendering.m` only with `--only-pid`; none is set in a normal run.
+Under `--only-pid`, the scoped native tests also set `INFINIFY_DEBUG_TEST_PANEL=1` and, with native presentation, `INFINIFY_DEBUG_NATIVE_PANEL=1` (and `INFINIFY_DEBUG_NATIVE_VIEWS=2` with `--debug-pointer` to split the one test panel into two views): the test's canvas panel then stays visible at the floating level, ignores mouse events outside native presentation and keeps ordinary canvas input for its replica destinations inside it. Those panel/view switches are read in `Desktop+Rendering.m` only with `--only-pid`; none is set in a normal run.
+
+`INFINIFY_DEBUG_NATIVE_MAX_RECORDS=N`, read in `DWNativePresenter+Frames.m`,
+requires an explicit PID scope and `INFINIFY_DEBUG`. It parses a positive integer
+once per process, on the first eligible multi-record frame, and only lowers the
+helper's record limit; it cannot raise it. `tests/e2e/native-frame-cap.sh
+--live-guest` uses it on the cooperative host in a disposable guest.
 
 The whole-desktop form of this presentation, compositor mode of the Dock helper, is described in [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md): one independent view per display, the arrival veil, dragging, resizing and context menus of a transformed window, drags between windows, popups, session and sleep, quit and restore, and its known limits.
 

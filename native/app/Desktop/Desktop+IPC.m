@@ -189,7 +189,7 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
 - (NSData *)debugInput {
     return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugInput":@{@"pressed_mouse_buttons":@(NSEvent.pressedMouseButtons),@"hid_buttons":@(DWPhysicalMouseButtons()),
         @"combined_left":@(CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,kCGMouseButtonLeft)),@"native_press":@(self.globalTrackpad.hasNativeMousePress),
-        @"global_tap_running":@(self.globalTrackpad.running),@"refusal":[self buttonRefusal]?:NSNull.null}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
+        @"global_tap_running":@(self.globalTrackpad.running),@"refusal":[self buttonRefusal]?:NSNull.null,@"keys":[self keyState]}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
 }
 - (NSData *)debugCapture:(NSDictionary *)request {
     NSNumber *window=DWTyped(request[@"window"],NSNumber.class);if(!window)return ipcError(@"DebugCapture needs a window id");

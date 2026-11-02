@@ -11,3 +11,7 @@ xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werr
   tests/native/app/Windows/DWWindowEventsTests.m -framework AppKit -framework ApplicationServices \
   -o "$task_dir/window-events"
 "$task_dir/window-events"
+xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
+  tests/native/app/Windows/DWWindowEventsQueueTests.m -framework AppKit -framework ApplicationServices \
+  -o "$task_dir/window-events-queue"
+"$task_dir/window-events-queue"

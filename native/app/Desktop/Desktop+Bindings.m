@@ -50,13 +50,27 @@ static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
 // A normal run's global hot keys: the config's bindings, then the exit chord unless one
 // of them claimed it. Windowed mode registers none. Returns the chords macOS refused.
 // The config's tap bindings are watched for exactly as long as its keys are registered.
+// System-owned keys (DWHotKeys' session key filter: Command-Tab, Mission Control, the stand-in Return, native window
+// controls) are taken only while a canvas panel exists. Without one -- every display lost at runtime -- only Infinify's
+// own Carbon chords, the exit chord and the tap watch run, so quitting by key still works and nothing of macOS's is held.
 - (NSArray<NSString *> *)startKeys {
     if(self.windowed)return @[];
-    NSArray<NSString *> *refused=[self.hotKeys start];if(![self.hotKeys holds:exitChord()])[self configureExitKey];
-    [self.tapKeys start];
+    BOOL system=self.panels.count!=0;
+    NSArray<NSString *> *refused=[self.hotKeys start:system];if(![self.hotKeys holds:exitChord()])[self configureExitKey];
+    [self.tapKeys start];self.keysRunning=YES;
+    if(DWDebugTrace()){NSDictionary *keys=[self keyState];fprintf(stderr,"debug: keys started panels=%lu system_filter=%d carbon=%lu exit_chord=%d quit=%d\n",(unsigned long)self.panels.count,[keys[@"system_filter"]boolValue],[keys[@"carbon_registered"]unsignedLongValue],[keys[@"exit_chord"]boolValue],[keys[@"quit"]boolValue]);}
     return refused;
 }
-- (void)stopKeys { [self.hotKeys stop];[self.tapKeys stop];[self stopExitKey]; }
+- (void)stopKeys {
+    BOOL running=self.keysRunning;[self.hotKeys stop];[self.tapKeys stop];[self stopExitKey];self.keysRunning=NO;
+    if(running&&DWDebugTrace())fprintf(stderr,"debug: keys stopped\n");
+}
+// What is registered now, for INFINIFY_DEBUG's DebugInput and key lines: registration state, not a delivered press.
+- (NSDictionary *)keyState {
+    NSArray<NSString *> *actions=self.hotKeys.registeredActions?:@[];
+    return @{@"running":@(self.keysRunning),@"panels":@(self.panels.count),@"system_filter":@(self.hotKeys.systemFilter),@"carbon_registered":@(self.hotKeys.carbonRegistered),
+        @"exit_chord":@((BOOL)(self.exitHotkey!=NULL||(self.hotKeys.started&&[self.hotKeys holds:exitChord()]))),@"quit":@([actions containsObject:@"quit"]),@"actions":actions};
+}
 // Upstream's binding lookup for one press or scroll: physical modifiers, trigger and
 // context in; the bound gesture, or nil for none, out. The binding carries the config's
 // pointer speeds.
@@ -83,7 +97,8 @@ static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
     // A tap binding's chord, completed, goes back to the controller as it came, to be looked up and run there. The output, the pointer and the modifiers
     // still down are those of the moment, as a hot key's: the release that completes a chord of two leaves one of them held.
     if(!self.tapKeys){__weak Desktop *weak=self;self.tapKeys=[[DWTapKeys alloc]initWithFire:^(NSDictionary *tap){NSDictionary *chord=DWTyped(tap[@"modifiers"],NSDictionary.class);if(chord)[weak action:DWTyped(tap[@"action"],NSString.class) output:[weak viewOutput] at:pointer() held:[DWCycleHold modifiersDown]!=0 corner:nil tap:chord];}];}
-    BOOL open=self.panels.count!=0;if(open)[self stopKeys];
+    // Keys running without a panel (own keys only) are restarted the same way, in the same mode.
+    BOOL open=self.panels.count!=0,keyed=open||self.keysRunning;if(keyed)[self stopKeys];
     [self.hotKeys setBindings:bindings];[self.tapKeys setBindings:bindings];
     // INFINIFY_DEBUG: which key bindings run here, and so are registered as hot keys in a run that registers any, and which stay with the applications.
     if(DWDebugTrace()){NSMutableArray<NSString *> *run=[NSMutableArray array],*inert=[NSMutableArray array];
@@ -97,7 +112,7 @@ static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
     [self refreshGestureFingers];
     self.dismissFree=![self mouseBinding:@"left" source:nil flags:NSEventModifierFlagControl|NSEventModifierFlagOption window:YES];
     [self armCorners:bindings];
-    self.statusText=status;if(open)[notes addObjectsFromArray:[self startKeys]];
+    self.statusText=status;if(keyed)[notes addObjectsFromArray:[self startKeys]];
     if(open)[self render];
     // Startup, and every change of the input source, also tell the controller the layout.
     [self reportLayout];

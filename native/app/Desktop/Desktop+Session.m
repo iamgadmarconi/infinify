@@ -112,7 +112,7 @@
     if(!self.panels.count){[self openPanels];if(!self.panels.count)return;[self runAutostart];}
     for(LiveSource *source in self.sources.allValues)if(source.captureRecovering)source.captureRetryAt=CACurrentMediaTime();
     for(LiveSource *source in self.sources.allValues)if(source.nativeMinimized||source.nativeVisibilityHeld)[self requestVisibility:source];
-    BOOL screensChanged=![self.panelScreens isEqual:physicalScreens()];
+    BOOL screensChanged=![self.panelScreens isEqual:[self shownScreens]];
     if(screensChanged)[self screensChanged:nil];
     // Unmanaged canvases do not have captureDemand. Resume their
     // existing sources explicitly, using the current screens' capture rate.
@@ -236,7 +236,7 @@
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}[self.panels removeAllObjects];[self.views removeAllObjects];
     // Every compositor layer, kept pixel buffer and background program goes with the panels.
     [self.compositor reset];self.compositor=nil;self.backgroundNote=nil;
-    [self stopKeys];
+    [self stopKeys];self.canvasKeysOffered=NO;
     if(!self.sources.count)self.resize=nil;
     [self putBackWindowSettings];
 }

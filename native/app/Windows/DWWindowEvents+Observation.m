@@ -42,7 +42,7 @@ static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWO
 - (void)observe:(DWObservedApplication *)application {
     if(self.stopped||application.gone||application.busy)return;application.busy=YES;application.retry=0;application.attempts++;
     pid_t pid=application.pid;uint8_t have=application.registered;AXObserverRef existing=application.observer;if(existing)CFRetain(existing);__weak DWWindowEvents *weak=self;
-    dispatch_async(DWWindowEventsQueue(),^{
+    DWWindowEventsAsync(application.pid,^{
         uint64_t seconds=0,microseconds=0;
         if(!dw_focus_birth(pid,&seconds,&microseconds)||seconds!=application.seconds||microseconds!=application.microseconds){
             if(existing)CFRelease(existing);
@@ -82,7 +82,7 @@ static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWO
     if(self.stopped||application.gone||!application.observer||application.listing)return;application.listing=YES;application.unanswered=NO;CFSetRemoveAllValues(application.asked);
     AXObserverRef observer=(AXObserverRef)CFRetain(application.observer);AXUIElementRef element=(AXUIElementRef)CFRetain(application.element);
     CFDictionaryRef known=CFDictionaryCreateCopy(NULL,application.windows);__weak DWWindowEvents *weak=self;
-    dispatch_async(DWWindowEventsQueue(),^{
+    DWWindowEventsAsync(application.pid,^{
         NSMutableArray<DWObservedWindow *> *found=[NSMutableArray array];CFTypeRef list=NULL;AXError error=AXUIElementCopyAttributeValue(element,kAXWindowsAttribute,&list);BOOL unanswered=error==kAXErrorCannotComplete;
         if(error==kAXErrorSuccess&&list&&CFGetTypeID(list)==CFArrayGetTypeID())for(CFIndex n=0;n<CFArrayGetCount(list);n++){
             AXUIElementRef window=(AXUIElementRef)CFArrayGetValueAtIndex(list,n);if(CFGetTypeID(window)!=AXUIElementGetTypeID()||CFDictionaryContainsKey(known,window))continue;
@@ -98,7 +98,7 @@ static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWO
     // Elements that turned out to be no window stay here so that none is asked about twice; an application that keeps making them starts over.
     if(CFSetGetCount(application.asked)>=256)CFSetRemoveAllValues(application.asked);
     CFSetAddValue(application.asked,element);AXObserverRef observer=(AXObserverRef)CFRetain(application.observer);CFRetain(element);__weak DWWindowEvents *weak=self;
-    dispatch_async(DWWindowEventsQueue(),^{
+    DWWindowEventsAsync(application.pid,^{
         BOOL unanswered=NO;DWObservedWindow *watched=watch(observer,element,application,&unanswered);
         dispatch_async(dispatch_get_main_queue(),^{
             if(watched)[weak watched:@[watched] application:application];
@@ -121,21 +121,27 @@ static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWO
     }
 }
 // yabai's window_unobserve, off the main thread: a window's own notifications go with the window.
-- (void)unwatch:(DWObservedWindow *)window observer:(AXObserverRef)observer {
+- (void)unwatch:(DWObservedWindow *)window observer:(AXObserverRef)observer pid:(pid_t)pid {
     uint8_t mask=window.registered;if(!observer||!mask)return;window.registered=0;CFRetain(observer);AXUIElementRef element=(AXUIElementRef)CFRetain(window.element);
-    dispatch_async(DWWindowEventsQueue(),^{for(int i=0;i<windowCount;i++)if(mask&(1<<i))AXObserverRemoveNotification(observer,element,windowNotifications[i]);CFRelease(observer);CFRelease(element);});
+    DWWindowEventsAsync(pid,^{for(int i=0;i<windowCount;i++)if(mask&(1<<i))AXObserverRemoveNotification(observer,element,windowNotifications[i]);CFRelease(observer);CFRelease(element);});
 }
 // yabai's application_unobserve: the observer leaves the run loop here, on the main thread, so no notification arrives after
 // this line and every context it was given can go. An application that goes on running is told so, off the main thread; one
 // that ended (`ended`) has nothing left to tell.
 - (void)remove:(pid_t)pid ended:(BOOL)ended {
     DWObservedApplication *application=self.applications[@(pid)];if(!application)return;
-    application.gone=YES;application.retry=0;[self.applications removeObjectForKey:@(pid)];
+    [self.applications removeObjectForKey:@(pid)];
     for(NSNumber *key in self.sent.allKeys)if((pid_t)(key.unsignedLongLongValue>>32)==pid){[self.sent removeObjectForKey:key];[self.owed removeObject:key];[self.moveOnly removeObject:key];}
+    DWWindowEventsUnobserve(application,ended);
+}
+// The part of -remove:ended: that needs no instance, so an off-main -dealloc can hand it to main as well. Main only.
+void DWWindowEventsUnobserve(DWObservedApplication *application,BOOL ended) {
+    NSCAssert(NSThread.isMainThread,@"Observers leave the main run loop on main");
+    application.gone=YES;application.retry=0;
     AXObserverRef observer=application.observer;if(!observer)return;application.observer=NULL;
     CFRunLoopSourceRef source=AXObserverGetRunLoopSource(observer);CFRunLoopRemoveSource(CFRunLoopGetMain(),source,kCFRunLoopCommonModes);CFRunLoopSourceInvalidate(source);
     AXUIElementRef element=ended?NULL:(AXUIElementRef)CFRetain(application.element);uint8_t mask=application.registered;NSArray<DWObservedWindow *> *windows=ended?nil:[application.contexts copy];
-    dispatch_async(DWWindowEventsQueue(),^{
+    DWWindowEventsAsync(application.pid,^{
         if(element){
             for(int i=0;i<applicationCount;i++)if(mask&(1<<i))AXObserverRemoveNotification(observer,element,applicationNotifications[i]);
             for(DWObservedWindow *window in windows)for(int i=0;i<windowCount;i++)if(window.registered&(1<<i))AXObserverRemoveNotification(observer,window.element,windowNotifications[i]);
@@ -158,7 +164,7 @@ static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWO
         if(window.destroyed)return;
         if(CFEqual(notification,kAXUIElementDestroyedNotification)){
             // WINDOW_DESTROYED. Reported at once, and the window is looked at once more a moment later.
-            NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;window.destroyed=now;CFDictionaryRemoveValue(application.windows,window.element);[self unwatch:window observer:application.observer];
+            NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;window.destroyed=now;CFDictionaryRemoveValue(application.windows,window.element);[self unwatch:window observer:application.observer pid:pid];
             NSNumber *key=@((uint64_t)(uint32_t)pid<<32|window.window);self.sent[key]=@(now);[self.owed addObject:key];[self.moveOnly removeObject:key];[self arm:coalesce];
             [sink windowDestroyed:window.window pid:pid];return;
         }

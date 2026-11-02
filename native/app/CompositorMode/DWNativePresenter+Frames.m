@@ -10,6 +10,7 @@
 #import "DWGeometryJSON.h"
 #import "DWNativeDisplaySpace.h"
 #import <AppKit/AppKit.h>
+#import <float.h>
 
 static CGRect DWNativeJSONRect(id value) {
     if(![value isKindOfClass:NSDictionary.class])return CGRectNull;
@@ -29,6 +30,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
 - (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
     atomic_store(&_turned,uptime());
     if(self.ended)return;
+    if(!_info.max_records){fprintf(stderr,"Infinify: native presentation ended: helper record limit is zero; restoring all windows\n");[self finish];return;}
     if(![snapshot[@"outputs"]isKindOfClass:NSArray.class]||![snapshot[@"outputs"]count]){[self invalidatePlacementReadiness];_desiredPlacements=@{};_described=NO;return;}
     // One placement per window: where it is shown on several outputs, the one that shows most of it. A transform has one target.
     NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *shown=[NSMutableDictionary dictionary];
@@ -55,7 +57,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
     for(NSNumber *logical in identities){NSNumber *wid=identities[logical][@"wid"];DWNativeWindow *root=_windows[wid];if(!root||root->root!=wid.unsignedIntValue)continue;for(NSNumber *member in _families[wid]?:[NSSet setWithObject:wid])if(_windows[member])logicals[member]=logical;}
     [_records setLength:0];NSMutableArray<NSNumber *> *order=[NSMutableArray array];
     NSMutableDictionary<NSNumber *,DWNativePlacementDescription *> *desired=[NSMutableDictionary dictionary];
-    NSMutableDictionary<NSNumber *,NSMutableData *> *memberData=[NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *,NSMutableData *> *memberData=[NSMutableDictionary dictionary];NSMutableSet<NSNumber *> *parking=[NSMutableSet set];
     for(NSNumber *logical in placed){
         NSDictionary *p=placed[logical],*source=[p[@"source"]isKindOfClass:NSDictionary.class]?p[@"source"]:nil;
         uint64_t identifier=0,generation=0,output=0;CGRect screen=DWNativeJSONRect(p[@"screen_rect"]),clip=DWNativeJSONRect(p[@"clip_rect"]);
@@ -127,6 +129,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
                 }
             }
         }
+        if(!nativePlaced)[parking addObject:logicals[wid]];
         // INFINIFY_DEBUG: one line when a window starts or stops being parked, and why, so a window that vanishes is explained.
         if(getenv("INFINIFY_DEBUG")){
             static NSMutableSet *parkedWindows;if(!parkedWindows)parkedWindows=[NSMutableSet set];
@@ -153,8 +156,9 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
     const struct dw2_record *described=_records.bytes;uint64_t *spaces=spaceRequests.mutableBytes;
     for(NSUInteger i=0;i<_records.length/sizeof(*described);i++)spaces[i]=[windowSpaces[@(described[i].id.wid)]unsignedLongLongValue];
     _recordSpaces=spaceRequests.copy;
-    for(NSNumber *logical in desired){
+    for(NSNumber *logical in desired.allKeys){
         DWNativePlacementDescription *description=desired[logical];NSMutableData *data=memberData[logical];
+        if(!data.length){[desired removeObjectForKey:logical];continue;}
         NSDictionary *placement=placed[logical];
         // Apply the pin policy only after every member has a valid placement.
         // Parking, hidden transitions and ordinary frames omit the bit, asking
@@ -169,18 +173,91 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
         }
         description->members=data.copy;
     }
+    // Select complete logical families, not a prefix of the records. Keep the
+    // original order and remap placement receipt indices to the selected frame.
+    NSUInteger limit=_info.max_records,total=_records.length/sizeof(struct dw2_record);
+    if(total>1&&_scope&&getenv("INFINIFY_DEBUG")){
+        static NSUInteger debugLimit;static dispatch_once_t once;
+        dispatch_once(&once,^{const char *value=getenv("INFINIFY_DEBUG_NATIVE_MAX_RECORDS");
+            if(value&&*value>='0'&&*value<='9'){char *end=NULL;unsigned long n=strtoul(value,&end,10);if(!*end&&n>0&&n<=UINT32_MAX)debugLimit=n;}});
+        if(debugLimit&&debugLimit<limit)limit=debugLimit;
+    }
+    if(total>limit){
+        const struct dw2_record *candidates=_records.bytes,*sent=_sent.bytes;const uint64_t *candidateSpaces=_recordSpaces.bytes,*sentSpaces=_sentSpaces.bytes;
+        NSMutableDictionary<NSNumber *,NSNumber *> *sentIndices=[NSMutableDictionary dictionary];
+        for(NSUInteger i=0;i<_sent.length/sizeof(*sent);i++)sentIndices[@(sent[i].id.wid)]=@(i);
+        // Restore keys are not logical ids: even a released, never-placed CGWindowID
+        // must not join a live family that happens to have that world window number.
+        NSMutableDictionary<NSString *,NSMutableIndexSet *> *groups=[NSMutableDictionary dictionary];
+        for(NSUInteger i=0;i<total;i++){
+            NSString *key=candidates[i].flags&DW2_RECORD_RESTORE?[NSString stringWithFormat:@"restore:%u",candidates[i].id.wid]:[NSString stringWithFormat:@"window:%@",order[i]];
+            if(!groups[key])groups[key]=[NSMutableIndexSet indexSet];[groups[key]addIndex:i];
+        }
+        NSDictionary *focus=[snapshot[@"focus"]isKindOfClass:NSDictionary.class]?snapshot[@"focus"]:@{};
+        NSDictionary *resize=[snapshot[@"native_resize"]isKindOfClass:NSDictionary.class]?snapshot[@"native_resize"]:@{};
+        NSDictionary *effect=[resize[@"pending_effect"]isKindOfClass:NSDictionary.class]?resize[@"pending_effect"]:@{};
+        NSNumber *intent=[focus[@"intent"]isKindOfClass:NSNumber.class]?focus[@"intent"]:nil;
+        NSNumber *enter=[effect[@"window"]isKindOfClass:NSNumber.class]?effect[@"window"]:nil;
+        NSMutableDictionary<NSString *,NSArray<NSNumber *> *> *ranks=[NSMutableDictionary dictionary];
+        for(NSString *key in groups){
+            NSIndexSet *group=groups[key];NSNumber *logical=order[group.firstIndex];BOOL restore=NO,changed=NO,withheld=NO;
+            for(NSUInteger i=group.firstIndex;i!=NSNotFound;i=[group indexGreaterThanIndex:i]){
+                const struct dw2_record *record=&candidates[i];restore|=(record->flags&DW2_RECORD_RESTORE)!=0;
+                DWNativeWindow *window=_windows[@(record->id.wid)];if(window&&_withheld[@(window->root)])withheld=YES;
+                NSNumber *prior=sentIndices[@(record->id.wid)];NSUInteger index=prior.unsignedIntegerValue;
+                if(!prior||memcmp(record,&sent[index],sizeof(*record))||candidateSpaces[i]!=(index<_sentSpaces.length/sizeof(*sentSpaces)?sentSpaces[index]:0))changed=YES;
+            }
+            BOOL focused=!restore&&([logical isEqual:enter]||[logical isEqual:intent]);
+            if(focused&&group.count>limit){fprintf(stderr,"Infinify: native presentation ended: focused/enter window family %s exceeds helper record limit %lu; restoring all windows\n",logical.description.UTF8String,(unsigned long)limit);[self finish];return;}
+            // A matching last frame does not demote parking or a withheld phase.
+            NSUInteger tier=focused?0:(restore||changed||withheld||[parking containsObject:logical]?1:2);double distance=restore?-1:DBL_MAX;
+            CGRect r=DWNativeJSONRect(placed[logical][@"screen_rect"]);
+            if(!restore&&!CGRectIsNull(r))for(NSValue *value in viewports.objectEnumerator){CGRect v=NSRectToCGRect(value.rectValue);
+                double dx=fmax(0,fmax(CGRectGetMinX(v)-CGRectGetMaxX(r),CGRectGetMinX(r)-CGRectGetMaxX(v)));
+                double dy=fmax(0,fmax(CGRectGetMinY(v)-CGRectGetMaxY(r),CGRectGetMinY(r)-CGRectGetMaxY(v)));
+                distance=fmin(distance,hypot(dx,dy));
+            }
+            ranks[key]=@[@(tier),@(distance)];
+        }
+        NSArray *ranked=[groups.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a,NSString *b){
+            NSComparisonResult tier=[ranks[a][0]compare:ranks[b][0]];if(tier!=NSOrderedSame)return tier;
+            NSComparisonResult distance=[ranks[a][1]compare:ranks[b][1]];if(distance!=NSOrderedSame)return distance;
+            return [a compare:b options:NSNumericSearch];
+        }];
+        NSMutableIndexSet *selected=[NSMutableIndexSet indexSet];NSUInteger used=0;
+        for(NSString *family in ranked){NSIndexSet *group=groups[family];
+            if(group.count<=limit-used){[selected addIndexes:group];used+=group.count;}
+            else {NSString *key=[NSString stringWithFormat:@"frame-limit:%@",family];if(![_said containsObject:key]){[_said addObject:key];fprintf(stderr,"Infinify: native presentation: window family %s omitted from a frame (helper limit %lu); left at its last native placement\n",family.UTF8String,(unsigned long)limit);}}
+        }
+        NSMutableData *records=[NSMutableData data],*spaces=[NSMutableData data];NSMutableArray *newOrder=[NSMutableArray array];
+        NSMutableDictionary<NSNumber *,NSNumber *> *indices=[NSMutableDictionary dictionary];
+        const struct dw2_record *old=_records.bytes;const uint64_t *oldSpaces=_recordSpaces.bytes;
+        for(NSUInteger i=selected.firstIndex;i!=NSNotFound;i=[selected indexGreaterThanIndex:i]){
+            indices[@(i)]=@(newOrder.count);[records appendBytes:&old[i] length:sizeof(*old)];
+            [spaces appendBytes:&oldSpaces[i] length:sizeof(*oldSpaces)];[newOrder addObject:order[i]];
+        }
+        for(NSNumber *logical in desired.allKeys){
+            DWNativePlacementDescription *description=desired[logical];NSMutableData *members=description->members.mutableCopy;
+            DWNativePlacementMember *items=members.mutableBytes;BOOL complete=YES;
+            for(NSUInteger i=0;i<members.length/sizeof(*items);i++){NSNumber *index=indices[@(items[i].index)];if(!index){complete=NO;break;}items[i].index=index.unsignedIntValue;}
+            if(!complete||!members.length)[desired removeObjectForKey:logical];else description->members=members.copy;
+        }
+        _records=records;_recordSpaces=spaces.copy;order=newOrder;
+    }
     if(![_desiredPlacements isEqualToDictionary:desired]){
         [self invalidatePlacementReadiness];_forced=YES;for(DWNativePlacementDescription *description in desired.objectEnumerator)description->binding.revision=_placementRevision;
     }
     _desiredPlacements=desired.copy;_order=order;_described=YES;
 }
 - (void)submit {
-    BOOL retry=_releases.count||atomic_load(&_retrying);
-    if(self.ended||!_described||(!_forced&&[_records isEqualToData:_sent]&&[_recordSpaces isEqualToData:_sentSpaces]&&(!retry||uptime()-_lastSent<250)))return;
+    if(self.ended||!_described)return;
     NSUInteger count=_records.length/sizeof(struct dw2_record);
-    // A frame describes every bound window except an explicitly withheld family,
-    // which has no placement receipt. Never truncate the remaining frame.
-    if(count>_info.max_records){fprintf(stderr,"Infinify: native presentation ended: %lu windows exceed the helper's frame limit of %u; restoring all windows\n",(unsigned long)count,_info.max_records);[self finish];return;}
+    // describe caps the frame by complete families, before constructing receipts.
+    if(!_info.max_records||count>_info.max_records){fprintf(stderr,"Infinify: native presentation ended: frame exceeds helper record limit %u (or limit is zero); restoring all windows\n",_info.max_records);[self finish];return;}
+    BOOL retry=atomic_load(&_retrying);
+    // A release omitted by the cap has no ACK to wait for in this frame.
+    if(_releases.count&&!retry){const struct dw2_record *records=_records.bytes;for(NSUInteger i=0;i<count;i++)if((records[i].flags&DW2_RECORD_RESTORE)&&_releases[@(records[i].id.wid)]){retry=YES;break;}}
+    if(!_forced&&[_records isEqualToData:_sent]&&[_recordSpaces isEqualToData:_sentSpaces]&&(!retry||uptime()-_lastSent<250))return;
     if(!(_info.caps&DW2_CAP_PINNED)){
         const struct dw2_record *records=_records.bytes;
         for(NSUInteger i=0;i<count;i++)if(records[i].flags&DW2_RECORD_PINNED){
@@ -216,7 +293,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
     }
     _sent=[_records copy];_sentSpaces=[_recordSpaces copy];_sentOrder=_order;_forced=NO;_lastSent=uptime();_submittedSeq=seq;
     _framePlacements[@(seq)]=_desiredPlacements;_acknowledgedPlacements=@{};_acknowledgedSequence=0;
-    if(_releases.count)for(DWNativeWindow *window in _releases.objectEnumerator)if(!window->releaseSeq)window->releaseSeq=seq;
+    if(_releases.count){const struct dw2_record *records=_records.bytes;for(NSUInteger i=0;i<count;i++)if(records[i].flags&DW2_RECORD_RESTORE){DWNativeWindow *window=_releases[@(records[i].id.wid)];if(window&&!window->releaseSeq)window->releaseSeq=seq;}}
     // A frame the next one replaced is never answered: what is kept is bounded by age.
     _frames[@(seq)]=_sent;for(NSNumber *old in _frames.allKeys)if(old.unsignedLongLongValue+64<seq){[_frames removeObjectForKey:old];[_framePlacements removeObjectForKey:old];}
 }

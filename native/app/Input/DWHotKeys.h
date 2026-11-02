@@ -44,7 +44,17 @@ typedef NS_ENUM(NSUInteger, DWNativeWindowControl) {
 // Display chords bound to one action, as "⌃⌥A".
 - (NSArray<NSString *> *)chords:(NSString *)action;
 // Registers every key that is not passed; system shortcut filters end on -stop; returns one line per chord macOS refused. No-op while started.
+// -start is -start:YES.
 - (NSArray<NSString *> *)start;
+// system NO: only Infinify's own Carbon chords. No session key filter is installed, so Command-Tab, Mission Control (F3 and
+// its top-row alias), an unbound Return for a stand-in and the native window controls all stay with macOS, and the
+// system-owned chords are not registered with Carbon either (nor reported refused). For a desktop with no canvas panel.
+- (NSArray<NSString *> *)start:(BOOL)system;
+// What -start installed, for diagnostics: a handler is installed; the session key filter is; the Carbon hot keys registered
+// now; and the actions those registered keys (Carbon or filter) run, in key order.
+@property (readonly) BOOL started, systemFilter;
+@property (readonly) NSUInteger carbonRegistered;
+@property (readonly) NSArray<NSString *> *registeredActions;
 // DriftWM's pass_keys: what the focused window's rule passes, as the controller's
 // snapshot says it: true for every key, an array of "combo" strings for those keys,
 // anything else for none. A passed key is not a hot key while it is passed, so macOS

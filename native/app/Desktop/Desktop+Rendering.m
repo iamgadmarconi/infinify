@@ -273,9 +273,11 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     if(self.compositor||self.cleaning)return self.compositor;
     __weak Desktop *weak=self;
     self.compositor=[[DWCanvasRenderer alloc]initWithSource:^DWCanvasContent(NSNumber *window,NSDictionary *placement){
-        LiveSource *source=weak.exportSources[window]?:weak.sources[window];DWCanvasContent none={NULL,0,CGRectNull};
+        LiveSource *source=weak.exportSources[window]?:weak.sources[window];DWCanvasContent none={NULL,0,CGRectNull,CGSizeZero,CGSizeZero};
         if(!source||source.detached||!source.pixels||(source.nativeReplica&&source.error))return none;
-        (void)placement;return (DWCanvasContent){source.pixels,source.frames,source.contentRect};
+        // The native size Router caches whenever router.bounds is set: no per-window decode per frame.
+        Router *router=source.router;CGSize native=router?router.nativeSize:CGSizeZero;
+        (void)placement;return (DWCanvasContent){source.pixels,source.frames,source.contentRect,source.contentPointSize,native};
     }];
     self.compositor.backgroundForOutput=^IFBackgroundProgram *(NSNumber *output,NSDictionary *description,IFBackgroundProgram *base){return [weak macWallpaperForOutput:output description:description base:base]?:base;};
     [self watchMacWallpapers];
@@ -377,8 +379,57 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(desktop)panel.collectionBehavior=NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorStationary|NSWindowCollectionBehaviorIgnoresCycle|NSWindowCollectionBehaviorFullScreenAuxiliary;
     [self.panels addObject:panel];[self.views addObject:view];[panel orderFrontRegardless];return view;
 }
+// INFINIFY_DEBUG_HIDE_SCREENS, a debug-only seam (read once, and only with INFINIFY_DEBUG): openPanels, and the
+// screen-change comparison that decides whether panels are rebuilt, see an AppKit screen list with no screen during the
+// given windows, in seconds after the process's first -openPanels. "N" is 0-N; "A-B[,C-D...]" (up to four windows,
+// increasing, 0 <= A < B <= 3600) hides them from A to B. Each boundary processes a screen change, so a window that starts
+// after 0 is a runtime loss of every display and its end the displays' return. Nothing else (the native presenter, the
+// pointer, other screen readers) is affected; malformed values are ignored with one debug line.
+enum { DWHiddenScreenWindows=4 };
+typedef struct { NSUInteger count;CFTimeInterval from[DWHiddenScreenWindows],until[DWHiddenScreenWindows]; } DWHiddenScreens;
+static DWHiddenScreens *hiddenScreens(void) {
+    static DWHiddenScreens windows;static dispatch_once_t once;
+    dispatch_once(&once,^{
+        const char *value=getenv("INFINIFY_DEBUG_HIDE_SCREENS");if(!DWDebugTrace()||!value)return;
+        CFTimeInterval now=CACurrentMediaTime(),last=-1;DWHiddenScreens parsed={0};const char *at=value;BOOL bad=!*at;
+        while(!bad&&*at){
+            char *end=NULL;double a=strtod(at,&end),b;if(end==at||!isfinite(a)){bad=YES;break;}
+            if(*end=='-'){const char *rest=end+1;b=strtod(rest,&end);if(end==rest||!isfinite(b)){bad=YES;break;}}else {b=a;a=0;}
+            if(a<0||b<=a||b>3600||a<last||parsed.count==DWHiddenScreenWindows){bad=YES;break;}
+            parsed.from[parsed.count]=now+a;parsed.until[parsed.count]=now+b;parsed.count++;last=b;
+            if(*end==','){at=end+1;if(!*at)bad=YES;}else if(*end){bad=YES;}else at=end;
+        }
+        if(bad){fprintf(stderr,"debug: INFINIFY_DEBUG_HIDE_SCREENS=%s ignored: want N or A-B[,C-D...] seconds, increasing, at most four windows, within 3600\n",value);return;}
+        windows=parsed;
+        for(NSUInteger i=0;i<windows.count;i++)fprintf(stderr,"debug: INFINIFY_DEBUG_HIDE_SCREENS: AppKit screens hidden from openPanels from +%.3f s to +%.3f s\n",windows.from[i]-now,windows.until[i]-now);
+    });
+    return &windows;
+}
+static BOOL screensHidden(void) {
+    DWHiddenScreens *windows=hiddenScreens();CFTimeInterval now=CACurrentMediaTime();
+    for(NSUInteger i=0;i<windows->count;i++)if(now>=windows->from[i]&&now<windows->until[i])return YES;
+    return NO;
+}
+// The AppKit screens openPanels builds panels on: NSScreen.screens, or none while INFINIFY_DEBUG_HIDE_SCREENS hides them.
+- (NSArray<NSScreen *> *)appKitScreens { return screensHidden()?@[]:NSScreen.screens; }
+// physicalScreens() of those screens: what panelScreens records and a screen change is compared with. A windowed canvas
+// always sees the real ones; the seam is the desktop's.
+- (NSDictionary *)shownScreens { return !self.windowed&&screensHidden()?@{@"displays":@{},@"top":@0}:physicalScreens(); }
+// Each boundary of a hidden window is a screen change, as AppKit's notification would be. Armed once, at the first openPanels.
+- (void)armHiddenScreens {
+    DWHiddenScreens *windows=hiddenScreens();__weak Desktop *weak=self;CFTimeInterval now=CACurrentMediaTime();
+    for(NSUInteger i=0;i<windows->count;i++)for(int edge=0;edge<2;edge++){
+        CFTimeInterval at=edge?windows->until[i]:windows->from[i];if(at<=now)continue;BOOL hiding=!edge;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)((at-now)*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            Desktop *d=weak;if(!d||d.cleaning)return;
+            fprintf(stderr,"debug: INFINIFY_DEBUG_HIDE_SCREENS: screens %s; processing a screen change (panels=%lu)\n",hiding?"hidden":"shown again",(unsigned long)d.panels.count);
+            [d screensChanged:nil];
+        });
+    }
+}
 - (void)openPanels {
     if(self.panels.count)return;self.cleaning=NO;
+    {static dispatch_once_t armed;dispatch_once(&armed,^{[self armHiddenScreens];});}
     // Notifications cannot report sleep that preceded this process. Establish
     // current admission before outputs, input, discovery or autostart exist;
     // unlike a departure, this unopened canvas has nothing to drain or save.
@@ -405,14 +456,23 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
             else [self panel:frame outputRects:@[DWRectJSON(canvas)] identities:@[@"windowed"]];}}
     // The desktop canvas still covers the whole display; fit/fullscreen geometry
     // excludes its menu/notch band, while the Dock draws over the panel.
-    else for(NSScreen *screen in NSScreen.screens){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;[self panel:screen.frame outputRects:@[DWRectJSON(topRect(screen.frame))] identities:@[name]];}
-    self.panelScreens=physicalScreens();
+    else for(NSScreen *screen in [self appKitScreens]){NSNumber *display=screen.deviceDescription[@"NSScreenNumber"];CFUUIDRef uuid=CGDisplayCreateUUIDFromDisplayID(display.unsignedIntValue);NSString *name=uuid?CFBridgingRelease(CFUUIDCreateString(NULL,uuid)):nil;if(uuid)CFRelease(uuid);if(!name)continue;[self panel:screen.frame outputRects:@[DWRectJSON(topRect(screen.frame))] identities:@[name]];}
+    self.panelScreens=[self shownScreens];
+    // CoreGraphics can admit the session before AppKit has a screen. Keep the scene until a panel opens, and leave input alone until then.
+    // A canvas that already had panels (every display lost at runtime) keeps Infinify's own chords, quit and the exit chord
+    // among them; -startKeys takes no system-owned key without a panel. A launch that never had one registers nothing yet.
+    if(!self.windowed&&!self.panels.count){self.sessionAwaitingCanvas=YES;
+        if(DWDebugTrace())fprintf(stderr,"debug: openPanels: no AppKit screen; canvas waits for a display (keys %s)\n",self.canvasKeysOffered?"own only":"none");
+        if(self.canvasKeysOffered&&!self.keysRunning)for(NSString *line in [self startKeys])[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];
+        return;}
     if(self.panels.count)self.sessionAwaitingCanvas=NO;
     // Every display that exists is registered now. A screen change and Return to desktop remove them all first, so only here can the controller
     // tell a display that is gone from one that came straight back: a pin whose own display is missing moves to one that is there.
     if([DWTyped([self call:@{@"op":@"outputs_settled"}][@"dirty"],NSNumber.class)boolValue])self.sceneDirty=YES;
     // Windowed mode registers no global hot key: pointer and IPC only.
-    NSArray<NSString *> *refused=[self startKeys];if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];
+    // Own-only keys of a canvas that waited without a panel give way to the full set now that one exists.
+    if(self.keysRunning)[self stopKeys];
+    NSArray<NSString *> *refused=[self startKeys];self.canvasKeysOffered=YES;if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];
     // The status note names one: every chord macOS refused is named on stderr, as a reload names them.
     for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];
     [self configureResize];[self configureNavigation];
@@ -449,7 +509,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     // The desktop is rebuilt from no panel as well: its displays may all have gone for a moment (asleep, unplugged), and it is there again when one is.
     // Never while it is being closed: -cleanup handles events while it waits, and a display change then must not reopen what it is closing.
     (void)notification;if(self.cleaning||self.sessionInactive||!(self.panels.count||self.desktopUp))return;
-    if([self.panelScreens isEqual:physicalScreens()]){[self refreshOutputUsableAreas];[self refreshMacWallpapers];return;}
+    if([self.panelScreens isEqual:[self shownScreens]]){[self refreshOutputUsableAreas];[self refreshMacWallpapers];return;}
     [self cancelCapturedInputForWindow:nil];
     // Observations and physical mouse pairs belong to the old display basis.
     // A fresh read still updates native bounds and size after the rebuild; it

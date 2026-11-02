@@ -297,6 +297,43 @@ typedef struct IFCompositorTransform {
     double scaleX, scaleY;
 } IFCompositorTransform;
 
+/// A retained frame is stale when its own point size is more than a point off the window's native size: closer than that
+/// is rounding of the crop or the stream's content scale, and takes the unchanged full-tile path.
+static inline BOOL IFCompositorContentStale(CGSize captured, CGSize nativeSize) {
+    return isfinite(captured.width) && isfinite(captured.height) && isfinite(nativeSize.width) && isfinite(nativeSize.height) &&
+        captured.width > 0 && captured.height > 0 && nativeSize.width > 0 && nativeSize.height > 0 &&
+        (fabs(captured.width - nativeSize.width) > 1 || fabs(captured.height - nativeSize.height) > 1);
+}
+/// Return the visible destination fraction, clipping a stale frame at the tile edge.
+static inline CGSize IFCompositorContentFraction(CGSize captured, CGSize nativeSize) {
+    if (!IFCompositorContentStale(captured, nativeSize)) return CGSizeMake(1, 1);
+    return CGSizeMake(fabs(captured.width - nativeSize.width) > 1 ? fmin(captured.width / nativeSize.width, 1) : 1,
+                      fabs(captured.height - nativeSize.height) > 1 ? fmin(captured.height / nativeSize.height, 1) : 1);
+}
+
+/// Keep the top-left fixed and crop oversize frames rather than stretching.
+static inline CGRect IFCompositorContentDestination(CGRect tile, CGSize captured, CGSize nativeSize) {
+    CGSize fraction = IFCompositorContentFraction(captured, nativeSize);
+    tile.size.width *= fraction.width;
+    tile.size.height *= fraction.height;
+    return tile;
+}
+
+/// Crop only oversized stale axes, preserving the retained picture's pixel origin.
+static inline CGRect IFCompositorContentSource(CGRect source, CGSize captured, CGSize nativeSize) {
+    if (!IFCompositorContentStale(captured, nativeSize)) return source;
+    if (fabs(captured.width - nativeSize.width) > 1) source.size.width *= fmin(nativeSize.width / captured.width, 1);
+    if (fabs(captured.height - nativeSize.height) > 1) source.size.height *= fmin(nativeSize.height / captured.height, 1);
+    return source;
+}
+
+/// The uncovered tile minus its top-left picture: two disjoint strips, never beneath the picture.
+/// Pass the rounded destination rectangles so adjacent edges stay shared through zoom.
+static inline void IFCompositorContentBackdrop(CGRect tile, CGRect picture, CGRect *right, CGRect *bottom) {
+    *right = CGRectMake(CGRectGetMaxX(picture), tile.origin.y, fmax(CGRectGetMaxX(tile) - CGRectGetMaxX(picture), 0), tile.size.height);
+    *bottom = CGRectMake(tile.origin.x, CGRectGetMaxY(picture), picture.size.width, fmax(CGRectGetMaxY(tile) - CGRectGetMaxY(picture), 0));
+}
+
 /// One window or stand-in. A plain mutable object: the host keeps one per
 /// placement and updates it in place, so a steady frame allocates nothing.
 @interface IFCompositorElement : NSObject
@@ -344,6 +381,9 @@ typedef struct IFCompositorTransform {
 /// The sub-rectangle of the buffer that holds the window content, in buffer
 /// pixels, origin top-left. `CGRectNull` (the default) means the whole buffer.
 @property (nonatomic) CGRect contentRect;
+/// Captured and current native content sizes in points; zero disables stale-frame sizing.
+@property (nonatomic) CGSize contentPointSize;
+@property (nonatomic) CGSize nativePointSize;
 /// The content has no meaningful alpha (upstream's XRGB `NO_ALPHA` path):
 /// sampled alpha is replaced by 1.
 @property (nonatomic) BOOL contentOpaque;

@@ -26,6 +26,8 @@ static const NSInteger DWPolicyPress=9;
 @property BOOL sessionInactive;
 @property BOOL sessionAwaitingCanvas; // preserve the loaded scene until an initially blocked launch opens its outputs
 @property BOOL desktopUp; // the desktop's canvas is open, on however many displays there are: with none there it has no panel and is still open
+@property BOOL keysRunning; // -startKeys ran and -stopKeys has not since (an own-keys-only start included)
+@property BOOL canvasKeysOffered; // this canvas has opened panels and started its keys; reset when it closes (-cleanup)
 @end
 // Explicit ivars: Desktop+Bindings.m takes these two by address (&_hotkeyHandler, &_exitHotkey); an ivar that
 // only auto-synthesis creates is invisible outside Desktop.m. The properties bind to them unchanged.
@@ -267,6 +269,7 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)stopExitKey;
 - (NSArray<NSString *> *)startKeys;
 - (void)stopKeys;
+- (NSDictionary *)keyState;
 - (NSArray<NSString *> *)refreshBindings;
 @end
 // Desktop+IPC.m
@@ -301,6 +304,8 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)adoptRender:(NSDictionary *)snapshot;
 - (DesktopView *)panel:(NSRect)frame outputRects:(NSArray *)rects identities:(NSArray *)identities;
 - (void)openPanels;
+- (NSArray<NSScreen *> *)appKitScreens;
+- (NSDictionary *)shownScreens;
 - (void)refreshOutputUsableAreas;
 - (void)screensChanged:(NSNotification *)notification;
 @end

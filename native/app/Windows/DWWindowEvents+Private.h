@@ -41,9 +41,12 @@ static const CGWindowID appeared=UINT32_MAX;
 static CFStringRef const windowNotifications[]={kAXUIElementDestroyedNotification,kAXWindowMiniaturizedNotification,kAXWindowDeminiaturizedNotification};
 enum { windowCount=3 };
 enum { applicationAppeared=1, applicationChanged=2, applicationActivated=4 };
-// The two serial queues (defined in DWWindowEvents.m: each is one queue for the process).
-dispatch_queue_t DWWindowEventsQueue(void);
+// AX lanes are per PID across instances; catalog and metadata reads use their own serial queue. Main-thread lookups only.
+dispatch_queue_t DWWindowEventsQueue(pid_t pid);
+void DWWindowEventsAsync(pid_t pid,dispatch_block_t block);
 dispatch_queue_t DWWindowEventsApplicationQueue(void);
+// Takes an application's observer off the main run loop and submits its AX removals to its PID lane (DWWindowEvents+Observation.m). Main only.
+void DWWindowEventsUnobserve(DWObservedApplication *application,BOOL ended);
 @interface DWWindowEvents ()
 @property (weak) id<DWWindowEventSink> sink;
 @property NSDictionary<NSNumber *,NSArray<NSNumber *> *> *scope;
@@ -113,7 +116,7 @@ dispatch_queue_t DWWindowEventsApplicationQueue(void);
 - (void)list:(DWObservedApplication *)application;
 - (void)resolve:(AXUIElementRef)element application:(DWObservedApplication *)application;
 - (void)watched:(NSArray<DWObservedWindow *> *)found application:(DWObservedApplication *)application;
-- (void)unwatch:(DWObservedWindow *)window observer:(AXObserverRef)observer;
+- (void)unwatch:(DWObservedWindow *)window observer:(AXObserverRef)observer pid:(pid_t)pid;
 - (void)remove:(pid_t)pid ended:(BOOL)ended;
 - (void)notified:(CFStringRef)notification element:(AXUIElementRef)element application:(DWObservedApplication *)application window:(DWObservedWindow *)window;
 @end

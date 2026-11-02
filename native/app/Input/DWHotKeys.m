@@ -19,6 +19,7 @@ static NSString *keyName(UInt32 code) {
 }
 // The current layout's translation table; nil when no input source publishes one.
 static NSData *keyboardLayout(void) {
+    NSCAssert(NSThread.isMainThread,@"Keyboard layout access is main-only");
     TISInputSourceRef sources[]={TISCopyCurrentKeyboardLayoutInputSource(),TISCopyCurrentASCIICapableKeyboardLayoutInputSource()};NSData *layout=nil;
     for(int i=0;i<2;i++){CFDataRef data=sources[i]&&!layout?(CFDataRef)TISGetInputSourceProperty(sources[i],kTISPropertyUnicodeKeyLayoutData):NULL;if(data)layout=[(__bridge NSData *)data copy];if(sources[i])CFRelease(sources[i]);}
     return layout;
@@ -75,6 +76,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     NSNumber *_nativeRestoreKey,*_nativeCenterKey; // the current layout's unshifted R/C, or nil
     NSMutableIndexSet *_withheld; // keys of _keys left unregistered because they are passed
     UInt32 _down; // hot key id Carbon reported pressed and not yet released, 0 for none
+    BOOL _ownOnly; // started with -start:NO: system-owned chords are left to macOS
 }
 - (instancetype)initWithFire:(void (^)(NSString *))fire {
     if((self=[super init])){_fire=[fire copy];_keys=@[];_notes=@[];
@@ -113,8 +115,10 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
 - (NSArray<NSString *> *)chords:(NSString *)action {
     NSMutableArray *chords=[NSMutableArray array];for(NSDictionary *key in _keys)if([key[@"action"]isEqual:action])[chords addObject:[key[@"modifiers"] stringByAppendingString:key[@"key"]]];return chords;
 }
-- (NSArray<NSString *> *)start {
+- (NSArray<NSString *> *)start { return [self start:YES]; }
+- (NSArray<NSString *> *)start:(BOOL)system {
     if(_handler)return @[];
+    _ownOnly=!system;
     EventTypeSpec types[]={{kEventClassKeyboard,kEventHotKeyPressed},{kEventClassKeyboard,kEventHotKeyReleased}};
     if(InstallApplicationEventHandler(hotKeyEvent,2,types,(__bridge void *)self,&_handler)!=noErr){_handler=NULL;return _keys.count?@[@"every key binding (no hot key handler)"]:@[];}
     NSMutableArray *refused=[NSMutableArray array];_generation++;_registered=[NSMutableArray array];_withheld=[NSMutableIndexSet indexSet];
@@ -126,14 +130,15 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     // Carbon cannot reliably take system-owned Command-Tab or Mission Control.
     // A session filter owns their physical down/up pair while the desktop is open.
     // No global shortcut preferences are modified, and stopping removes the tap.
-    if((_tapKeys.count||self.standinEnter||self.nativeWindowControl)&&AXIsProcessTrusted()){
+    // Without a canvas panel (system NO) there is no filter at all: nothing of macOS's own shortcuts is taken.
+    if(system&&(_tapKeys.count||self.standinEnter||self.nativeWindowControl)&&AXIsProcessTrusted()){
         _keyTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionDefault,
             CGEventMaskBit(kCGEventKeyDown)|CGEventMaskBit(kCGEventKeyUp)|CGEventMaskBit(kCGEventFlagsChanged),reservedKeyEvent,(__bridge void *)self);
         if(_keyTap){_keySource=CFMachPortCreateRunLoopSource(NULL,_keyTap,0);
             if(_keySource)CFRunLoopAddSource(CFRunLoopGetMain(),_keySource,kCFRunLoopCommonModes);
             else {CFMachPortInvalidate(_keyTap);CFRelease(_keyTap);_keyTap=NULL;}}
     }
-    if(_tapKeys.count&&!_keyTap)[refused addObject:@"System shortcut interception unavailable; Command-Tab and Mission Control may remain with macOS"];
+    if(system&&_tapKeys.count&&!_keyTap)[refused addObject:@"System shortcut interception unavailable; Command-Tab and Mission Control may remain with macOS"];
     for(NSUInteger i=0;i<_keys.count;i++){
         // A key the focused window is passed is not registered at all: see -pass:.
         BOOL passed=[self passes:_keys[i]];if(passed)[_withheld addIndex:i];
@@ -143,10 +148,19 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
 }
 // One key's Carbon hot key, its id the key's place in _keys + 1; NULL, and a line in `refused`, when macOS will not have the chord.
 - (EventHotKeyRef)hotKey:(NSUInteger)i refused:(NSMutableArray<NSString *> *)refused {
-    if(_keyTap&&[_tapKeys containsIndex:i])return NULL;
+    // A system-owned chord is the filter's while it runs, and nobody's (macOS keeps it) in an own-keys-only start.
+    if((_keyTap||_ownOnly)&&[_tapKeys containsIndex:i])return NULL;
     NSDictionary *key=_keys[i];UInt32 chord=[key[@"chord"]unsignedIntValue];EventHotKeyID identifier={'InfB',(UInt32)i+1};EventHotKeyRef reference=NULL;
     if(RegisterEventHotKey(chord>>16,chord&chordModifiers,identifier,GetApplicationEventTarget(),0,&reference)!=noErr){reference=NULL;[refused addObject:[NSString stringWithFormat:@"%@%@ (%@)",key[@"modifiers"],key[@"key"],key[@"action"]]];}
     return reference;
+}
+- (BOOL)started { return _handler!=NULL; }
+- (BOOL)systemFilter { return _keyTap!=NULL; }
+- (NSUInteger)carbonRegistered { NSUInteger n=0;for(NSValue *reference in _registered)if(reference.pointerValue)n++;return n; }
+- (NSArray<NSString *> *)registeredActions {
+    NSMutableArray<NSString *> *actions=[NSMutableArray array];if(!_handler)return actions;
+    for(NSUInteger i=0;i<_keys.count;i++)if([self registered:i])[actions addObject:_keys[i][@"action"]];
+    return actions;
 }
 - (BOOL)registered:(NSUInteger)i {
     return i<_registered.count&&(_registered[i].pointerValue||(_keyTap&&[_tapKeys containsIndex:i]&&![_withheld containsIndex:i]));
@@ -289,7 +303,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     if(_keySource){CFRunLoopRemoveSource(CFRunLoopGetMain(),_keySource,kCFRunLoopCommonModes);CFRelease(_keySource);_keySource=NULL;}
     if(_keyTap){CFRelease(_keyTap);_keyTap=NULL;}_tapKeys=nil;_suppressedKeys=nil;
     for(NSValue *reference in _registered)if(reference.pointerValue)UnregisterEventHotKey(reference.pointerValue);
-    _registered=nil;_withheld=nil;if(_handler){RemoveEventHandler(_handler);_handler=NULL;}
+    _registered=nil;_withheld=nil;_ownOnly=NO;if(_handler){RemoveEventHandler(_handler);_handler=NULL;}
 }
 - (void)invalidate { [self stop];self.changed=nil;self.standinEnter=nil;self.nativeWindowControl=nil;[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
 - (void)dealloc { [self stop];[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }

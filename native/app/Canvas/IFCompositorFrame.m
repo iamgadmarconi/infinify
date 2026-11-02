@@ -344,6 +344,8 @@ static uint64_t IFCStringFingerprint(NSString *s) {
         IFC_MIX(h, (uint8_t)(_texture != nil));
     }
     IFCMixRect(h, _contentRect);
+    IFCMix(h, &_contentPointSize, sizeof _contentPointSize);
+    IFCMix(h, &_nativePointSize, sizeof _nativePointSize);
     IFC_MIX(h, (uint8_t)_contentOpaque);
     IFC_MIX(h, _titleFingerprint);
     IFC_MIX(h, _appNameFingerprint);

@@ -2,6 +2,18 @@
 
 How trackpad gestures reach the canvas: the touch recogniser, the MultitouchSupport source and the Dock-control guard (code in `native/app/Input`). The parity contract, [docs/parity/README.md](../../../parity/README.md), keeps what this document describes at `implemented_unverified` or below.
 
+Keyboard input-source (TIS) access is main-thread only. `NSCAssert` enforces
+this at `keyboardLayout()` in `DWHotKeys.m` and at the `DWInputSources` entry
+points `DWCurrentLayout` and `DWSwitchLayout`; these assertions remain active
+in the release app.
+
+Global keys come in two kinds (`DWHotKeys`): Carbon hot keys for ordinary
+chords, and a session key filter for system-owned keys (Command-Tab, F3 and its
+top-row Mission Control alias, the stand-in Return and the native window
+controls). `-start:NO` registers only the Carbon chords that are not
+system-owned and installs no filter; the desktop uses it while it has no canvas
+panel (docs/native/app/Desktop/README.md), so nothing of macOS's is taken then.
+
 ## Trackpad gestures
 
 Normal runs only. DriftWM is handed swipe, pinch and hold gestures by libinput and binds
