@@ -427,7 +427,7 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
         // title row, and retain their native hit areas: a secondary label's
         // role alone does not prove that clicking its surrounding UI is inert.
         id role=decorationAttribute(child,kAXRoleAttribute,NULL);
-        if(([role isEqual:(__bridge NSString *)kAXMenuButtonRole]||[role isEqual:(__bridge NSString *)kAXStaticTextRole])
+        if(([role isEqual:(__bridge NSString *)kAXMenuButtonRole]||[role isEqual:(__bridge NSString *)kAXStaticTextRole]||[role isEqual:(__bridge NSString *)kAXButtonRole])
             &&CGRectGetMinY(frame)>=fmin(CGRectGetMinY(lights),CGRectGetMinY(title))-1
             &&CGRectGetMaxY(frame)<=fmax(CGRectGetMaxY(lights),CGRectGetMaxY(title))+1){
             [excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];continue;
@@ -443,7 +443,13 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
         // path, requiring that toolbar to contain the primary title too. Its
         // exclusion list must start before the rejected content rectangles.
         if(content)return decorationToolbar(window,own,lights,title,wid,getWindow,deadline,chrome,[chromeExcluded mutableCopy],reason);
-        return decorationRejected(reason,@"no_content_boundary");
+        // A plain AppKit content view may expose no AX child at all. We still
+        // have a positively measured title/light row in a movable standard
+        // window, with every other child audited above. Own only that row,
+        // never a guessed title-bar height or any of the inaccessible content.
+        // This prevents WindowServer starting a 1:1 drag before takeover.
+        if(reason)*reason=@"accepted_title_row";
+        return @{@"region":DWRectJSON(CGRectMake(0,0,own.size.width,fmax(CGRectGetMaxY(lights),CGRectGetMaxY(title))-own.origin.y)),@"excluded":excluded};
     }
     if(reason)*reason=@"accepted";
     return @{@"region":DWRectJSON(CGRectMake(0,0,own.size.width,bottom-own.origin.y)),@"excluded":excluded};

@@ -305,6 +305,25 @@ int main(void){@autoreleasepool{
     expectApp(title,"aside: footer gap between Work and Search",100,1272);
     expectApp(title,"aside: footer Search",170,1272);
     expectApp(title,"aside: outside the window",-5,10);
+    // A plain AppKit NSView need not publish a content accessibility child.
+    // The disposable WB1 fixture exposed only its real title and three lights.
+    loadShape("0 #0 AXWindow/AXStandardWindow [300,200 600x400] acts=\n"
+        "1 #1 AXButton/AXCloseButton [308,208 16x16] acts=AXPress\n"
+        "1 #2 AXButton/AXMinimizeButton [331,208 16x16] acts=AXPress\n"
+        "1 #3 AXButton/AXFullScreenButton [354,208 16x16] acts=AXPress\n"
+        "1 #4 AXStaticText/(null) [382,208 33x16] acts=\n"
+        "ATTRS settable=1 AXCloseButton=1 AXMinimizeButton=2 AXFullScreenButton=3 AXTitleUIElement=4");
+    reason=classify(&title);expectReason(reason,@"accepted_title_row",@"plain AppKit window without AX content");
+    expectOwned(title,"plain title: middle of measured chrome row",300,18);
+    expectApp(title,"plain title: close control stays native",16,16);
+    expectApp(title,"plain title: no guessed band below observed row",300,25);
+    expectApp(title,"plain title: inaccessible content stays native",300,100);
+    [nodes[0][@"children"]addObject:@(nodes.count)];
+    [nodes addObject:[@{@"role":@"AXButton",@"frame":[NSValue valueWithRect:NSMakeRect(750,208,40,16)],@"children":@[],@"actions":@[@"AXPress"]}mutableCopy]];
+    reason=classify(&title);expectOwned(title,"plain title: sibling control does not exclude entire row",300,18);
+    expectApp(title,"plain title: sibling control stays native",465,16);
+    [unreadable addObject:@5];reason=classify(&title);check(!title,"plain title: unreadable sibling fails closed",reason);
+
     // TextEdit (standard title, document proxy, format bar and text below), window 586x488 at 242,115: unchanged.
     loadShape(DWShapeTextEdit);reason=classify(&title);
     expectReason(reason,@"accepted",@"textedit");

@@ -29,6 +29,8 @@ NS_ASSUME_NONNULL_BEGIN
 // NO refuses the request without invoking completion. The image stays visible
 // after successful animation until finish, which the caller waits to invoke until
 // the real family has been revealed and its placement acknowledged.
+// Interactive resize only: immediate frame, no animation or delayed completion.
+- (BOOL)setScreenRect:(CGRect)rect;
 - (BOOL)animateToScreenRect:(CGRect)rect completion:(void (^)(BOOL completed))completion;
 // Idempotent. Both close only this panel; neither restores the native family.
 - (void)finish;

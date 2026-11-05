@@ -76,6 +76,9 @@
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition {
     return [self transitionCurrent:transition]&&transition->phase==3&&[self isWindowWithheld:transition.identity];
 }
+- (BOOL)isTransitionHideOwned:(DWNativeHiddenRoot *)transition {
+    return [self transitionCurrent:transition]&&transition->phase==3;
+}
 - (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha {
     if(![self isTransitionHidden:transition]||!DWFiniteRect(screen)||!isfinite(alpha)||alpha<0||alpha>1)return NO;
     DWNativeWindow *root=_windows[transition.identity[@"wid"]];CGRect native=root->bounds;

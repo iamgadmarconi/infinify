@@ -130,6 +130,44 @@ undo an alpha the Dock set (a veiled window stayed at alpha 0 after `killall Doc
 
 ## Dragging, resizing and context menus of a transformed window (full-desktop Dock helper)
 
+### Outer resize margins and inaccessible AppKit content (2026-11-05)
+
+Two further admission gaps were reproduced on disposable AppKit fixtures in the
+macOS 27.0.1 guest:
+
+- Two screen points outside the top edge, the session-stage
+  `SLSFindWindowAndOwner` hit named the canvas, but the annotated event named the
+  native window. Neither route claimed the border, so AppKit resized natively
+  while presentation rewrote its transform. At zoom 0.5 the dragged edge reversed
+  direction five times, by hundreds of points. The early route now asks the
+  controller for a border when the recipient is this view's exact canvas panel.
+  It retains source identity/process-birth, geometry, output-owner and final
+  recipient/generation checks; other windows, children and panels remain occluders.
+- A standard titled AppKit window with no accessible content child was rejected
+  as `no_content_boundary`. Its title drag briefly became 1:1 before takeover.
+  With all children audited and real title/traffic-light geometry present, the
+  classifier now accepts only the measured title row, excluding controls. It
+  does not infer a title-bar height or claim inaccessible content below that row.
+
+`sh tests/e2e/native-chrome-input.sh` exercises the actual early consumer and
+tap-pair handling with substituted controller/native reads (22 checks).
+`sh tests/e2e/native-decorations.sh` covers the classifier (187 checks).
+
+Real-HID replays against the Dock helper passed for all four edges at zoom 0.5,
+top at zoom 1, and moves at zoom 0.25, 0.5 and 0.75. Repeating the original
+1560×640 native-window top resize produced zero dragged-edge reversals; the
+title move at zoom 0.5 moved by (180, 60) screen points with zero sampled scale
+changes. Diagnosis tools and traces are local, ignored evidence under
+`target/ipc/wbugs/`, not a portable live regression suite.
+
+Limits: left/top resizes still show a small opposite-edge wobble (about four
+screen points in the measured top-edge run) between the AX size update and
+presentation of its compensated origin. These fixes address the reproduced
+admission failures, not all third-party caption layouts or physical trackpad
+subtypes. Fixture readbacks are not proof of generally usable third-party
+native-window compositing.
+
+
 The owner's first compositor-mode run (build `c49eae1`, real Mac) reported windows that jump when dragged and when resized, and a Finder window
 that vanished under a right-click menu. This section is what was found and what changed. The measurements were made in the macOS 27.0.1 guest
 (the owner's `com.apple.WindowManager` tiling settings, Stage Manager off) with real HID events posted by a small CGEvent program at

@@ -24,6 +24,7 @@
 #import "DWNativeResizeDriver.h"
 #import "DWNativeTabletRouter.h"
 #import "DWNativeTransition.h"
+#import "DWNativeResizePresentation.h"
 #import "DWNativeViews.h"
 #import "DWOnboarding.h"
 #import "DWNavigationCoordinator.h"
@@ -41,6 +42,7 @@
 @property DriftDesktop *controller;
 @property DWCanvasCursor *canvasCursor;
 @property DWResizeCoordinator *resize;
+@property DWNativeResizePresentation *nativeResizePresentation;
 @property NSNumber *resizeSavedTransaction;
 // Every normal run: DriftWM's sizing actions (grow-window, shrink-window, fit-window, fit-window-snapped, fill-window, IPC
 // resize), a rule's size and fullscreen are size transactions the controller begins and continues by itself.

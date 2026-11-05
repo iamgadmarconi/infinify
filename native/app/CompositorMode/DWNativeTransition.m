@@ -298,6 +298,11 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
     if(transitionTiming())fprintf(stderr,"debug: native transition panel ordered window=%ld ready=%d time=%.6f\n",(long)number,ready,CACurrentMediaTime());
     return ready;
 }
+- (BOOL)setScreenRect:(CGRect)rect {
+    if(!NSThread.isMainThread||_closed||_animating||!validRect(rect)||![self basisCurrent])return NO;
+    [_panel setFrame:appKitRect(rect,_basis) display:YES];
+    [_panel displayIfNeeded];[CATransaction flush];return YES;
+}
 - (BOOL)animateToScreenRect:(CGRect)rect completion:(void (^)(BOOL))completion {
     NSAssert(NSThread.isMainThread,@"Native transition requires the main thread");
     if(_closed||_animating||_animated||!self.visible||!validRect(rect)||!completion||![self basisCurrent])return NO;

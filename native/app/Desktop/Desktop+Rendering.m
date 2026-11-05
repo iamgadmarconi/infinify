@@ -141,6 +141,7 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     [self nativeDescription:snapshot];return self.nativeViews.presentationSnapshot?:snapshot;
 }
 - (void)render {
+    [self.nativeResizePresentation update];
     [self updateNativeFill];
     NSDictionary *snapshot=[self visualSnapshot];
     NSDictionary *nativeSnapshot=[self nativeDescription:snapshot];

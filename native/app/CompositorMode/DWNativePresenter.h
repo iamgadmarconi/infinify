@@ -143,6 +143,10 @@
 - (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity;
 - (BOOL)hideTransition:(DWNativeHiddenRoot *)transition;
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition;
+// After isTransitionHidden first succeeds: the ACKed alpha-zero phase still
+// owns this exact root-only family/session. Unrelated frame ACK lag does not
+// revoke that hide. Never substitutes for the initial complete hide ACK.
+- (BOOL)isTransitionHideOwned:(DWNativeHiddenRoot *)transition;
 - (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha;
 - (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition;
 @end

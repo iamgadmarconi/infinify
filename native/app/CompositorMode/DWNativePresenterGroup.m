@@ -56,6 +56,7 @@
 - (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity { return self.ended?nil:[self.owners[identity[@"pid"]]beginTransitionForWindow:identity]; }
 - (BOOL)hideTransition:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]hideTransition:transition]; }
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionHidden:transition]; }
+- (BOOL)isTransitionHideOwned:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionHideOwned:transition]; }
 - (BOOL)revealTransition:(DWNativeHiddenRoot *)transition screen:(CGRect)screen alpha:(double)alpha { return !self.ended&&[self.owners[transition.identity[@"pid"]]revealTransition:transition screen:screen alpha:alpha]; }
 - (BOOL)isTransitionRevealed:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionRevealed:transition]; }
 - (void)setTransitionFrameAcknowledged:(void (^)(void))callback {

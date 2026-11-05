@@ -125,6 +125,20 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     }
     for(LiveSource *candidate in self.sources.allValues)
         if(!candidate.detached&&candidate.router.wid==wid&&boundIdentity(recipient,candidate.identity)){source=candidate;break;}
+    // WindowServer's early hit test excludes part of its native resize margin:
+    // it can name our canvas here, then deliver the same down to the window at
+    // the annotated tap, after native resizing has already begun. Ask the
+    // controller for that border now, but ONLY through this view's exact panel.
+    // A foreign window, child, overlay or another panel must remain an occluder.
+    NSDictionary *canvasBorder=nil;
+    if(!source&&view.window&&wid==(CGWindowID)view.window.windowNumber&&[recipient[@"pid"]intValue]==getpid()){
+        canvasBorder=[view resizeBorderForButton:0 flags:event.modifierFlags hit:nil at:point output:output];
+        LiveSource *candidate=canvasBorder?self.sources[canvasBorder[@"window"]]:nil;
+        if(candidate&&!candidate.detached&&[[self.native rootWindowFor:candidate.router.wid]isEqual:@(candidate.router.wid)]
+            &&[birth(candidate.router.pid)isEqual:candidate.router.processBirth]){
+            source=candidate;wid=source.router.wid;
+        }
+    }
     if(!source||!DWInScope(self.scope,source.router.pid))return NO;
     // Physical chrome recognition precedes logical/renderer admission. An
     // unavailable ACK or layout must never lend a recognized down to AppKit.
@@ -140,7 +154,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
         &&DWNativeBounds(wid,&own)&&DWNativeChromeFrameMatches(own,displayed,placement,out,point);
     NSMutableDictionary *context=[@{@"window":source.logical}mutableCopy];for(NSString *flag in @[@"pinned",@"widget"])if([placement[flag]boolValue])context[flag]=@YES;
     NSDictionary *hit=context[@"pinned"]||context[@"widget"]||[placement[@"fullscreen"]boolValue]?context:DWPickHit(context,snapshot,output);
-    NSDictionary *border=frame?[view resizeBorderForButton:0 flags:event.modifierFlags hit:hit at:point output:output]:nil;
+    NSDictionary *border=canvasBorder?: (frame?[view resizeBorderForButton:0 flags:event.modifierFlags hit:hit at:point output:output]:nil);
     if(border&&![border[@"window"]isEqual:source.logical])border=nil;
     // Below [zoom] interact_min every window is a pick target and takes no pointer input (upstream's try_pick_button): the press is the
     // canvas's whether or not the title is recognised. It has to be claimed here, at the session tap: WindowServer begins its own

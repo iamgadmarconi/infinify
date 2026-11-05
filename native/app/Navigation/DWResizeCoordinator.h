@@ -6,6 +6,15 @@
 @interface DWResizeCoordinator : NSObject
 - (instancetype)initWithCommand:(DWCommand)command driver:(id<DWResizeDriver>)driver worker:(DWSchedule)worker main:(DWSchedule)main;
 @property BOOL enabled;
+// A different transaction may wait behind the previous picture's reveal.
+// Not admitted: no worker/preparation watchdog. Retry after presentation retires.
+@property (copy) BOOL (^beforeAdmission)(NSDictionary *effect);
+- (void)retryAdmission;
+// Includes timed-out native jobs until their actual worker completion.
+- (BOOL)hasNativeWorkForTransaction:(NSNumber *)transaction;
+// Main-only asynchronous admission, before worker dispatch or its watchdog.
+// Reply once; NO settles an unattempted effect. Preparation is capped at 2.5 s.
+@property (copy) void (^prepare)(NSDictionary *effect, void (^ready)(BOOL));
 // Seconds after which an effect nobody has answered is reported as timed out. 0, the default, never.
 @property NSTimeInterval timeout;
 // Runs a job on the main thread after a delay: the watchdog's clock. The default is dispatch_after on the main queue.

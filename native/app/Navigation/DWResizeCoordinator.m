@@ -8,6 +8,7 @@
 - (instancetype)initWithEffect:(NSDictionary *)effect;
 - (BOOL)begin;
 - (BOOL)end;
+- (BOOL)endedBeforeStart;
 @end
 @implementation DWResizeOperation {
     NSLock *_gate;
@@ -18,6 +19,7 @@
 }
 - (BOOL)begin { [_gate lock];BOOL allowed=!_started&&!_ended;if(allowed)_started=YES;[_gate unlock];return allowed; }
 - (BOOL)end { [_gate lock];BOOL first=!_ended;_ended=YES;[_gate unlock];return first; }
+- (BOOL)endedBeforeStart { [_gate lock];BOOL skipped=_ended&&!_started;[_gate unlock];return skipped; }
 @end
 @interface DWResizeCoordinator ()
 @property (copy) DWCommand command;
@@ -25,6 +27,8 @@
 @property (copy) DWSchedule worker,main;
 @property NSMutableDictionary<NSNumber *,DWResizeOperation *> *pending;
 @property BOOL stopping;
+@property NSMutableDictionary<NSNumber *,DWResizeOperation *> *dispatched;
+@property NSDictionary *heldAdmission;
 // The controller's checked effect counter is monotonic for its lifetime, Load
 // included. One watermark rejects re-consumed results without keeping every ID.
 @property uint64_t lastAdmittedEffectID;
@@ -33,7 +37,7 @@
 @end
 @implementation DWResizeCoordinator
 - (instancetype)initWithCommand:(DWCommand)command driver:(id<DWResizeDriver>)driver worker:(DWSchedule)worker main:(DWSchedule)main {
-    if((self=[super init])){_command=[command copy];_driver=driver;_worker=[worker copy];_main=[main copy];_pending=[NSMutableDictionary dictionary];
+    if((self=[super init])){_command=[command copy];_driver=driver;_worker=[worker copy];_main=[main copy];_pending=[NSMutableDictionary dictionary];_dispatched=[NSMutableDictionary dictionary];
         _delay=^(NSTimeInterval seconds,DWJob job){dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(seconds*NSEC_PER_SEC)),dispatch_get_main_queue(),job);};}return self;
 }
 - (NSUInteger)obligations{return self.pending.count;}
@@ -44,6 +48,8 @@
     if([e isKindOfClass:NSDictionary.class]&&([e[@"op"]isEqual:@"observe_resize_source"]||[e[@"op"]isEqual:@"resize_native_window"])){
         id transaction=self.command(@{@"op":@"snapshot"})[@"native_resize"];
         if(![transaction isKindOfClass:NSDictionary.class]||![transaction[@"pending_effect"]isEqual:e])return;
+        if(self.beforeAdmission&&!self.beforeAdmission(e)){self.heldAdmission=e;[self notifyChanged];return;}
+        if([self.heldAdmission isEqual:e])self.heldAdmission=nil;
         NSNumber *key=e[@"effect_id"];uint64_t effectID=key.unsignedLongLongValue;if(effectID<=self.lastAdmittedEffectID)return;
         self.lastAdmittedEffectID=effectID;
         // Registration precedes dispatch; cancellation can never retract this obligation.
@@ -52,13 +58,48 @@
         // of a window whose transaction is over.
         __weak DWResizeOperation *weakOperation=operation;__weak DWResizeCoordinator *weakSelf=self;
         id<DWResizeDriver> driver=self.driver;DWSchedule main=self.main;
-        self.worker(^{DWResizeOperation *work=weakOperation;if(!weakSelf||![work begin])return;
-            NSDictionary *result=[driver perform:work.effect];main(^{[weakSelf finish:work result:result];});});
-        // The watchdog. The real result, should it still come, finds the obligation gone and is dropped.
-        if(self.timeout>0)self.delay(self.timeout,^{DWResizeCoordinator *co=weakSelf;DWResizeOperation *work=weakOperation;
-            if(co&&work)[co finish:work result:[co unanswered:work.effect]];});
+        __block BOOL admitted=NO;
+        void (^ready)(BOOL)=^(BOOL allowed){
+            DWResizeCoordinator *co=weakSelf;DWResizeOperation *work=weakOperation;
+            if(!co||!work||co.pending[key]!=work||admitted)return;
+            admitted=YES;
+            if(!allowed){NSMutableDictionary *result=[[co unanswered:e]mutableCopy];result[@"mutation_attempted"]=@NO;
+                [co finish:work result:result];return;}
+            co.dispatched[key]=work;
+            co.worker(^{DWResizeOperation *job=weakOperation;if(!weakSelf)return;
+                BOOL started=[job begin];if(!started&&![job endedBeforeStart])return;
+                NSDictionary *result=started?[driver perform:job.effect]:nil;
+                main(^{DWResizeCoordinator *owner=weakSelf;if(!owner)return;
+                    [owner.dispatched removeObjectForKey:key];
+                    if(started)[owner finish:job result:result];[owner notifyChanged];});});
+            if(co.timeout>0)[co watch:work];
+        };
+        if(self.prepare){self.prepare(e,ready);if(!admitted)self.delay(2.5,^{ready(NO);});}else ready(YES);
     }
     [self notifyChanged];
+}
+- (BOOL)hasNativeWorkForTransaction:(NSNumber *)transaction {
+    for(DWResizeOperation *work in self.dispatched.allValues)if([work.effect[@"transaction"]isEqual:transaction])return YES;
+    return NO;
+}
+- (BOOL)hasEarlierNativeWork:(DWResizeOperation *)operation {
+    for(DWResizeOperation *work in self.dispatched.allValues)
+        if(![work endedBeforeStart]&&[work.effect[@"effect_id"]unsignedLongLongValue]<[operation.effect[@"effect_id"]unsignedLongLongValue])return YES;
+    return NO;
+}
+- (void)watch:(DWResizeOperation *)operation {
+    __weak DWResizeCoordinator *weak=self;__weak DWResizeOperation *work=operation;
+    self.delay(self.timeout,^{DWResizeCoordinator *owner=weak;DWResizeOperation *job=work;
+        if(!owner||!job||owner.pending[job.effect[@"effect_id"]]!=job)return;
+        // A diagnostic queued behind an AX setter must really read AFTER it.
+        // Do not let its watchdog retire it before that setter actually returns.
+        if(![job.effect[@"requested"]isKindOfClass:NSDictionary.class]&&[owner hasEarlierNativeWork:job]){[owner watch:job];return;}
+        [owner finish:job result:[owner unanswered:job.effect]];
+    });
+}
+- (void)retryAdmission {
+    NSDictionary *effect=self.heldAdmission;if(!effect)return;
+    self.heldAdmission=nil;[self consume:@{@"effect":effect}];
 }
 // What the adapter reports for a call that never returned: nothing observed, and a setter that may still run.
 - (NSDictionary *)unanswered:(NSDictionary *)e {
@@ -83,11 +124,11 @@
     [self.pending removeObjectForKey:key];self.failure=nil;
     [self consume:reply];
 }
-- (NSNumber *)busyWindow { return self.pending.allValues.firstObject.effect[@"window"]; }
+- (NSNumber *)busyWindow { return self.pending.allValues.firstObject.effect[@"window"]?:self.heldAdmission[@"window"]; }
 - (void)reap {
     if(self.pending.count||[self canRemove:nil]){self.orphan=nil;return;}
     id t=self.command(@{@"op":@"snapshot"})[@"native_resize"],e=[t isKindOfClass:NSDictionary.class]?t[@"pending_effect"]:nil;id mark=[e isKindOfClass:NSDictionary.class]?e:t;
-    if([e isKindOfClass:NSDictionary.class]&&self.deferred&&self.deferred(e)){self.orphan=nil;return;}
+    if([e isKindOfClass:NSDictionary.class]&&([self.heldAdmission isEqual:e]||(self.deferred&&self.deferred(e)))){self.orphan=nil;return;}
     if(![e isKindOfClass:NSDictionary.class]&&[t isKindOfClass:NSDictionary.class]&&self.held&&self.held(t[@"transaction"])){self.orphan=nil;return;}
     if(![self.orphan isEqual:mark]){self.orphan=mark;return;}
     self.orphan=nil;
