@@ -7,7 +7,7 @@
 #import "DWInputSources.h"
 @implementation Desktop
 - (instancetype)init {
-    if((self=[super init])){_controller=driftwm_desktop_create();_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_postingTags=[NSMutableSet set];
+    if((self=[super init])){_controller=driftwm_desktop_create();_snapshotMirror=[DWSnapshotMirror new];_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_postingTags=[NSMutableSet set];
         __weak Desktop *weak=self;_panLaunch=[[DWPanLaunch alloc]initWithLaunch:^(NSNumber *output){[weak panEnd:output];}];}
     return self;
 }
@@ -67,6 +67,14 @@
     BOOL tick=[operation isEqual:@"tick_navigation"];
     NSDictionary *before=tick?self.controllerSnapshot:nil,*visual=tick?self.controllerVisualSnapshot:nil;
     if(!query){self.controllerSnapshot=nil;self.controllerVisualSnapshot=nil;}
+    // A new scene replaces what the baseline described; the delta is correct without this, so it only saves a patch that cannot be small.
+    if([operation isEqual:@"load"])[self.snapshotMirror reset];
+    // An internal snapshot is rebuilt from the sections that changed since the last one (a camera frame changes few). One a caller
+    // asked the raw bytes of (public/IPC) takes the request below, unchanged.
+    if(snapshot&&!raw){
+        NSString *failure=nil;NSDictionary *result=[self.snapshotMirror snapshotFrom:self.controller error:&failure];if(!result){self.statusText=failure;return nil;}
+        self.controllerSnapshot=result;if(!self.controllerVisualSnapshot)self.controllerVisualSnapshot=result;return result;
+    }
     NSData *request=[NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"command":command} options:0 error:nil];
     char *response=driftwm_desktop_request(self.controller,request.bytes,request.length);if(!response){self.statusText=@"Controller unavailable";return nil;}
     NSData *data=[NSData dataWithBytes:response length:strlen(response)];driftwm_desktop_response_free(response);if(raw)*raw=data;
@@ -153,7 +161,11 @@
     // on the frame thread or queue more than one read. Event/input/resize paths
     // retain their own fresh validation; unmanaged manual sources retain their poll.
     BOOL reconcile=!self.manager;
-    if(self.manager){BOOL due=[self.manager reconciliationDue];for(LiveSource *source in self.sources.allValues)if(source.error||source.destroyed||(source.nativeVisibilityWanted&&CACurrentMediaTime()>=source.nativeVisibilityRetryAt))due=YES;if(due)[self requestWindowObservation];}
+    if(self.manager){
+        // Eager discovery after a hint enumerates candidates; only the periodic deadline (or an unhealthy observer) audits every source.
+        BOOL due=[self.manager reconciliationDue]||[self windowObservationPending];if(due)self.discoveryWanted=YES;if([self.manager periodicAuditDue])self.auditAllWanted=YES;
+        for(LiveSource *source in self.sources.allValues)if(source.error||source.destroyed||(source.nativeVisibilityWanted&&CACurrentMediaTime()>=source.nativeVisibilityRetryAt)){due=YES;[self wantWindowAudit:NO pid:0 logical:source.logical];}
+        if(due)[self requestWindowObservation];}
     BOOL describe=reconcile;
     if(reconcile)for(LiveSource *source in self.sources.allValues)[self track:source];
     if(timing)stages[4]=CACurrentMediaTime();

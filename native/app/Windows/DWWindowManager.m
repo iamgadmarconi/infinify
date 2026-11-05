@@ -174,13 +174,20 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
 }
 - (BOOL)live { return self.events.live; }
 - (NSSet<NSNumber *> *)offeredWindows { return self.offered.copy; }
-- (BOOL)reconciliationDue {
+- (BOOL)periodicAuditDue {
     if(self.stopped)return NO;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;
-    return !self.events.live||now>=self.next||!self.completed||now<self.eager;
+    return !self.events.live||now>=self.next||!self.completed;
+}
+- (BOOL)reconciliationDue {
+    if(self.stopped)return NO;return [self periodicAuditDue]||NSProcessInfo.processInfo.systemUptime<self.eager;
 }
 - (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records nativeCandidateBases:(NSDictionary<NSNumber *,NSDictionary *> *)nativeCandidateBases sampledAt:(CFTimeInterval)sampledAt {
-    if(self.stopped||!records)return NO;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;BOOL live=self.events.live,due=now>=self.next;
-    if(due){self.next=now+1;[self.events reconcile];}
+    return [self pollWithWindowRecords:records nativeCandidateBases:nativeCandidateBases sampledAt:sampledAt auditsAll:YES];
+}
+- (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records nativeCandidateBases:(NSDictionary<NSNumber *,NSDictionary *> *)nativeCandidateBases sampledAt:(CFTimeInterval)sampledAt auditsAll:(BOOL)auditsAll {
+    if(self.stopped||!records)return NO;NSTimeInterval now=NSProcessInfo.processInfo.systemUptime;BOOL live=self.events.live,due=auditsAll&&now>=self.next;
+    // Observers in place and the first pass done: the missed-event fallback may wait 3 s. Otherwise the pace is what it was.
+    if(due){self.next=now+(live&&self.completed?3:1);[self.events reconcile];}
     [self passRecords:records nativeCandidateBases:nativeCandidateBases sampledAt:sampledAt];return due||!live;
 }
 - (void)requestDiscoveryAfter:(NSTimeInterval)delay {

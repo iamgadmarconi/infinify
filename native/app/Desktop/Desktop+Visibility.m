@@ -38,7 +38,7 @@
     if([[self.resize busyWindow]isEqual:source.logical])[self.resize cancel];
     if(self.native&&!self.nativeFillHandoff&&![[self.resize busyWindow]isEqual:source.logical]
         &&[self.native withholdWindow:source.identity])source.nativeVisibilityHeld=YES;
-    self.nativeViewSnapshot=nil;self.windowObservationAgain=YES;[self render];[self requestWindowObservation];
+    self.nativeViewSnapshot=nil;self.discoveryWanted=YES;[self wantWindowAudit:NO pid:0 logical:source.logical];[self render];[self requestWindowObservation];
 }
 - (void)windowVisibilityChanged:(CGWindowID)window pid:(pid_t)pid {
     if(self.cleaning)return;

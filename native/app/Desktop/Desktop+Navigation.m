@@ -174,6 +174,8 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     self.resize.beforeAdmission=^BOOL(NSDictionary *effect){Desktop *d=weak;DWNativeResizePresentation *owner=d.nativeResizePresentation;
         return !owner.active||[owner.effect[@"transaction"]isEqual:effect[@"transaction"]];};
     self.resize.prepare=^(NSDictionary *effect,void (^ready)(BOOL)){[weak prepareInteractiveResize:effect ready:ready];};
+    // Removal checks run at idle on every observation: a scalar read of the live transaction, not a snapshot. A failed query answers NO and canRemove: asks the command path.
+    self.resize.removalAllowed=^BOOL(NSNumber *window,BOOL *allowed){Desktop *d=weak;uint8_t ok=0;if(!d.controller||!driftwm_desktop_resize_removal_allowed(d.controller,window==nil,window.unsignedLongLongValue,&ok))return NO;*allowed=ok!=0;return YES;};
 
     // Native readback (docs/crates/desktop/NATIVE_RESIZE.md): the size a window took is read back from it. Interactive
     // top/left native drags independently hold a snapshot until final placement ACK. App-owned Fill separately holds placement/input until
@@ -273,10 +275,11 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     };
     self.navigation.observationBinding=^DWObservedBinding{
         Desktop *d=weak;if(!d||d.cleaning||d.native.ended||(d.native&&!d.native.familiesNeeded))return nil;
-        NSMutableArray *roots=[NSMutableArray array];NSDictionary *snapshot=[d call:@{@"op":@"snapshot"}];
-        for(NSDictionary *window in snapshot[@"windows"]){NSDictionary *source=DWTyped(window[@"source"],NSDictionary.class),*identity=DWTyped(source[@"identity"],NSDictionary.class);LiveSource *live=d.sources[window[@"window"]];
+        NSMutableArray *roots=[NSMutableArray array];
+        // The live sources, each asked for its current controller binding: no whole-scene serialization per observation.
+        for(NSNumber *logical in d.sources){NSDictionary *source=[d sourceBinding:logical],*identity=DWTyped(source[@"identity"],NSDictionary.class);LiveSource *live=d.sources[logical];
             if(!live||live.detached||!identity||!boundIdentity(live.identity,identity))continue;
-            [roots addObject:@{@"window":window[@"window"],@"identity":[identity copy],@"generation":source[@"generation"]}];
+            [roots addObject:@{@"window":logical,@"identity":identity,@"generation":source[@"generation"]}];
         }
         NSArray *bindings=roots.copy;
         return ^NSDictionary *(NSDictionary *actual){

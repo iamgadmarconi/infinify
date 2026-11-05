@@ -17,6 +17,7 @@ static NSUInteger allListReads,processReads,processMode;
 static NSUInteger titleListReads;
 static NSArray<NSDictionary *> *allWindowRows,*secondAllWindowRows;
 static NSTimeInterval fixtureNow=100;
+static BOOL fixtureEventsLive=YES;
 static NSArray<NSDictionary *> *windowRows,*createdRowsAfterTitle;
 static NSDictionary *candidateBasisOverride;
 static NSDictionary *candidateBasisSecond;
@@ -99,7 +100,7 @@ static AXError closePress(AXUIElementRef element,CFStringRef action) {
 @end
 @implementation DiscoveryEvents
 - (instancetype)initWithSink:(id<DWWindowEventSink>)sink scope:(NSDictionary *)scope { (void)sink;(void)scope;return [super init]; }
-- (BOOL)live { return YES; }
+- (BOOL)live { return fixtureEventsLive; }
 - (void)reconcile {}
 - (void)stop {}
 @end
@@ -521,6 +522,22 @@ int main(void) {@autoreleasepool {
         check(DWCloseWindow(closeIdentity)!=nil&&!closePresses,@"duplicate target or unknown/error/foreign desktop candidate refuses without press");}
     closeElements=@[target,desktop];closePresses=closeOwnerReads=0;closeOwnerFailsAt=3;
     check(DWCloseWindow(closeIdentity)!=nil&&!closePresses&&closeOwnerReads==3,@"identity change immediately before close retains no-mutation refusal");closeTesting=NO;
+    // Healthy periodic reconciliation backs off to 3 s; startup and unhealthy observers keep 1 s; discovery-only passes keep the deadline.
+    fixtureNow=400;fixtureEventsLive=YES;DiscoveryHost *paceHost=[DiscoveryHost new];DWWindowManager *pace=[DWWindowManager managerWithHost:paceHost scope:nil mode:DWWindowDiscoveryModeNativePresentation];
+    check([pace periodicAuditDue],@"the first pass is owed before discovery completes");
+    [pace pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();check(pace.completed&&![pace periodicAuditDue],@"startup pass spends the deadline at the 1 s pace");
+    fixtureNow=401;check([pace periodicAuditDue],@"incomplete startup retained the 1 s cadence");
+    [pace pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];drain();
+    fixtureNow=403.9;check(![pace periodicAuditDue]&&![pace reconciliationDue],@"healthy completed pass waits 3 s");
+    [pace windowsChanged:0];check([pace reconciliationDue]&&![pace periodicAuditDue],@"an appearance hint makes discovery eager without making the audit due");
+    fixtureNow=404;check([pace periodicAuditDue],@"healthy fallback is due 3 s after the pass");
+    check(![pace pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime() auditsAll:NO]&&[pace periodicAuditDue],@"a discovery-only pass does not postpone the audit deadline");
+    fixtureNow=404.5;check([pace periodicAuditDue],@"deadline survives repeated discovery-only passes");
+    check([pace pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime() auditsAll:YES]&&![pace periodicAuditDue],@"the audit-all pass reports reconciliation and spends the deadline");
+    fixtureNow=407.4;check(![pace periodicAuditDue],@"next healthy deadline is 3 s after the audited pass");
+    fixtureEventsLive=NO;check([pace periodicAuditDue],@"unhealthy observers audit at every poll");
+    fixtureNow=407.5;[pace pollWithWindowRecords:@[] nativeCandidateBases:@{} sampledAt:fixtureTime()];fixtureEventsLive=YES;fixtureNow=408.4;check(![pace periodicAuditDue],@"unhealthy pass is followed by the 1 s cadence");
+    fixtureNow=408.5;check([pace periodicAuditDue],@"recovered observers resume from the 1 s deadline set while unhealthy");[pace stop];drain();
     sessionAdmission();
     printf("PASS: %lu discovery, session admission and close checks; no native mutation or live latency claim\n",(unsigned long)checks);
 }return 0;}

@@ -73,7 +73,7 @@
 // because the window list can show a window a moment after its application reports it.
 // A window that moved, was resized, retitled, miniaturized or destroyed, and native
 // focus that moved, are handed to the host at once. The poll is then a reconciliation, one
-// pass a second, that finds whatever no event announced. Without Accessibility access,
+// pass every 3 s once the observers are live and the first pass is complete (a second otherwise), that finds whatever no event announced. Without Accessibility access,
 // and while an application is not observed in full (it does not answer yet, or refused a
 // notification), every poll requests a pass, with at most one read in flight.
 //
@@ -112,6 +112,9 @@ typedef NS_ENUM(NSUInteger,DWWindowDiscoveryMode) {
 // Called at the idle poll's pace to request a single-flight worker observation.
 // Creation/appearance hints mark discovery due; they never enumerate on main.
 - (BOOL)reconciliationDue;
+// The periodic audit of every bound source alone: due without full observers, before the first pass completes and at the
+// reconciliation deadline, but not merely because discovery is eager after an appearance hint.
+- (BOOL)periodicAuditDue;
 // Consume that worker's ordered on-screen records on main. The caller must reject
 // aged snapshots from the start of the read; adoption still validates identities
 // afresh. Native candidates require that batch's separately audited native bases;
@@ -121,6 +124,10 @@ typedef NS_ENUM(NSUInteger,DWWindowDiscoveryMode) {
 // without full observers, otherwise once a second. Bound-window event/input/resize
 // checks keep their immediate fresh reads, independent of this discovery batch.
 - (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records nativeCandidateBases:(NSDictionary<NSNumber *,NSDictionary *> *)nativeCandidateBases sampledAt:(CFTimeInterval)sampledAt;
+// The same, saying whether this batch also audited every bound source. Only such a pass spends the reconciliation deadline: a
+// discovery-only batch (stability or title retry, a hint for one application) leaves the periodic audit as due as it was.
+// Healthy reconciliation (observers live, first pass complete) repeats every 3 s, otherwise every second.
+- (BOOL)pollWithWindowRecords:(NSArray<NSDictionary *> *)records nativeCandidateBases:(NSDictionary<NSNumber *,NSDictionary *> *)nativeCandidateBases sampledAt:(CFTimeInterval)sampledAt auditsAll:(BOOL)auditsAll;
 // YES while the observers report window changes: Accessibility access stands and every
 // regular application is observed in full.
 @property (readonly) BOOL live;

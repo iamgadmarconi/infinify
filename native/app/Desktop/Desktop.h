@@ -36,6 +36,7 @@
 #import "DWTrackpadGestures.h"
 #import "DWWindowManager.h"
 #import "DWWindowObserver.h"
+#import "DWSnapshotMirror.h"
 #include "driftwm_desktop.h"
 @class DesktopView, LiveSource;
 @interface Desktop : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSWindowDelegate>
@@ -65,7 +66,8 @@
 @property CFTimeInterval lastPollTiming; // scoped debug: at most one slow-poll stage row per second
 @property DWWindowObserver *windowObserver;
 @property uint64_t observationEpoch;
-@property BOOL windowObservationAgain; // one follow-up after a native family hint during an in-flight read
+@property BOOL discoveryWanted,auditAllWanted,observationFollowUp; // observer work owed: a candidate enumeration, an audit of every bound source, and one follow-up for requests that arrived during a read
+@property NSMutableSet<NSNumber *> *auditPIDs,*auditLogicals; // the bound sources owed an audit alone: by pid (family hints), by logical (exceptional sources)
 @property BOOL declineFrameQueued; // one frame is owed to windows the shell declined
 @property CFMachPortRef navigationTap;
 @property CFRunLoopSourceRef navigationTapSource;
@@ -197,6 +199,7 @@
 @property DWNativeRelativeMotion *relativeMotion;
 @property NSMutableSet<NSNumber *> *postingTags;
 @property NSDictionary *controllerSnapshot,*controllerVisualSnapshot,*renderedPresentation;
+@property DWSnapshotMirror *snapshotMirror; // internal snapshots arrive as changed top-level sections; its baseline outlives controllerSnapshot's invalidation
 @property (copy) NSString *renderedStatusText;
 @property DesktopView *nativeGestureView,*nativeScrollView;
 @property DesktopView *nativeMagnifyView;

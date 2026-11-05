@@ -516,7 +516,7 @@ static BOOL screensHidden(void) {
     // A fresh read still updates native bounds and size after the rebuild; it
     // must not adopt an old pair's screen displacement into the world. Keep
     // the native pair withheld until its real buttons and geometry settle.
-    [self.windowObserver cancel];self.windowObserver=nil;self.windowObservationAgain=NO;
+    [self.windowObserver cancel];self.windowObserver=nil;self.discoveryWanted=self.auditAllWanted=self.observationFollowUp=NO;[self.auditPIDs removeAllObjects];[self.auditLogicals removeAllObjects];
     for(LiveSource *source in self.sources.allValues){
         NSMutableDictionary *held=source.nativeMouseOwnership;
         if(held){held[@"topology_changed"]=@YES;[held removeObjectForKey:@"stable_since"];}

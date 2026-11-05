@@ -158,6 +158,7 @@
 }
 - (void)shutdown {self.stopping=YES;[self cancel];}
 - (BOOL)canRemove:(NSNumber *)window {
+    BOOL answer=NO;if(self.removalAllowed&&self.removalAllowed(window,&answer))return answer;
     id t=self.command(@{@"op":@"snapshot"})[@"native_resize"];if(![t isKindOfClass:NSDictionary.class]||(window&&![t[@"window"]isEqual:window]))return YES;
     return t[@"pending_effect"]==NSNull.null&&![t[@"uncertain_mutation"]boolValue]&&([t[@"phase"]isEqual:@"complete"]||[t[@"phase"]isEqual:@"failed"]);
 }

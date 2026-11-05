@@ -69,6 +69,14 @@ static NSArray<NSDictionary *> *viewFamilyMembers(NSDictionary *family,NSDiction
     }
     return children;
 }
+// True only when family.members is a well-formed list whose entries all carry the root's numeric wid, so viewFamilyMembers cannot return a child.
+// Malformed or non-dictionary entries answer NO (uncertain) so the existing path decides. An empty list is root-only: no child can be linked.
+static BOOL viewRootOnlyFamily(NSDictionary *family) {
+    NSNumber *root=DWTyped(DWTyped(family[@"identity"],NSDictionary.class)[@"wid"],NSNumber.class);NSArray *members=DWTyped(family[@"members"],NSArray.class);
+    if(!root||!members)return NO;
+    for(id value in members){NSNumber *wid=DWTyped(DWTyped(DWTyped(value,NSDictionary.class)[@"identity"],NSDictionary.class)[@"wid"],NSNumber.class);if(!wid||![wid isEqual:root])return NO;}
+    return YES;
+}
 // The logical controller deliberately emits no root placement outside an
 // output. A native descendant may extend into that output, so create only an
 // adapter presentation site from the exact world projection and observed
@@ -81,11 +89,14 @@ static NSArray<NSDictionary *> *viewFamilyPlacements(NSDictionary *snapshot,NSDi
     NSMutableSet<NSNumber *> *fullscreenRoots=[NSMutableSet set];NSUInteger rank=0;
     for(id value in viewList(snapshot[@"outputs"])){NSDictionary *output=DWTyped(value,NSDictionary.class);NSNumber *identifier=DWTyped(output[@"id"],NSNumber.class);if(identifier&&outputs[identifier]==output){outputRanks[identifier]=@(rank++);NSNumber *full=DWTyped(DWTyped(output[@"fullscreen"],NSDictionary.class)[@"window"],NSNumber.class);if(full)[fullscreenRoots addObject:full];}}
     rank=0;for(id value in viewList(snapshot[@"windows"])){NSDictionary *window=DWTyped(value,NSDictionary.class);NSNumber *identifier=DWTyped(window[@"window"],NSNumber.class);if(!viewPositiveID(identifier)||windowRanks[identifier])continue;windowRanks[identifier]=@(rank++);
+        // Necessary condition for any descendant placement: some member other than the root. Anything unexpected falls through to the full path.
+        if(viewRootOnlyFamily(DWTyped(families[identifier],NSDictionary.class)))continue;
         NSDictionary *source=DWTyped(window[@"source"],NSDictionary.class),*binding=bindings[identifier],*family=DWTyped(families[identifier],NSDictionary.class);
         if(!source||!binding||![viewIdentity(source[@"identity"])isEqual:binding]||![DWTyped(window[@"kind"],NSString.class)isEqual:@"window"]||[DWTyped(window[@"mode"],NSString.class)isEqual:@"fullscreen"]||[fullscreenRoots containsObject:identifier])continue;
-        NSArray<NSDictionary *> *members=viewFamilyMembers(family,source,binding);if(!members.count)continue;
         CGRect native=viewRect(family[@"native_bounds"]),world=viewRect(window[@"world_rect"]);NSDictionary *pin=DWTyped(window[@"pinned"],NSDictionary.class);
         if(!pin&&CGRectIsNull(world))continue;
+        // Cheap per-output checks first: a root already represented (or visible) on every output needs no family expansion.
+        NSMutableArray<NSDictionary *> *candidates=[NSMutableArray array];
         for(NSNumber *outputID in outputs){NSDictionary *output=outputs[outputID];if(DWTyped(output[@"fullscreen"],NSDictionary.class))continue;
             NSString *site=[NSString stringWithFormat:@"%@/%@",identifier,outputID];if([sites containsObject:site])continue;
             CGRect bounds=viewRect(output[@"screen_bounds"]),screen;double zoom=[DWTyped(output[@"zoom"],NSNumber.class)doubleValue];
@@ -93,6 +104,11 @@ static NSArray<NSDictionary *> *viewFamilyPlacements(NSDictionary *snapshot,NSDi
             else {NSDictionary *camera=DWTyped(output[@"camera"],NSDictionary.class);screen=CGRectMake(bounds.origin.x+(world.origin.x-[DWTyped(camera[@"x"],NSNumber.class)doubleValue])*zoom,bounds.origin.y+(world.origin.y-[DWTyped(camera[@"y"],NSNumber.class)doubleValue])*zoom,world.size.width*zoom,world.size.height*zoom);}
             if(CGRectIsNull(screen)||!isfinite(screen.origin.x)||!isfinite(screen.origin.y)||!isfinite(screen.size.width)||!isfinite(screen.size.height)||!isfinite(CGRectGetMaxX(screen))||!isfinite(CGRectGetMaxY(screen))||screen.size.width<=0||screen.size.height<=0)continue;
             CGRect rootVisible=CGRectIntersection(screen,bounds);if(!CGRectIsNull(rootVisible)&&!CGRectIsEmpty(rootVisible))continue;
+            [candidates addObject:@{@"output":outputID,@"site":site,@"bounds":[NSValue valueWithRect:bounds],@"screen":[NSValue valueWithRect:screen]}];
+        }
+        if(!candidates.count)continue;
+        NSArray<NSDictionary *> *members=viewFamilyMembers(family,source,binding);if(!members.count)continue;
+        for(NSDictionary *candidate in candidates){NSNumber *outputID=candidate[@"output"];NSString *site=candidate[@"site"];CGRect bounds=[candidate[@"bounds"]rectValue],screen=[candidate[@"screen"]rectValue];
             CGRect visible=CGRectNull;
             for(NSDictionary *member in members){CGRect child=viewRect(member[@"native_bounds"]);CGRect projected=CGRectMake(screen.origin.x+(child.origin.x-native.origin.x)/native.size.width*screen.size.width,screen.origin.y+(child.origin.y-native.origin.y)/native.size.height*screen.size.height,child.size.width/native.size.width*screen.size.width,child.size.height/native.size.height*screen.size.height);
                 if(!isfinite(projected.origin.x)||!isfinite(projected.origin.y)||!isfinite(projected.size.width)||!isfinite(projected.size.height)||!isfinite(CGRectGetMaxX(projected))||!isfinite(CGRectGetMaxY(projected)))continue;
@@ -124,6 +140,7 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,NSDictio
 // Transfer admission is stricter than ordinary presentation. It must name a
 // complete audited family and every projected member must fit this display;
 // a partial clip cannot be made safe by a placement ACK.
+BOOL DWNativeViewsHoverImpossible(BOOL planCurrent,BOOL heldTransfer,NSUInteger replicaSites) { return planCurrent&&!heldTransfer&&!replicaSites; }
 static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictionary *placement,NSDictionary *viewport,NSDictionary *binding,NSDictionary *family) {
     NSDictionary *source=DWTyped(placement[@"source"],NSDictionary.class),*rawIdentity=DWTyped(source[@"identity"],NSDictionary.class);
     NSNumber *generation=DWTyped(source[@"generation"],NSNumber.class);CGRect screen=viewRect(placement[@"screen_rect"]),clip=viewRect(placement[@"clip_rect"]),display=viewRect(viewport[@"screen_bounds"]),native=viewRect(family[@"native_bounds"]);
@@ -193,6 +210,7 @@ static NSDictionary *viewTransferSite(NSNumber *window,NSNumber *output,NSDictio
 - (void)reset { _owners=@{};_identities=@{};_replicas=@{};_placements=@{};_presentationSnapshot=nil;_transferSites=@{};_transfers=[NSMutableDictionary dictionary];_admissions=[NSMutableDictionary dictionary];_covered=[NSMutableSet set];++_transferRevision;++_placementRequestRevision; }
 - (NSDictionary *)presentationSnapshot { return _presentationSnapshot; }
 - (NSSet<NSNumber *> *)capturedWindows { return [NSSet setWithArray:_replicas.allKeys?:@[]]; }
+- (NSUInteger)replicaSiteCount { NSUInteger count=0;for(NSSet *outputs in _replicas.allValues)count+=outputs.count;return count; }
 - (BOOL)replica:(NSNumber *)window output:(NSNumber *)output { return window&&output&&[_replicas[window]containsObject:output]; }
 - (NSDictionary *)placement:(NSNumber *)window output:(NSNumber *)output { return window&&output?_placements[window][output]:nil; }
 - (uint64_t)transferRevision { return _transferRevision; }

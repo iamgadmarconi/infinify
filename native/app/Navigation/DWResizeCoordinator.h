@@ -26,7 +26,11 @@
 - (void)consume:(NSDictionary *)reply;
 - (void)cancel;
 - (void)shutdown;
+// nil asks about every window. Reads the controller's current transaction every time (no cache).
 - (BOOL)canRemove:(NSNumber *)window;
+// Optional scalar form of -canRemove: that needs no snapshot. Returns YES when it answered, with the answer in *allowed; NO when it
+// could not (the query failed), and then -canRemove: asks the command path: a failed query never permits removal. Unset, only the command path.
+@property (copy) BOOL (^removalAllowed)(NSNumber *window,BOOL *allowed);
 // The window whose size transaction is still owed a result, else nil. While it is, the controller refuses observe,
 // window_closed and remove_source for that window, so the shell asks none of it. Read from the obligations, without a snapshot: in
 // native readback a live transaction always has one (-reap sees to the one that does not).

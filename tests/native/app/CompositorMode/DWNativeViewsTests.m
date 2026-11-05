@@ -31,6 +31,19 @@ static DWNativeAppliedPlacement *transferAck(DWNativePresenter *presenter,DWNati
     [presenter requireFreshPlacementAcknowledgement];[presenter describe:transferDescribe(views,state,root,audit)bound:@{@7:root}];[presenter submit];ack(presenter);
     return [presenter acknowledgedPlacementForWindow:@7 identity:root generation:@(transfer.generation)output:@(transfer.output)];
 }
+// Family-only placements: complete outputs are compared so ordering, geometry and the skipped-expansion paths stay identical.
+static NSDictionary *familyOnlyState(double camera2,BOOL haveSecondSite,NSDictionary *pin,BOOL fullscreen2) {
+    NSDictionary *root=identity(123,42);CGRect native=CGRectMake(100,100,320,232);
+    NSMutableDictionary *window=[@{@"window":@7,@"kind":@"window",@"source":@{@"identity":root,@"generation":@1,@"observation_known":@YES,@"observed_rect":rect(native)},@"world_rect":rect(native)}mutableCopy];if(pin)window[@"pinned"]=pin;
+    NSMutableDictionary *one=[window mutableCopy];one[@"output"]=@1;one[@"screen_rect"]=rect(native);one[@"clip_rect"]=rect(native);
+    NSMutableDictionary *two=[window mutableCopy];two[@"output"]=@2;two[@"screen_rect"]=rect(native);two[@"clip_rect"]=rect(native);
+    NSDictionary *viewport=rect(CGRectMake(0,0,1200,900));NSMutableDictionary *out2=[@{@"id":@2,@"screen_bounds":viewport,@"camera":@{@"x":@(camera2),@"y":@0},@"zoom":@1}mutableCopy];if(fullscreen2)out2[@"fullscreen"]=@{@"window":@9};
+    return @{@"outputs":@[@{@"id":@1,@"screen_bounds":viewport,@"camera":@{@"x":@0,@"y":@0},@"zoom":@1},out2],@"windows":@[window],@"placements":haveSecondSite?@[one.copy,two.copy]:@[one.copy]};
+}
+static NSArray *familyOnlyPlacements(NSDictionary *state,CGRect child) {
+    NSDictionary *root=identity(123,42);NSDictionary *family=transferFamily(root,1,CGRectMake(100,100,320,232),child);
+    return DWNativeFamilyPresentationSnapshot(state,@{@7:root},@{@7:family})[@"placements"];
+}
 int main(void) {@autoreleasepool {
     check(DWPresenterReadinessFixtureMain()==0,@"existing presenter correspondence oracle passes");
     NSDictionary *root=identity(123,42);CGRect native=CGRectMake(100,100,320,232),child=CGRectMake(150,125,90,60);
@@ -98,5 +111,40 @@ int main(void) {@autoreleasepool {
     check(recovery&&recovery!=transfer&&recovery.generation==2&&recovery.output==1,@"fresh audit restages bounded recovery without resurrecting old generation");
     [views describe:nil bound:@{@7:root}families:@{@7:audit}];check(!views.pendingTransfers.count&&!views.capturedWindows.count&&![views isTransferCurrent:recovery],@"invalid snapshot/reset revokes all adapter transfer state");
     check(![views requiresPlacementAdmissionForWindow:@7],@"session/reset removes stale coverage admission requirements");
+
+    {   // Root-offscreen/child-onscreen output 2 gets exactly one family-only placement; every other shape returns the input unchanged.
+        CGRect outsideChild=CGRectMake(400,125,90,60);NSDictionary *missing=familyOnlyState(420,NO,nil,NO);NSArray *input=missing[@"placements"],*got=familyOnlyPlacements(missing,outsideChild);
+        NSMutableDictionary *expected=[input[0]mutableCopy];expected[@"output"]=@2;expected[@"pinned"]=@NO;expected[@"screen_rect"]=rect(CGRectMake(-320,100,320,232));expected[@"clip_rect"]=rect(CGRectMake(0,125,70,60));expected[@"world_local_crop"]=NSNull.null;expected[@"buffer_crop"]=NSNull.null;expected[@"family_only"]=@YES;expected[@"presentation_settled"]=@YES;
+        check(got.count==2&&[got[0]isEqual:input[0]]&&[got[1]isEqual:expected],@"offscreen root with visible child gets the exact family-only placement after the existing one");
+        NSDictionary *present=familyOnlyState(420,YES,nil,NO);check([familyOnlyPlacements(present,outsideChild)isEqual:present[@"placements"]],@"already represented site adds nothing");
+        NSDictionary *visibleRoot=familyOnlyState(0,NO,nil,NO);check([familyOnlyPlacements(visibleRoot,outsideChild)isEqual:visibleRoot[@"placements"]],@"visible root on the other output adds nothing");
+        check([familyOnlyPlacements(missing,CGRectMake(1700,125,90,60))isEqual:input],@"offscreen root with offscreen child adds nothing");
+        NSDictionary *rootOnlyFamily=@{@"identity":identity(123,42),@"generation":@1,@"native_bounds":rect(CGRectMake(100,100,320,232)),@"root":@42,@"members":@[]};
+        check([DWNativeFamilyPresentationSnapshot(missing,@{@7:identity(123,42)},@{@7:rootOnlyFamily})[@"placements"]isEqual:input],@"root-only family adds nothing");
+        check([familyOnlyPlacements(familyOnlyState(420,NO,nil,YES),outsideChild)isEqual:input],@"fullscreen output adds nothing");
+        {   // Short-circuit shapes: only complete placement arrays are compared with the unchanged full-path result.
+            NSDictionary *root=identity(123,42),*kid=identity(123,43);NSDictionary *rootEntry=@{@"identity":root,@"native_bounds":rect(CGRectMake(100,100,320,232)),@"parent":@0},*kidEntry=@{@"identity":kid,@"native_bounds":rect(outsideChild),@"parent":@42};
+            NSDictionary *(^family)(NSArray *)=^NSDictionary *(NSArray *list){return @{@"identity":root,@"generation":@1,@"native_bounds":rect(CGRectMake(100,100,320,232)),@"root":@42,@"members":list};};
+            NSArray *(^run)(NSArray *)=^NSArray *(NSArray *list){return DWNativeFamilyPresentationSnapshot(missing,@{@7:root},@{@7:family(list)})[@"placements"];};
+            check([run(@[rootEntry])isEqual:input],@"root-only member list adds nothing");
+            check([run(@[rootEntry,rootEntry])isEqual:input],@"duplicate-root member list adds nothing");
+            check([run(@[rootEntry,kidEntry])isEqual:got],@"root plus visible child matches the family-only placement");
+            check([run(@[kidEntry])isEqual:got],@"absent-root list with a linked child still yields the placement");
+            check([run(@[rootEntry,@"junk",kidEntry])isEqual:got],@"non-dictionary entry does not suppress a child");
+            check([run(@[@{@"identity":@"bad"},kidEntry])isEqual:got],@"malformed identity entry does not suppress a child");
+            check([run(@[@{@"identity":@{@"wid":@"x"}}])isEqual:input]&&[run(@[@"junk"])isEqual:input],@"malformed-only lists add nothing, as before");
+        }
+        NSDictionary *pinOne=@{@"output":@1,@"screen_rect":rect(CGRectMake(-320,100,320,232))},*pinTwo=@{@"output":@2,@"screen_rect":rect(CGRectMake(-320,100,320,232))};
+        NSArray *pinned1=familyOnlyPlacements(familyOnlyState(420,NO,pinOne,NO),outsideChild),*pinned2=familyOnlyPlacements(familyOnlyState(420,NO,pinTwo,NO),outsideChild);
+        check(pinned1.count==1&&pinned2.count==2&&[pinned2[1][@"output"]isEqual:@2]&&[pinned2[1][@"pinned"]boolValue]&&[pinned2[1][@"clip_rect"]isEqual:rect(CGRectMake(0,125,70,60))],@"pinned root projects only onto its pinned output");
+    }
+    {   // Hover preflight: rejects only a current plan with no replicas and no held transfer.
+        DWNativeViews *hv=[DWNativeViews new];check(hv.replicaSiteCount==0&&DWNativeViewsHoverImpossible(YES,NO,hv.replicaSiteCount),@"no replicas in a current plan rejects hover work");
+        check(!DWNativeViewsHoverImpossible(NO,NO,0),@"stale or invalidated plan keeps the full path");
+        check(!DWNativeViewsHoverImpossible(YES,YES,0),@"held transfer never takes the preflight");
+        NSDictionary *hAudit=transferFamily(root,1,native,child);transferDescribe(hv,state,root,hAudit);
+        check(hv.replicaSiteCount>0&&!DWNativeViewsHoverImpossible(YES,NO,hv.replicaSiteCount),@"a replica appearing after re-description disables the preflight");
+        [hv describe:nil bound:@{@7:root}families:@{@7:hAudit}];check(hv.replicaSiteCount==0,@"reset plan has no replica sites");
+    }
     printf("PASS: %lu presenter + explicit transfer checks; substituted geometry only, no native input/optical proof\n",(unsigned long)checks);
 }return 0;}

@@ -195,16 +195,33 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 }
 // Did close-window or suspend-window ask this window to close? The controller's mark.
 - (BOOL)marked:(LiveSource *)source { return DWTyped([self call:@{@"op":@"snapshot"}][@"lifecycle"][@"marks"],NSDictionary.class)[source.logical.stringValue]!=nil; }
+// Work owed to the observer, kept apart so one hint does not become an audit of everything: a discovery pass enumerates candidates only,
+// an audit reads the bound sources named (every one, a pid's, or single logicals). Invalidation itself is never delayed by this.
+- (void)wantWindowAudit:(BOOL)all pid:(pid_t)pid logical:(NSNumber *)logical {
+    if(all||(!pid&&!logical)){self.auditAllWanted=YES;return;}
+    if(pid){if(!self.auditPIDs)self.auditPIDs=[NSMutableSet set];[self.auditPIDs addObject:@(pid)];}
+    if(logical){if(!self.auditLogicals)self.auditLogicals=[NSMutableSet set];[self.auditLogicals addObject:logical];}
+}
+- (BOOL)windowObservationPending { return self.discoveryWanted||self.auditAllWanted||self.auditPIDs.count||self.auditLogicals.count; }
+// observe-stats: one aggregated line at most every 2 s, only under INFINIFY_DEBUG.
+static void observeStats(NSUInteger sources,BOOL all) {
+    static NSUInteger batches,audited,full;static CFTimeInterval since;if(!DWDebugTrace())return;
+    batches++;audited+=sources;if(all)full++;CFTimeInterval now=CACurrentMediaTime();if(!since)since=now;
+    if(now-since>=2){fprintf(stderr,"observe-stats: batches=%lu audit_all=%lu sources_audited=%lu window_s=%.1f\n",(unsigned long)batches,(unsigned long)full,(unsigned long)audited,now-since);batches=audited=full=0;since=now;}
+}
 - (void)requestWindowObservation {
     if(self.cleaning||self.sessionInactive||self.native.ended||!self.manager)return;
-    if(!self.windowObserver)self.windowObserver=[DWWindowObserver new];if(self.windowObserver.inFlight)return;
-    self.windowObservationAgain=NO;
+    if(!self.windowObserver)self.windowObserver=[DWWindowObserver new];if(self.windowObserver.inFlight){self.observationFollowUp=YES;return;}
+    // One batch in flight: what arrived meanwhile is one follow-up. The batch owns what it takes, and gives it back if its read is rejected.
+    BOOL auditAll=self.auditAllWanted;NSSet<NSNumber *> *auditPIDs=self.auditPIDs.count?self.auditPIDs.copy:nil,*auditLogicals=self.auditLogicals.count?self.auditLogicals.copy:nil;
+    self.observationFollowUp=NO;self.discoveryWanted=NO;self.auditAllWanted=NO;[self.auditPIDs removeAllObjects];[self.auditLogicals removeAllObjects];
     NSMutableArray *requests=[NSMutableArray array];
-    for(LiveSource *source in self.sources.allValues)if(!source.detached){
+    for(LiveSource *source in self.sources.allValues)if(!source.detached&&(auditAll||[auditPIDs containsObject:@(source.router.pid)]||[auditLogicals containsObject:source.logical])){
         NSMutableDictionary *request=[@{@"logical":source.logical,@"generation":@(source.observationToken),@"identity":source.identity,@"native_bounds":@(self.native!=nil),@"families":@(self.native.familiesNeeded||source.nativeTransferFamilyWanted)}mutableCopy];
         if(source.nativeVisibilityWanted&&CACurrentMediaTime()>=source.nativeVisibilityRetryAt)request[@"visibility_revision"]=@(source.nativeVisibilityRevision);
         if(source.router.bounds)request[@"prior_bounds"]=source.router.bounds;[requests addObject:request];
     }
+    observeStats(requests.count,auditAll);
     DWWindowManager *manager=self.manager;DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;__weak Desktop *weak=self;__block BOOL reconcile=NO;
     [self.windowObserver requestSources:requests scope:self.scope nativeDiscoveryExclusions:self.native?manager.offeredWindows:nil discovery:^(DWWindowObservationSnapshot *snapshot){
         Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
@@ -212,7 +229,8 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
             ||!snapshot.listSucceeded||now-snapshot.startedAt>.1||now-snapshot.finishedAt>.1)return;
         // Timely discovery does not wait behind audits of already bound roots.
         // Adoption still performs its fresh native identity/authority checks.
-        reconcile=[manager pollWithWindowRecords:snapshot.orderedOnScreen nativeCandidateBases:snapshot.nativeCandidateBases sampledAt:snapshot.startedAt];
+        // Only a batch that audits every source spends the periodic deadline; the exclusions above already cover every managed/offered root.
+        reconcile=[manager pollWithWindowRecords:snapshot.orderedOnScreen nativeCandidateBases:snapshot.nativeCandidateBases sampledAt:snapshot.startedAt auditsAll:auditAll];
     } completion:^(DWWindowObservationSnapshot *snapshot){
         Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
         if(!d||d.cleaning||d.sessionInactive||d.manager!=manager||d.native!=presenter||d.native.ended||d.nativeSessionEpoch!=session)return;
@@ -235,6 +253,8 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
                         &&[asArray(cached[@"members"])isEqual:asArray(observation.family[@"members"])];
                     if(unchanged)continue;
                     [d forgetNativeFamily:source];changed=YES;}}
+            // Audits that were not read are still owed, not failed: the next poll asks for them again.
+            if(auditAll)d.auditAllWanted=YES;else{for(NSNumber *pid in auditPIDs)[d wantWindowAudit:NO pid:pid.intValue logical:nil];for(NSNumber *logical in auditLogicals)[d wantWindowAudit:NO pid:0 logical:logical];}
             if(changed&&!d.frameFlying)[d render];return;
         }
         BOOL describe=NO;
@@ -251,13 +271,18 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
             [d track:source info:observation.info observation:observation];describe=YES;
         }
         if(!d.frameFlying&&(describe||d.sceneDirty))[d render];
-        } @finally {if(!d.cleaning&&d.windowObservationAgain)[d requestWindowObservation];}
+        } @finally {if(!d.cleaning&&d.observationFollowUp)[d requestWindowObservation];}
     }];
 }
 // One look at one bound window: is it gone, was it retitled, where and how large is it now. The poll's look and an event's are this one
 // method. Events read afresh; poll observations carry a bounded worker read with
 // an unchanged source identity/generation/previous-bounds fence. A second look
 // that finds nothing new sends no window_closed and no retitle.
+// One window's source binding straight from the controller's current state, shaped as the snapshot's windows[].source. Absent or unbound fails closed (nil); the owner stays NSNull when the controller has none, as the snapshot's JSON null.
+- (NSDictionary *)sourceBinding:(NSNumber *)window {
+    DriftDesktopSourceBinding b;if(!self.controller||!window||!driftwm_desktop_source_binding(self.controller,window.unsignedLongLongValue,&b))return nil;
+    return @{@"identity":@{@"pid":@(b.pid),@"birth_sec":@(b.birth_sec),@"birth_usec":@(b.birth_usec),@"wid":@(b.wid),@"owner":b.owner?@(b.owner):(id)NSNull.null},@"generation":@(b.generation),@"observation_known":@(b.observation_known!=0),@"observed_rect":DWRectJSON(CGRectMake(b.x,b.y,b.width,b.height))};
+}
 - (void)track:(LiveSource *)source { [self track:source info:windowInfo(source.router.wid)]; }
 - (void)track:(LiveSource *)source info:(NSDictionary *)w { [self track:source info:w observation:nil]; }
 - (void)track:(LiveSource *)source info:(NSDictionary *)w observation:(DWWindowObservation *)observation {
@@ -339,7 +364,7 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
             if([DWTyped(seen[@"resized"],NSNumber.class)boolValue])self.sceneDirty=YES;
         }
         if(self.native){
-            NSDictionary *binding=nil;if(family)for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical]){binding=DWTyped(window[@"source"],NSDictionary.class);break;}
+            NSDictionary *binding=family?[self sourceBinding:source.logical]:nil;
             if(family&&boundIdentity(family[@"identity"],source.identity)&&boundIdentity(binding[@"identity"],source.identity)&&binding[@"generation"]&&[binding[@"observation_known"]boolValue]&&CGRectEqualToRect(DWRectFromJSON(binding[@"observed_rect"]),bounds)){
                 NSDictionary *description=@{@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":DWRectJSON(bounds),@"members":asArray(family[@"members"])?:@[]};
                 if(![source.nativeFamily isEqual:description]){source.nativeFamily=description;self.nativeFamilyRevision++;}
@@ -391,18 +416,18 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 }
 - (void)windowFamilyChanged:(pid_t)pid {
     if(self.cleaning||self.sessionInactive||self.native.ended||(pid&&!DWInScope(self.scope,pid)))return;
-    if(self.native&&!self.native.familiesNeeded){[self windowDiscoveryRequested];return;}
+    if(self.native&&!self.native.familiesNeeded){[self wantWindowAudit:NO pid:pid logical:nil];[self windowDiscoveryRequested];return;}
     [self.nativeFamilies invalidatePID:pid];
     if(!self.native){[self captureDemand];[self render];return;}
     for(LiveSource *source in self.sources.allValues)if(!source.detached&&(!pid||source.router.pid==pid)){[self forgetNativeFamily:source];source.observationToken=++self.observationEpoch;[source invalidateNativeButtons];[self refreshNativeButtons:source];}
     // An application's first window has no bound source to invalidate. Its
     // creation hint still requests discovery now, through the same single-flight
-    // observer; a hint during a read queues at most one fresh follow-up batch.
-    [self windowDiscoveryRequested];
+    // observer; a hint during a read queues at most one fresh follow-up batch. Invalidation above is immediate; the audit is this pid's.
+    [self wantWindowAudit:NO pid:pid logical:nil];[self windowDiscoveryRequested];
 }
 - (void)windowDiscoveryRequested {
     if(self.cleaning||self.sessionInactive||self.native.ended||!self.manager)return;
-    self.windowObservationAgain=YES;[self requestWindowObservation];
+    self.discoveryWanted=YES;[self requestWindowObservation];
 }
 // Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
 - (void)focusChanged { if(self.cleaning||[self nativeUnavailable]||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }

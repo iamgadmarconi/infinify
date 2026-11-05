@@ -37,6 +37,10 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,
 // presenter and is a replica, even when no real placement is available.
 // No world/camera state is changed here. This plan is not an acknowledgement of
 // native clipping or capture readiness. Main thread only.
+// Negative-only hover preflight: YES when no transfer candidate can exist, so the
+// per-event snapshot, recipient and hit work may be skipped. It rejects work and
+// never grants authority; a plan not known current (or any replica) never rejects.
+BOOL DWNativeViewsHoverImpossible(BOOL planCurrent,BOOL heldTransfer,NSUInteger replicaSites);
 @interface DWNativeViews : NSObject
 - (NSDictionary *)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities;
 // Current audited geometry, independent of capture demand: logical root ->
@@ -57,6 +61,8 @@ NSDictionary *DWNativeFamilyPresentationSnapshot(NSDictionary *snapshot,
 // their own output; pins stay on their pinned display. Null until described.
 @property(nonatomic,readonly) NSDictionary *presentationSnapshot;
 - (BOOL)replica:(NSNumber *)window output:(NSNumber *)output;
+// Replica sites in the latest description; zero means no window has a copy a hover could take over.
+@property(nonatomic,readonly) NSUInteger replicaSiteCount;
 - (NSDictionary *)placement:(NSNumber *)window output:(NSNumber *)output;
 @property(nonatomic,readonly) NSSet<NSNumber *> *capturedWindows;
 // Initial/automatic selection and same-output camera motion retain ordinary

@@ -95,6 +95,15 @@
     if(!observation||CACurrentMediaTime()>=self.nativeHoverUntil||![self nativeHoverAllowed]
         ||(([observation[@"flags"]unsignedLongLongValue]^NSEvent.modifierFlags)&NSEventModifierFlagDeviceIndependentFlagsMask)
         ||!CGPointEqualToPoint(point,jsonPoint(observation[@"point"]))){[self cancelNativeHoverForWindow:nil];return;}
+    // Without a held transfer every no-replica outcome below is cancelNativeHoverForWindow:nil. When the cached
+    // description is provably the one nativeDescription: would return (same keys), skip the snapshot, native hit tests
+    // and validations. Any invalidation (nil snapshot) or other change falls through to the full path.
+    NSDictionary *latest=self.controllerVisualSnapshot;
+    BOOL enabled=!self.native.ended&&!self.sessionInactive&&!self.cleaning&&self.panels.count;
+    BOOL current=self.native&&self.nativeViews&&latest&&self.nativeViewSnapshot==latest&&self.nativeViewPresenter==self.native
+        &&self.nativeViewFamilyRevision==self.nativeFamilyRevision&&self.nativeViewEnabled==enabled
+        &&self.nativeViewTransferRevision==self.nativeViews.transferRevision&&self.nativeViews.presentationSnapshot;
+    if(DWNativeViewsHoverImpossible(current,self.nativeHoverTransfer!=nil,self.nativeViews.replicaSiteCount)){[self cancelNativeHoverForWindow:nil];return;}
     [self nativeDescription:[self visualSnapshot]];
     NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);
     DWNativeViewTransfer *held=self.nativeHoverTransfer;
@@ -140,7 +149,7 @@
         ||![self.nativeViews replica:window output:output])return nil;
     // Cooperative singleton helpers normally need no family polling. A transfer
     // does; ask the existing bounded observation worker, never invent root-only.
-    if(!source.nativeFamily){if(!source.nativeTransferFamilyWanted){source.nativeTransferFamilyWanted=YES;self.windowObservationAgain=YES;[self requestWindowObservation];}
+    if(!source.nativeFamily){if(!source.nativeTransferFamilyWanted){source.nativeTransferFamilyWanted=YES;self.discoveryWanted=YES;[self wantWindowAudit:NO pid:0 logical:source.logical];[self requestWindowObservation];}
         if(self.nativeHoverObservation){self.nativeTransferUntil=MAX(self.nativeTransferUntil,self.nativeHoverUntil);[self startNativeTransferTimer];}return nil;}
     DWNativeViewTransfer *current=[self.nativeViews currentTransferForWindow:window];
     if(current&&[self.nativeViews isTransferCurrent:current]&&current.output==output.unsignedLongLongValue)return current;

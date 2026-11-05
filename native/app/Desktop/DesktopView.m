@@ -28,7 +28,12 @@
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { (void)sender;return NO; }
 - (CGPoint)screenPoint:(NSEvent *)e { if(self.nativePointValid)return self.nativePoint;CGPoint p=[self convertPoint:e.locationInWindow fromView:nil]; return CGPointMake(p.x+self.globalBounds.origin.x,p.y+self.globalBounds.origin.y); }
 - (NSNumber *)outputAt:(CGPoint)p {
-    for(NSDictionary *o in [self.desktop call:@{@"op":@"snapshot"}][@"outputs"])if([self.outputs containsObject:o[@"id"]]&&CGRectContainsPoint(DWRectFromJSON(o[@"screen_bounds"]),p))return o[@"id"];
+    // Walk the controller's output order (the snapshot's) with typed queries: no snapshot, JSON or cache invalidation per input event.
+    DriftDesktop *c=self.desktop.controller;if(!c)return nil;
+    for(size_t i=0,n=driftwm_desktop_output_count(c);i<n;i++){uint64_t oid;DriftDesktopRect r;NSNumber *o;
+        if(!driftwm_desktop_output_id_at(c,i,&oid)||![self.outputs containsObject:(o=@(oid))]||!driftwm_desktop_output_screen_bounds(c,oid,&r))continue;
+        if(CGRectContainsPoint(CGRectMake(r.x,r.y,r.width,r.height),p))return o;
+    }
     return nil;
 }
 - (NSNumber *)actionOutput { return [self.outputs containsObject:self.lastOutput]?self.lastOutput:self.outputs.firstObject; }

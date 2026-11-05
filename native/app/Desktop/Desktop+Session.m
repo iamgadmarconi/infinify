@@ -104,7 +104,7 @@
             d.navigation.enabled=YES;d.lastObservation=0;
             for(LiveSource *source in d.sources.allValues){source.observationToken=++d.observationEpoch;[source invalidateNativeButtons];
                 if(source.nativeMinimized||source.nativeVisibilityHeld){source.nativeVisibilityRevision++;source.nativeVisibilityWanted=YES;source.nativeVisibilityRetryAt=0;source.nativeVisibilityStable=nil;source.nativeVisibilityRestore=nil;}}
-            d.windowObservationAgain=YES;[d requestWindowObservation];[d configureNativeInput];[d render];
+            d.discoveryWanted=YES;[d wantWindowAudit:YES pid:0 logical:nil];[d requestWindowObservation];[d configureNativeInput];[d render];
         });
     });
 }

@@ -183,6 +183,10 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 // Desktop+Windows.m
 @interface Desktop (Windows) <DWWindowHost>
 - (void)requestWindowObservation;
+// The controller's current binding of one logical window (the snapshot's windows[].source: identity, generation, observation_known, observed_rect), or nil.
+- (NSDictionary *)sourceBinding:(NSNumber *)window;
+- (void)wantWindowAudit:(BOOL)all pid:(pid_t)pid logical:(NSNumber *)logical;
+- (BOOL)windowObservationPending;
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world;
 - (void)detach:(LiveSource *)source;
 - (void)track:(LiveSource *)source info:(NSDictionary *)info;

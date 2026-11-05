@@ -19,7 +19,7 @@
             NSDictionary *hit=[self hit:point output:command[@"output"]],*member=DWTyped(hit[@"native_member"],NSDictionary.class);NSNumber *window=DWTyped(hit[@"window"],NSNumber.class);LiveSource *candidate=window?d.sources[window]:nil;
             if(member&&candidate&&[d.nativeFamilies contains:candidate.logical identity:member[@"identity"] generation:member[@"generation"] bounds:DWRectFromJSON(member[@"native_bounds"])]&&DWNativeWindowBelongsToRoot(member[@"identity"],candidate.identity)){source=candidate;replicaMember=member;}
         }
-        if(source){NSDictionary *binding=nil;for(NSDictionary *window in [d call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical])binding=DWTyped(window[@"source"],NSDictionary.class);
+        if(source){NSDictionary *binding=[d sourceBinding:source.logical];
             if(!boundIdentity(source.identity,binding[@"identity"])||!binding[@"generation"])return nil;
             if(replicaMember&&(![replicaMember[@"generation"]isEqual:binding[@"generation"]]||![binding[@"observation_known"]boolValue]))return nil;
             if(replicaMember){childBounds=replicaMember[@"native_bounds"];childHover=@{@"window":source.logical,@"output":command[@"output"],@"generation":binding[@"generation"],@"identity":replicaMember[@"identity"],@"root_identity":source.identity,@"native_member":@YES};}

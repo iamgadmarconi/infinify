@@ -224,6 +224,17 @@ impl Controller {
                 && !resize.live()
         })
     }
+    /// May the shell drop, hide or re-bind a source now? `None` asks about every window. True with
+    /// no transaction, or one of another window; else only once nothing is owed, nothing is
+    /// uncertain and the transaction ended (a held pointer resize is live without an effect).
+    pub(crate) fn resize_removal_allowed(&self, window: Option<WindowId>) -> bool {
+        self.native_resize.as_ref().is_none_or(|t| {
+            window.is_some_and(|w| w != t.window)
+                || (t.pending_effect.is_none()
+                    && !t.uncertain_mutation
+                    && matches!(t.phase, Phase::Complete | Phase::Failed))
+        })
+    }
     pub(crate) fn cancelled_resize_window(&self) -> Option<WindowId> {
         self.native_resize
             .as_ref()

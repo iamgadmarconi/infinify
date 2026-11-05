@@ -387,6 +387,49 @@ static void readback(void){
     ended=snap(c);expire();check([ended isEqual:snap(c)]&&co.obligations==0,@"readback: old watchdogs cannot affect the last completed transaction");
     [co shutdown];driftwm_desktop_destroy(c);
 }
+// The scalar removal query against the command path, over every transaction state: no transaction, a pending effect, a held grab
+// that owes nothing, a cancelled one, specific vs all windows, and a failing query that must fall back (never permit).
+static void removalQuery(void){
+    DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);
+    NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array];__block NSUInteger snapshots=0,queries=0;__block BOOL failing=NO;
+    DWResizeCoordinator *co=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *command){if([command[@"op"]isEqual:@"snapshot"])snapshots++;return call(c,command);}driver:driver worker:^(DWJob job){[workers addObject:[job copy]];}main:^(DWJob job){[mains addObject:[job copy]];}];
+    co.enabled=YES;
+    check(call(c,@{@"op":@"native_resize_capability",@"enabled":@YES})!=nil,@"capability");
+    call(c,@{@"op":@"register_output",@"stable_id":@"one",@"screen_bounds":rect(0,0,1000,800)});
+    call(c,@{@"op":@"attach",@"identity":identity(),@"bundle_id":@"test",@"title":@"source",@"buffer":@{@"width":@400,@"height":@300},@"source_rect":rect(10,20,200,150),@"world_rect":rect(100,100,200,150)});
+    // Reference: the coordinator without the query, i.e. the command-based predicate.
+    void (^agree)(NSString *)=^(NSString *when){
+        for(NSNumber *w in @[NSNull.null,@1,@2,@0]){NSNumber *window=[w isKindOfClass:NSNull.class]?nil:w;
+            co.removalAllowed=nil;BOOL expected=[co canRemove:window];
+            co.removalAllowed=^BOOL(NSNumber *window,BOOL *allowed){queries++;if(failing)return NO;uint8_t ok=7;
+                if(!driftwm_desktop_resize_removal_allowed(c,window==nil,window.unsignedLongLongValue,&ok))return NO;*allowed=ok!=0;return YES;};
+            NSUInteger before=snapshots;BOOL got=[co canRemove:window];
+            check(got==expected,[@"removal: query equals the command predicate " stringByAppendingString:when]);
+            check(snapshots==before,[@"removal: the query asks for no snapshot " stringByAppendingString:when]);
+            failing=YES;before=snapshots;got=[co canRemove:window];failing=NO;
+            check(got==expected&&snapshots>before,[@"removal: a failed query falls back to the command path " stringByAppendingString:when]);}
+    };
+    agree(@"without a transaction");
+    check([co canRemove:nil]&&[co canRemove:@1],@"removal: no transaction permits removal");
+    NSDictionary *reply=call(c,@{@"op":@"ipc",@"output":@1,@"request":@{@"Resize":@{@"window":@1,@"to":@[@320,@200]}}});check([reply[@"effect"]isKindOfClass:NSDictionary.class],@"removal: a size request");
+    agree(@"with a pending effect");
+    check(![co canRemove:nil]&&![co canRemove:@1]&&[co canRemove:@2],@"removal: a pending effect blocks its own window only");
+    [co consume:@{@"effect":reply[@"effect"]}];drain(workers,mains);
+    check(co.obligations==0,@"removal: the transaction is answered");agree(@"after the transaction ended");
+    check([co canRemove:nil]&&[co canRemove:@1],@"removal: an ended transaction permits removal");
+    // A held grab at rest owes nothing (obligations 0, no busy window) and still blocks removal.
+    driver.skew=1;NSDictionary *grab=[co request:@{@"op":@"begin_native_resize",@"window":@1,@"output":@1,@"edges":@"right",@"start_screen":@{@"x":@50,@"y":@50}}];driver.skew=0;
+    check(grab!=nil,@"removal: a grab begins");drain(workers,mains);
+    check(co.obligations==0&&[co busyWindow]==nil&&[snap(c)[@"native_resize"][@"phase"]isEqual:@"dragging"],@"removal: the held grab owes nothing");
+    agree(@"during a held grab with no obligations");
+    check(![co canRemove:nil]&&![co canRemove:@1]&&[co canRemove:@2]&&[co canRemove:@0],@"removal: a held grab blocks its window, not others");
+    [co cancel];drain(workers,mains);agree(@"after cancel");
+    check([co canRemove:nil]&&[co canRemove:@1],@"removal: a cancelled grab permits removal once settled");
+    // The callback is read afresh: it never caches a permission.
+    co.removalAllowed=^BOOL(NSNumber *window,BOOL *allowed){(void)window;*allowed=YES;return YES;};check([co canRemove:nil],@"removal: a callback's answer is used");
+    check(queries>0,@"removal: the typed query ran");
+    [co shutdown];driftwm_desktop_destroy(c);
+}
 static void abandonedCoordinator(void){
     DriftDesktop *c=driftwm_desktop_create();Driver *driver=[Driver new];driver.bounds=CGRectMake(10,20,200,150);
     NSMutableArray *workers=[NSMutableArray array],*mains=[NSMutableArray array],*delays=[NSMutableArray array];
@@ -439,6 +482,6 @@ int main(void){@autoreleasepool{
     CGRect native=CGRectMake(10,20,200,150);CMSampleBufferRef s=sample(native,@{});NSDictionary *m=captureMetadata(s,100,native);check([m[@"buffer"][@"width"]intValue]==480&&[m[@"content_rect"][@"origin"][@"x"]intValue]==20,@"actual padded crop");CFRelease(s);
     NSArray *invalid=@[@{SCStreamFrameInfoDisplayTime:NSNull.null},@{SCStreamFrameInfoDisplayTime:@100},@{SCStreamFrameInfoDisplayTime:@(-1)},@{SCStreamFrameInfoDisplayTime:@100.5},@{SCStreamFrameInfoDisplayTime:@1e30},@{SCStreamFrameInfoStatus:NSNull.null},@{SCStreamFrameInfoStatus:@.5},@{SCStreamFrameInfoContentScale:@0},@{SCStreamFrameInfoScreenRect:NSNull.null},@{SCStreamFrameInfoContentRect:CFBridgingRelease(CGRectCreateDictionaryRepresentation(CGRectMake(100,100,200,150)))}];
     for(NSDictionary *override in invalid){s=sample(native,override);NSString *why=nil;check(captureMetadata(s,100,native)==nil,@"invalid metadata rejected");check(captureDescription(s,100,native,&why)==nil&&why.length,@"and every rejection says why");CFRelease(s);}
-    readback();abandonedCoordinator();fullscreenFrameRestore();nativeFillDispatch();nativeFillRebase();nativeFillAtomicPreparation();nativeRestoreDispatch();nativeBaselineAdmission();nativeSnapshotFillDispatch();
+    readback();removalQuery();abandonedCoordinator();fullscreenFrameRestore();nativeFillDispatch();nativeFillRebase();nativeFillAtomicPreparation();nativeRestoreDispatch();nativeBaselineAdmission();nativeSnapshotFillDispatch();
     puts("PASS: native readback coordinator + Rust C ABI; standalone synthetic CV/CMSampleBuffer metadata oracle; no native app/window/AX/capture started");return 0;
 }}
