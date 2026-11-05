@@ -3,6 +3,15 @@
 #import "DWGeometryJSON.h"
 #import <QuartzCore/QuartzCore.h>
 
+// WindowServer's displayed origin is rounded down in CG screen points. Letting
+// AppKit round a fractional, vertically flipped panel origin instead can move
+// the snapshot down a point at handoff (and back on reveal). Keep this policy
+// local to interactive pictures; logical geometry and final reveal stay exact.
+static CGRect DWResizePictureRect(CGRect rect) {
+    rect.origin.x=floor(rect.origin.x);rect.origin.y=floor(rect.origin.y);
+    return rect;
+}
+
 @implementation DWNativeResizePresentation {
     id<DWNativeResizePresenter> _presenter;
     DWResizeCapture _capture;
@@ -23,7 +32,7 @@
 + (DWResizeCapture)snapshotCapture {
     return ^DWJob(DWNativeHiddenRoot *root,BOOL (^valid)(void),void (^completion)(id<DWNativeResizePicture>,NSString *)){
         DWNativeTransitionCapture *capture=[DWNativeTransitionCapture captureIdentity:root.identity nativeBounds:root.nativeBounds screenRect:root.screenRect validate:valid completion:^(DWNativeTransitionCaptureResult *result,NSString *failure){
-            DWNativeTransition *picture=result?[[DWNativeTransition alloc]initWithImage:result.image screenRect:result.screenRect]:nil;
+            DWNativeTransition *picture=result?[[DWNativeTransition alloc]initWithImage:result.image screenRect:DWResizePictureRect(result.screenRect)]:nil;
             completion((id)picture,failure?:(!picture?@"snapshot panel unavailable":nil));
         }];
         return ^{[capture cancel];};
@@ -118,7 +127,7 @@
     }
     if(_picture){
         CGRect target=state.screenRect;
-        if(![_picture setScreenRect:target]){[self abort:@"Resize cancelled: snapshot geometry unavailable"];_updating=NO;return;}
+        if(![_picture setScreenRect:DWResizePictureRect(target)]){[self abort:@"Resize cancelled: snapshot geometry unavailable"];_updating=NO;return;}
         if(_revealing&&!CGRectEqualToRect(target,_target)){[self abort:@"Resize cancelled: final placement changed during reveal"];_updating=NO;return;}
         _target=target;
     }

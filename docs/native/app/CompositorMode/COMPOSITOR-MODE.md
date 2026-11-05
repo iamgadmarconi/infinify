@@ -160,12 +160,73 @@ title move at zoom 0.5 moved by (180, 60) screen points with zero sampled scale
 changes. Diagnosis tools and traces are local, ignored evidence under
 `target/ipc/wbugs/`, not a portable live regression suite.
 
-Limits: left/top resizes still show a small opposite-edge wobble (about four
-screen points in the measured top-edge run) between the AX size update and
-presentation of its compensated origin. These fixes address the reproduced
-admission failures, not all third-party caption layouts or physical trackpad
-subtypes. Fixture readbacks are not proof of generally usable third-party
-native-window compositing.
+These admission fixes alone left opposite-edge wobble between AX resizing and
+presentation of the compensated origin. The follow-up below covers that gap.
+Neither fixture readbacks nor these routing fixes establish third-party caption
+layouts or physical trackpad behavior.
+
+### Anchored interactive resize presentation (2026-11-05)
+
+Top/left interactive native resizing now uses a temporary **static, stretched
+snapshot**. Capture and panel ordering precede the helper's hide acknowledgement;
+only then may the baseline read and native setters run. The picture follows each
+accepted controller rectangle without animation. Release drains outstanding
+setters/readback, reveals the latest placement, and waits for its acknowledgement
+before removing the picture. Right/bottom-only resizing keeps its live path.
+
+Preparation is bounded; missing Screen Recording access or unsupported attached
+families explicitly cancels before mutation. Cancellation after dispatch keeps
+coverage through the actual setter and diagnostic read, including a setter whose
+watchdog already fired. A truly stuck call keeps coverage while the session is
+healthy; session teardown restores through the helper journal. This is not a
+whole-desktop update freeze.
+
+Two follow-up guest failures sharpened the geometry contract:
+- AppKit can settle another native point after the AX/CG driver readback. Bind
+  presentation from the root frame in the same fresh family audit; retain the
+  controller's separately accepted AX rectangle and strict family validation.
+- Floor interactive picture origins in CG screen points before AppKit's vertical
+  coordinate conversion. Otherwise fractional origins can shift the picture at
+  hide/reveal. Logical rectangles and final native reveal remain unrounded;
+  Fill's animation geometry is unchanged.
+
+Sunlight `ac1fd88429c336a20a47d55deb6095613c96b73c` was measured in guest 2
+using an updater-disabled source build (native resize code unchanged).
+At zoom 0.501575 its native frame/transform samples showed opposite-edge drift
+of 7.92 points for top growth, 4 for left growth, and 3 for top shrinking.
+Pointer-first logical geometry alone therefore did not remove this gap.
+
+Independent composed-display recordings of disposable AppKit fixtures, driven
+through real-HID events in the macOS 27.0.1 guest, measured:
+
+| Drag | Zoom | Native extent change | Maximum opposite-edge pixel range |
+|---|---:|---:|---:|
+| Top growth | 1 | 40 pt | 0 px |
+| Left growth | 0.75 | 53 pt | 1 px |
+| Top-left growth | 0.5 | 80 pt width | 0 px on both axes |
+| Top shrinking | 0.5 | 80 pt | 1 px |
+| Fast top drag/release | 0.5 | 80 pt | 1 px |
+| Top growth | 0.75 | 53 pt | 1 px |
+
+The final recordings use a distinct magenta fixture marker, not wallpaper reds.
+Each contains 115–176 composed frames with no missing marker. A separate animated
+fixture continued updating. Earlier red-marker left-edge results were
+contaminated by wallpaper and are not evidence. The pre-bridge top baseline
+failed the one-pixel bound (2 px). Evidence and exact replay/check tools remain
+ignored under `target/ipc/wbugs/` (`verified-*`, `check-optical.py`,
+`wbdriver.py`); they are not a portable live regression suite.
+
+`sh tests/e2e/native-resize-presentation.sh` tests the production owner,
+coordinator, and extracted adapter geometry selector with substituted native
+dependencies. `desktop-resize.sh`, `native-frame-restore.sh`, and
+`native-presenter-readiness.sh` cover the touched integration. These deterministic
+checks are not optical proof.
+
+Limitations: content is temporarily frozen/stretched, capture permission is
+required for affected edges, and only root-only families are supported.
+A disposable stream experiment stopped delivering live content when its window
+became transparent; live refresh is not promised. Broader third-party windows,
+physical trackpads, and other displays/backing scales remain unverified.
 
 
 The owner's first compositor-mode run (build `c49eae1`, real Mac) reported windows that jump when dragged and when resized, and a Finder window

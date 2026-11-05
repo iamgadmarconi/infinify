@@ -21,6 +21,22 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     CGPoint point=CGEventGetLocation(event);for(DesktopView *view in desktop.views)if(CGRectContainsPoint(view.globalBounds,point))return event;
     [desktop.navigation interrupt];return event;
 }
+// The AX reply and later WindowServer family audit are separate observations.
+// AppKit may settle another native point between them. Use the audited root's
+// own frame for presentation; never change the controller's accepted AX size.
+// The presenter still validates the complete report, including every identity,
+// duplicate, parent and bounds field before granting readiness.
+static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary *identity,CGRect fallback) {
+    if(![family[@"identity"]isEqual:identity]||![family[@"root"]isEqual:identity[@"wid"]]
+        ||![family[@"members"]isKindOfClass:NSArray.class])return fallback;
+    for(id value in family[@"members"]){
+        if(![value isKindOfClass:NSDictionary.class])continue;
+        NSDictionary *member=value;
+        if([member[@"identity"]isEqual:identity]&&[member[@"parent"]isEqual:@0])
+            return DWRectFromJSON(member[@"native_bounds"]);
+    }
+    return fallback;
+}
 @implementation Desktop (Navigation)
 // All initial interactive effects pass through coordinator admission, including
 // DesktopView's direct resize.request path and gesture requests (not consumeSize).
@@ -237,7 +253,13 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
             CGRect observed=DWRectFromJSON(source[@"observed_rect"]),prior=CGRectZero;
             if(!CGRectEqualToRect(observed,DWRectFromJSON(result[@"actual_ax"])))break;
             if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)live.router.bounds,&prior)||!CGRectEqualToRect(prior,observed))live.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
-            [self.native bound:live.identity bounds:observed];break;
+            CGRect native=DWRectFromJSON(result[@"actual_cg"]);
+            if(self.native.familiesNeeded){
+                NSDictionary *family=DWNativeWindowFamily(live.identity,NULL)?:@{};
+                native=DWResizePresentationNativeBounds(family,live.identity,native);
+                [self.native bound:live.identity bounds:native family:family];
+            }else [self.native bound:live.identity bounds:native];
+            break;
         }
     }
     [self.nativeResizePresentation update];

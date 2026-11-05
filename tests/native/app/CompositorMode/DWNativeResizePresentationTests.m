@@ -4,6 +4,7 @@
 #import "DWNativeResizePresentation.h"
 #import "DWResizeCoordinator.h"
 #import "DWGeometryJSON.h"
+#include "DWResizePresentationNativeBounds.inc"
 static void check(BOOL ok,NSString *why){if(!ok){fprintf(stderr,"FAIL: %s\n",why.UTF8String);exit(2);}}
 // The production capture implementation is linked, but never invoked.
 NSDictionary *DWNativeWindowFamily(NSDictionary *identity,NSString **why){(void)identity;if(why)*why=@"test refuses capture";return nil;}
@@ -89,6 +90,12 @@ NSDictionary *DWNativeWindowFamily(NSDictionary *identity,NSString **why){(void)
 - (void)drain {NSArray *jobs=self.workers.copy;[self.workers removeAllObjects];for(DWJob job in jobs)job();}
 @end
 int main(void){@autoreleasepool{
+    NSDictionary *identity=@{@"pid":@5,@"wid":@9,@"birth_sec":@1,@"birth_usec":@0};
+    CGRect driver=CGRectMake(300,200,800,462),audited=CGRectMake(300,200,800,463);
+    NSDictionary *family=@{@"identity":identity,@"root":@9,@"members":@[@{@"identity":identity,@"parent":@0,@"native_bounds":DWRectJSON(audited)}]};
+    check(CGRectEqualToRect(DWResizePresentationNativeBounds(family,identity,driver),audited),@"presentation uses same family observation when AppKit settles after driver readback");
+    check(CGRectEqualToRect(DWResizePresentationNativeBounds(@{},identity,driver),driver),@"missing audit retains fallback for presenter to refuse");
+    check(CGRectEqualToRect(DWResizePresentationNativeBounds(family,@{@"wid":@10},driver),driver),@"different root identity cannot supply presentation geometry");
     for(NSString *edge in @[@"left",@"top",@"top_left",@"top_right",@"bottom_left"])
         check([DWNativeResizePresentation requiresBridgeForTransaction:@{@"interactive":@YES,@"edges":edge}],@"affected edge requires bridge");
     for(NSString *edge in @[@"right",@"bottom",@"bottom_right"])
@@ -108,6 +115,9 @@ int main(void){@autoreleasepool{
     check(CGRectGetMaxX(h.picture.rect)==500&&CGRectGetMaxY(h.picture.rect)==400,@"native extent phase does not move picture");
     h.target=CGRectMake(50,50,450,350);[h.owner update];
     check(CGRectEqualToRect(h.picture.rect,h.target)&&CGRectGetMaxX(h.picture.rect)==500&&CGRectGetMaxY(h.picture.rect)==400,@"accepted top/left commit updates picture immediately with fixed opposite edges");
+    h.target=CGRectMake(50.25,50.5,450,350);[h.owner update];
+    check(CGRectEqualToRect(h.picture.rect,CGRectMake(50,50,450,350)),@"fractional picture origin follows native CG grid, not flipped AppKit rounding");
+    h.target=CGRectMake(50,50,450,350);[h.owner update];
     [h.owner update];check(!h.presenter.reveals&&!h.picture.removed,@"held transaction remains covered");
     h.finished=YES;[h.owner update];check(h.presenter.reveals==1&&!h.picture.removed&&CGRectEqualToRect(h.presenter.target,h.target),@"release drains then reveals latest committed frame");
     h.presenter.revealed=YES;[h.owner update];check(!h.owner.active&&h.picture.removed&&h.presenter.resumes==1,@"only reveal ACK removes successful picture");
