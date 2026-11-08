@@ -40,7 +40,8 @@ static DWResizeResult result(DWResizeOutcome o) { return (DWResizeResult){.outco
 static AXError timeout(AXUIElementRef element, double deadline) { return DWAXTimeout(element,deadline,.15); }
 static void log_window_lookup(AXUIElementRef element,pid_t expectedPID,uint32_t expectedWindow,CFIndex index,AXError error,double deadline) { DWAXLogWindowLookup("resize",.15,element,expectedPID,expectedWindow,index,error,deadline); }
 static bool windowless_scroll_area(AXUIElementRef element,pid_t expectedPID,double deadline) { return DWAXWindowlessScrollArea(element,expectedPID,deadline,.15); }
-static AXUIElementRef resolve(DWResizeIdentity i, double deadline, DWResizeResult *r) {
+static AXUIElementRef resolve_once(DWResizeIdentity i, double deadline, DWResizeResult *r) {
+    r->ax_error=kAXErrorSuccess;
     if (!owner(i,NULL)) { r->outcome=DWResizeStaleIdentity; return NULL; }
     if (!AXIsProcessTrusted()) { r->outcome=DWResizeUnavailable; return NULL; }
     WindowIDFunction getWindow=(WindowIDFunction)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
@@ -57,11 +58,17 @@ static AXUIElementRef resolve(DWResizeIdentity i, double deadline, DWResizeResul
     for (CFIndex n=0;n<CFArrayGetCount(windows);n++) {
         if (now()>=deadline) { r->outcome=DWResizeTimedOut; break; }
         AXUIElementRef w=(AXUIElementRef)CFArrayGetValueAtIndex(windows,n); uint32_t wid=0; pid_t pid=0;
-        if (CFGetTypeID(w)!=AXUIElementGetTypeID() || timeout(w,deadline)!=kAXErrorSuccess) { r->outcome=DWResizeUnavailable; break; }
+        if (CFGetTypeID(w)!=AXUIElementGetTypeID()) { r->outcome=DWResizeUnavailable; break; }
+        r->ax_error=timeout(w,deadline);
+        if (r->ax_error!=kAXErrorSuccess) { r->outcome=DWResizeUnavailable; break; }
         AXError e=getWindow(w,&wid);
         if (e==kAXErrorIllegalArgument && windowless_scroll_area(w,i.pid,deadline)) continue;
         // Unknown elements and real-window errors must not hide a second match.
-        if (e!=kAXErrorSuccess) { log_window_lookup(w,i.pid,i.window,n,e,deadline); r->ax_error=e; r->outcome=DWResizeUnavailable; break; }
+        if (e!=kAXErrorSuccess) {
+            // Further AX queries to a busy owner would consume the retry budget.
+            if (e!=kAXErrorCannotComplete) log_window_lookup(w,i.pid,i.window,n,e,deadline);
+            r->ax_error=e; r->outcome=DWResizeUnavailable; break;
+        }
         if (wid==i.window) {
             if (AXUIElementGetPid(w,&pid)!=kAXErrorSuccess || pid!=i.pid) { r->outcome=DWResizeStaleIdentity; break; }
             matches++; if (!found) found=(AXUIElementRef)CFRetain(w);
@@ -72,6 +79,18 @@ static AXUIElementRef resolve(DWResizeIdentity i, double deadline, DWResizeResul
     if (r->outcome==DWResizeMissingWindow && matches>1) r->outcome=DWResizeAmbiguousWindow;
     else if (r->outcome==DWResizeMissingWindow && matches==1) r->outcome=DWResizeStaleIdentity;
     if (found) CFRelease(found); return NULL;
+}
+static AXUIElementRef resolve(DWResizeIdentity i, double deadline, DWResizeResult *r) {
+    do {
+        AXUIElementRef window=resolve_once(i,deadline,r);
+        if (window || r->ax_error!=kAXErrorCannotComplete) return window;
+        // A partial AXWindows scan cannot establish a unique match. Restart
+        // with fresh ownership and the entire list, within the same budget.
+        double remaining=deadline-now();
+        if (remaining<=0) break;
+        usleep((useconds_t)ceil(fmin(.03,remaining)*1e6));
+    } while (now()<deadline);
+    r->outcome=DWResizeTimedOut; return NULL;
 }
 static bool near(double a,double b) { return fabs(a-b)<=1.; }
 static bool same_size(CGSize a,CGSize b) { return near(a.width,b.width)&&near(a.height,b.height); }

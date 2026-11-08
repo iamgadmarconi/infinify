@@ -28,12 +28,19 @@ static BOOL DWNativeChromeFrameMatches(CGRect own,CGRect displayed,NSDictionary 
         &&fabs(CGRectGetMinX(wanted)-CGRectGetMinX(displayed))<=1.01&&fabs(CGRectGetMaxX(wanted)-CGRectGetMaxX(displayed))<=1.01
         &&fabs(CGRectGetMinY(wanted)-CGRectGetMinY(displayed))<=1.01&&fabs(CGRectGetMaxY(wanted)-CGRectGetMaxY(displayed))<=1.01;
 }
+static const NSTimeInterval DWNativeGreenMapLifetime=1;
 // Failed AX refresh is not a new chrome observation. Only a still-public map
 // can survive it, under its original title-hit age and exact native geometry.
 // A returned report (including a negative title result) always supersedes it.
 static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictionary *current,NSDictionary *identity,
     CFTimeInterval now,BOOL nativeCurrent,CGRect native) {
-    if(report)return now-[report[@"sampled_at"]doubleValue]<=.1?report:nil;
+    if(report){
+        // A busy main queue can delay publication. Keep evidence that is
+        // still valid for green-button hit testing. Title hits check their own
+        // shorter lifetime when the press arrives.
+        double age=now-[report[@"sampled_at"]doubleValue];
+        return age>=0&&age<=DWNativeGreenMapLifetime?report:nil;
+    }
     double sampled=[current[@"sampled_at"]doubleValue],age=now-sampled;
     if(!current||!nativeCurrent||![current[@"identity"]isEqual:identity]||!isfinite(sampled)||sampled<=0
         ||!isfinite(age)||age<0||age>.5||!isfinite(native.origin.x)||!isfinite(native.origin.y)
@@ -74,7 +81,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     }});
 }
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point {
-    if(!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>1||![birth(source.router.pid)isEqual:source.router.processBirth]||!DWInScope(self.scope,source.router.pid))return NO;
+    if(!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime||![birth(source.router.pid)isEqual:source.router.processBirth]||!DWInScope(self.scope,source.router.pid))return NO;
     if(self.native.familiesNeeded){uint32_t parent=0;if(!DWNativeWindowParent(source.identity,&parent)||parent)return NO;}
     NSDictionary *info=windowInfo(source.router.wid);CGRect displayed=CGRectZero,own=CGRectZero;
     if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||![info[(id)kCGWindowIsOnscreen]boolValue]||[info[(id)kCGWindowAlpha]doubleValue]<=0
@@ -82,7 +89,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     return DWNativeDecorationHit(source.nativeButtons,source.identity,own,displayed,point);
 }
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output {
-    if(!DWCapturedInputAvailable(source)||!source.pixels||(self.native&&![self.nativeViews replica:source.logical output:output])||!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>1||!DWInScope(self.scope,source.router.pid)||![birth(source.router.pid)isEqual:source.router.processBirth])return NO;
+    if(!DWCapturedInputAvailable(source)||!source.pixels||(self.native&&![self.nativeViews replica:source.logical output:output])||!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime||!DWInScope(self.scope,source.router.pid)||![birth(source.router.pid)isEqual:source.router.processBirth])return NO;
     NSDictionary *placement=nil;for(NSDictionary *item in [self presentationSnapshot][@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:output]){placement=item;break;}
     if(!placement||[placement[@"family_only"]boolValue])return NO;CGRect own=CGRectZero;
     NSDictionary *info=windowInfo(source.router.wid);

@@ -50,9 +50,14 @@ static NSString *v2SpaceDisplay(uint64_t space,BOOL target) {
     return nil;
 }
 static BOOL v2CanMoveSpace(uint32_t wid,uint64_t target,uint64_t *source,NSString **display) {
+    uint64_t current=v2WindowSpace(wid);
+    if(!current)return NO;
     NSString *targetDisplay=v2SpaceDisplay(target,YES);
-    uint64_t current=v2WindowSpace(wid);NSString *sourceDisplay=v2SpaceDisplay(current,YES);
-    if(!targetDisplay||!sourceDisplay||(current!=target&&[sourceDisplay isEqual:targetDisplay]))return NO;
+    if(!targetDisplay)return NO;
+    // For the common same-Space frame, the target check already validates
+    // the window's observed Space and its current display.
+    NSString *sourceDisplay=current==target?targetDisplay:v2SpaceDisplay(current,YES);
+    if(!sourceDisplay||(current!=target&&[sourceDisplay isEqual:targetDisplay]))return NO;
     if(source)*source=current;if(display)*display=sourceDisplay;return YES;
 }
 // Confirm an earlier void request before allowing any replacement request.

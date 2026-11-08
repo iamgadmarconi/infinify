@@ -454,38 +454,78 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
     if(reason)*reason=@"accepted";
     return @{@"region":DWRectJSON(CGRectMake(0,0,own.size.width,bottom-own.origin.y)),@"excluded":excluded};
 }
+static AXError decorationTimeout(AXUIElementRef element,CFTimeInterval deadline){
+    CFTimeInterval remaining=deadline-CACurrentMediaTime();
+    return remaining>0?AXUIElementSetMessagingTimeout(element,(float)fmin(.02,remaining)):kAXErrorCannotComplete;
+}
+
+static CFArrayRef decorationWindowList(AXUIElementRef app,CFTimeInterval deadline){
+    while(CACurrentMediaTime()<deadline){
+        CFTypeRef list=NULL;
+        AXError error=decorationTimeout(app,deadline);
+        if(!error)error=AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&list);
+        if(!error&&list&&CFGetTypeID(list)==CFArrayGetTypeID()&&CFArrayGetCount(list)<=256)return (CFArrayRef)list;
+        if(list)CFRelease(list);
+        if(error!=kAXErrorCannotComplete)break;
+        // Finder can be busy while drawing or tracking a menu. Ask for the
+        // complete list again before attempting a unique-window match.
+        CFTimeInterval remaining=deadline-CACurrentMediaTime();
+        if(remaining>0)[NSThread sleepForTimeInterval:fmin(.005,remaining)];
+    }
+    return NULL;
+}
+
+// A successful read with no frame means the control is known to be absent
+// or disabled. An incomplete read is not evidence to replace cached chrome.
+static BOOL decorationGreenButton(AXUIElementRef window,CFStringRef attribute,CGRect own,CFTimeInterval deadline,CGRect *frame){
+    *frame=CGRectNull;
+    if(decorationTimeout(window,deadline))return NO;
+    AXError error=kAXErrorSuccess;
+    __attribute__((objc_precise_lifetime)) id value=decorationAttribute(window,attribute,&error);
+    if(error==kAXErrorAttributeUnsupported||error==kAXErrorNoValue)return YES;
+    if(error||!value||CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return NO;
+    AXUIElementRef button=(__bridge AXUIElementRef)value;
+    if(decorationTimeout(button,deadline)||![decorationAttribute(button,kAXRoleAttribute,NULL)isEqual:(__bridge NSString *)kAXButtonRole])return NO;
+    if(decorationTimeout(button,deadline))return NO;
+    id enabled=decorationAttribute(button,kAXEnabledAttribute,NULL);
+    if(!enabled||CFGetTypeID((__bridge CFTypeRef)enabled)!=CFBooleanGetTypeID())return NO;
+    if(!CFBooleanGetValue((__bridge CFBooleanRef)enabled))return YES;
+    CGRect observed;
+    if(decorationTimeout(button,deadline)||!decorationFrame(button,&observed)||!CGRectContainsRect(CGRectInset(own,-1,-1),observed))return NO;
+    *frame=decorationLocal(observed,own);
+    return YES;
+}
+
 NSDictionary *DWNativeDecorationButtons(NSDictionary *identity){
     if(!AXIsProcessTrusted())return nil;
     DWFocusIdentity selected={.pid=[identity[@"pid"]intValue],.window=[identity[@"wid"]unsignedIntValue],.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
     CGRect own;if(!dw_focus_owner(selected,&own))return nil;
     AXError (*getWindow)(AXUIElementRef,uint32_t *)=dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");if(!getWindow)return nil;
-    CFTimeInterval deadline=CACurrentMediaTime()+.15;AXUIElementRef app=AXUIElementCreateApplication(selected.pid),window=NULL;CFTypeRef list=NULL;
-    if(AXUIElementSetMessagingTimeout(app,.02)||AXUIElementCopyAttributeValue(app,kAXWindowsAttribute,&list)||!list||CFGetTypeID(list)!=CFArrayGetTypeID()||CFArrayGetCount(list)>256){if(list)CFRelease(list);CFRelease(app);return nil;}
+    CFTimeInterval deadline=CACurrentMediaTime()+.15;AXUIElementRef app=AXUIElementCreateApplication(selected.pid),window=NULL;
+    if(!app)return nil;
+    CFArrayRef list=decorationWindowList(app,deadline);CFRelease(app);
+    if(!list)return nil;
     BOOL ambiguous=NO;
     for(CFIndex i=0;i<CFArrayGetCount(list)&&CACurrentMediaTime()<deadline;i++){
         AXUIElementRef candidate=(AXUIElementRef)CFArrayGetValueAtIndex(list,i);uint32_t wid=0;
-        if(CFGetTypeID(candidate)!=AXUIElementGetTypeID()||AXUIElementSetMessagingTimeout(candidate,.02)||getWindow(candidate,&wid))continue;
+        if(CFGetTypeID(candidate)!=AXUIElementGetTypeID()||decorationTimeout(candidate,deadline)||getWindow(candidate,&wid))continue;
         if(wid!=selected.window)continue;if(window){ambiguous=YES;break;}window=(AXUIElementRef)CFRetain(candidate);
     }
-    CFRelease(list);CFRelease(app);if(!window||ambiguous||CACurrentMediaTime()>=deadline){if(window)CFRelease(window);return nil;}
-    CGRect ax;if(!decorationFrame(window,&ax)||!decorationNear(ax,own)){CFRelease(window);return nil;}
+    CFRelease(list);if(!window||ambiguous){if(window)CFRelease(window);return nil;}
+    CGRect ax;if(decorationTimeout(window,deadline)||!decorationFrame(window,&ax)||!decorationNear(ax,own)){CFRelease(window);return nil;}
     NSMutableArray *buttons=[NSMutableArray array];
+    BOOL controlsKnown=YES;
     for(NSString *attribute in @[(__bridge NSString *)kAXFullScreenButtonAttribute,(__bridge NSString *)kAXZoomButtonAttribute]){
-        if(CACurrentMediaTime()>=deadline)break;CFTypeRef value=NULL,role=NULL,enabled=NULL;
-        AXError error=AXUIElementCopyAttributeValue(window,(__bridge CFStringRef)attribute,&value);
-        if(!error&&value&&CFGetTypeID(value)==AXUIElementGetTypeID()){
-            AXUIElementRef button=(AXUIElementRef)value;CGRect frame;
-            if(!AXUIElementSetMessagingTimeout(button,.02)&&!AXUIElementCopyAttributeValue(button,kAXRoleAttribute,&role)&&role&&CFEqual(role,kAXButtonRole)
-                &&!AXUIElementCopyAttributeValue(button,kAXEnabledAttribute,&enabled)&&enabled&&CFGetTypeID(enabled)==CFBooleanGetTypeID()&&CFBooleanGetValue(enabled)
-                &&decorationFrame(button,&frame)&&CGRectContainsRect(CGRectInset(own,-1,-1),frame)){
-                frame.origin.x-=own.origin.x;frame.origin.y-=own.origin.y;NSDictionary *rect=DWRectJSON(frame);if(![buttons containsObject:rect])[buttons addObject:rect];
-            }
+        CGRect frame;
+        if(!decorationGreenButton(window,(__bridge CFStringRef)attribute,own,deadline,&frame))controlsKnown=NO;
+        else if(!CGRectIsNull(frame)){
+            NSDictionary *rect=DWRectJSON(frame);
+            if(![buttons containsObject:rect])[buttons addObject:rect];
         }
-        if(enabled)CFRelease(enabled);if(role)CFRelease(role);if(value)CFRelease(value);
     }
-    if(CACurrentMediaTime()>=deadline){CFRelease(window);return nil;}
+    if(!controlsKnown&&!buttons.count){CFRelease(window);return nil;}
     NSString *titleReason=nil;NSDictionary *titleDetail=nil;BOOL debug=getenv("INFINIFY_DEBUG")!=NULL;
-    NSDictionary *title=decorationTitle(window,own,selected.window,getWindow,deadline,&titleReason,debug?&titleDetail:NULL);
+    NSDictionary *title=CACurrentMediaTime()<deadline?decorationTitle(window,own,selected.window,getWindow,deadline,&titleReason,debug?&titleDetail:NULL):nil;
     // Title support is optional. A timed-out title/child query must not withdraw
     // an already successful green-button lookup from this unchanged window.
     if(CACurrentMediaTime()>=deadline){title=nil;if(debug)titleReason=@"title_deadline";}
