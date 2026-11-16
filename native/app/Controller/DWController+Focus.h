@@ -26,6 +26,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol DWNavigationController <DWSceneController>
 - (nullable DWScene *)navigationScene;
+// Compatibility selection after size postprocessing: ANY dictionary top-level
+// effect wins, even an unexpected kind; otherwise the last native-focus effect.
+// This deliberately differs from the reply's strict separated focusEffect view.
+- (nullable DWFocusEffect *)navigationFocusEffectForReply:(DWControllerReply *)reply;
 - (nullable DWControllerReply *)navigationExecute:(DWControllerReply * _Nullable (^)(void))execute;
 - (nullable DWControllerReply *)attach:(DWAttachRequest *)request arrived:(BOOL)arrived adopted:(BOOL)adopted utility:(BOOL)utility context:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution;
 - (void)observeIdentity:(DWIdentity *)actual familyBinding:(nullable DWSourceBinding *)family eventAt:(uint64_t)observedAt output:(nullable NSNumber *)output capturedEpoch:(uint64_t)epoch context:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution;

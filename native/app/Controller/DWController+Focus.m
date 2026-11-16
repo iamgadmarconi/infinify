@@ -24,6 +24,9 @@
 - (DWScene *)navigationScene {
     return [DWScene sceneWithDictionary:[self navigationCommandDictionary:@{@"op":@"snapshot"}].rawDictionary];
 }
+- (DWFocusEffect *)navigationFocusEffectForReply:(DWControllerReply *)reply {
+    return DWProject(DWFocusEffect.class,reply.navigationEffect.rawDictionary);
+}
 - (DWControllerReply *)navigationExecute:(DWControllerReply * (^)(void))execute {
     DWControllerReply *reply=execute();
     return self.navigationPostprocess?self.navigationPostprocess(reply):reply;
