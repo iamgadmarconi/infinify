@@ -1,5 +1,11 @@
 # Normal-window navigation, ABI 1
 
+Activation response (`activate` and its zoom selection) lives in
+`src/focus_policy.rs`, with arrival and owner-intent policy. Navigation search,
+minimal pan and flight mechanics remain in `window_actions.rs` and
+`navigation.rs`; commands and camera formulas below are unchanged. See the
+[focus policy interface](FOCUS.md#focus-and-arrival-policy).
+
 Bare `src/…` paths on this page name `crates/desktop/src/` when that file exists there and otherwise name the upstream file the text cites; the `tests/upstream/` link is `docs/crates/desktop/tests/upstream/`, beside this page.
 
 The commands in the table below place the camera on a selected normal window

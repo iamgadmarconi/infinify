@@ -1,5 +1,58 @@
 # Controller focus and cycle boundary
 
+## Focus and arrival policy
+
+`src/focus_policy.rs` is the policy module: owner evidence, arrival placement,
+focus restoration and activation response live together. Its interface is the
+existing command seam's `focus_policy` command with `timestamp_ns`, `filter`,
+`focus_allowed` and a tagged `fact`. The module reads no clock. `filter` is true
+only for full-desktop managed runs; native drivers and geometry stay outside.
+Transient policy state is skipped by serialization: snapshots and scene files
+have no additional fields.
+
+The native adapter reports switch held/released, system-UI intent, a clicked
+logical window, launch intent, application launch/activation, window arrival,
+native observation, returned focus work and its answer. Delayed application and
+observation facts retain their event timestamp as well as the supplied read
+timestamp. Replies contain decisions (`unsolicited`, `cancel_work`, `observe`,
+`advance`, `changed`) and, when required, the ordinary effect/navigation reply.
+Bindings always include the exact identity and generation. Unknown bindings
+do not authorize camera motion. Parse/refused-command failures retain the
+existing command error path; a refused arrival fact means unauthorized, exactly
+as the former nil native authorization did.
+
+`DWNavigationCoordinator` is an adapter for execution, not a second policy:
+it owns worker epochs, driver guards, click delivery and camera ticking.
+`DWNavigationDriver` remains the seam with two adapters, `DWNativeFocusDriver`
+and the existing in-memory driver. Main-thread facts must be submitted in
+observation order. The one coordinator `attach:` entry point sends the arrival
+fact, invalidates the returned worker epoch if requested, then attaches with
+the returned `unsolicited` unchanged. It creates no pending-decision table.
+An attach failure does not undo consumption. `perform:` installs protection
+from the complete arrival reply before dispatching its focus work. Follow-up
+for the typed-controller seam: **make arrival one typed call**, preserving this
+non-transactional failure order.
+
+The rule relocation (old coordinator methods below are in
+`native/app/Navigation/DWNavigationCoordinator.m`):
+
+| Rule, unchanged | Previous location | Current location in `focus_policy.rs` |
+| --- | --- | --- |
+| Full-desktop filter only; uncertain classification does not move focus/camera | coordinator application/observe gates | `focus_policy_fact`, `observe_owner_focus` (adapter still reports run eligibility) |
+| Exact PID and birth of confirmed live process; retained through its own unadopted panel while live intent survives | `isConfirmedFocusedProcess:` | `classify_process`, `confirmed_live_binding` |
+| Held switch authorizes unconditionally, records 2.5 s; release records 1.5 s | `noteSystemSwitchHeld:` | `FocusFact::Switch` |
+| System-UI intent 2 s; bundle launch intent 30 s | native intent methods | `SystemUi`, `LaunchIntent` |
+| Focused-window click 0.75 s, one cross-process use, only absent system/bundle intent | event-tap snapshot comparison, `authorizeProcess:` | `WindowClick`, `classify_process` |
+| Process activation 4 s, attach 15 s; delayed facts check event or read time; PID reuse rejected | `authorizeProcess:` | `classify_process` |
+| Intent consumed before attach; survives attach failure; driver epoch invalidated first | `Desktop+Windows.m` plus `consumeAttachIntentForPID:` | `WindowArrived`, `classify_process`; coordinator `attach:` relays cancellation then attaches |
+| Consumed process attach authorization capped at now + 1.5 s; bundle consumed on authorization | `authorizeProcess:` | `classify_process` |
+| Restore at most twice per PID per 5 s, age strictly greater than 5 s expires; failure stops retries | `startCorrectionTo:`, `complete:`, `pruneIntentsAt:` | `start_correction`, `Answer`, `prune` |
+| Background cohorts, exact bindings, 1.5 s lifetime, input cancellation, family deduplication | native protection/observe methods | `preserve_arrival`, `cancel_background`, `observe_owner_focus` |
+| Sibling placement else immediately outside viewport; stack below focused; suppress focus/navigation | `lifecycle.rs` unsolicited placement and settlement | `unsolicited_spawn`, `settle_arrival` |
+| Normal/rule placement, focus-on-open, fullscreen/utility exceptions | `lifecycle.rs` spawn/arrival settlement | `spawn`, `arrival`, `settle_arrival` (adoption search stays in lifecycle) |
+| Activation no-pan uncertainty, clipped reveal, cycle/click rules and configured zoom | `window_actions.rs::activate` | `activate`, `activation_zoom` |
+
+
 The controller keeps three things apart: logical focus (the intent, which
 raises a window at once), the request it hands the native adapter (`effect`),
 and what the adapter or the shell's own observation reported back. The

@@ -37,11 +37,12 @@ typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
 // focusAllowed NO is answered focus_logical at once. A reply without one withdraws work
 // in flight only if the controller has dropped that request.
 - (void)perform:(NSDictionary *)reply;
-// An attach placed behind Fill, or explicitly suppressed by a post-launch
-// focus_on_open=false rule, may still activate natively. Correct that first
-// root activation once; quiet rules require a previously confirmed live focus.
-- (void)preserveBackgroundArrival:(NSDictionary *)reply;
+// Whether the shell can observe launch-time native focus in this run.
+@property (copy) BOOL (^arrivalProtection)(void);
 - (void)cancelBackgroundArrival;
+// Report the arrival before attaching. Its consumed authorization and any
+// driver cancellation survive a refused attach.
+- (NSDictionary *)attach:(NSDictionary *)command arrived:(BOOL)arrived adopted:(BOOL)adopted utility:(BOOL)utility;
 // One command and -perform: of its reply; nil when the controller refused it.
 - (NSDictionary *)navigate:(NSDictionary *)command;
 // Hold-to-commit. -hold: opens it with the modifiers that keep a cycle session open, as
@@ -75,9 +76,8 @@ typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
 - (void)noteSystemSwitchHeld:(BOOL)held;
 - (void)noteSystemUIIntent;
 - (void)noteLaunchIntentForBundle:(NSString *)bundle;
-- (void)noteFocusedWindowClick;
+- (void)noteWindowClick:(NSNumber *)window;
 - (void)noteApplicationLaunched:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle at:(uint64_t)at;
 - (void)noteApplicationActivated:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle regular:(BOOL)regular at:(uint64_t)at;
-- (BOOL)consumeAttachIntentForPID:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle;
 - (BOOL)frame;
 @end

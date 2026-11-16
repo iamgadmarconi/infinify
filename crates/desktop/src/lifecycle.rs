@@ -26,14 +26,13 @@
 // spatial pick and before the visibility checks, for a real close and never
 // for a stand-in conversion (sizes.rs has release_fit_push).
 use super::actions::Outcome;
-use super::ipc::{WindowSelector, frame, readable};
+use super::ipc::{WindowSelector, frame};
 use super::rules::Pin;
 use super::sizes::snap_rect;
 use super::view_actions::{PixelPoint, PixelSize, core_point, pixel_size};
 use super::window_actions::IN_VIEW_NOISE;
 use super::*;
 use driftwm_core::canvas;
-use driftwm_core::config::{AppliedWindowRule, WindowPlacement};
 use driftwm_core::layout::auto_placement::{self, place_auto};
 use driftwm_core::layout::cluster::cluster_of;
 use driftwm_core::layout::snap::SnapRect;
@@ -136,26 +135,6 @@ pub(crate) enum Arrival {
     /// canvas frame the pin shows right now.
     Pin { rect: Rect, pin: Pin },
 }
-/// Placement policy for a window that appeared without owner launch/switch intent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UnsolicitedPlacement {
-    /// Group with existing canvas windows of the same `bundle_id`, else place
-    /// just outside the active viewport's right edge.
-    SiblingOrOutsideViewport,
-    /// Group with off-screen siblings of the same `bundle_id`, else use normal
-    /// `window_placement`.
-    #[allow(dead_code)]
-    SiblingOffscreenOrConfigured,
-    /// Use normal `window_placement` unchanged.
-    #[allow(dead_code)]
-    Configured,
-}
-const UNSOLICITED_PLACEMENT: UnsolicitedPlacement = UnsolicitedPlacement::SiblingOrOutsideViewport;
-
-fn rects_overlap(a: auto_placement::Rect, b: auto_placement::Rect) -> bool {
-    a.x < b.x_high() && b.x < a.x_high() && a.y < b.y_high() && b.y < a.y_high()
-}
-
 /// Who takes the focus when the window that held it leaves.
 enum Follow {
     Raise(WindowId),
@@ -174,7 +153,7 @@ fn pixel_frame(rect: Rect) -> Option<(PixelPoint, PixelSize)> {
 }
 
 impl Controller {
-    fn bundle(&self, window: WindowId) -> &str {
+    pub(super) fn bundle(&self, window: WindowId) -> &str {
         self.metadata
             .get(&window)
             .map_or("", |m| m.bundle_id.as_str())
@@ -207,7 +186,7 @@ impl Controller {
     /// window that still exists off screen: that one answers to its own title
     /// only. A dormant stand-in takes nothing, and a window without a bundle
     /// identifier adopts nothing.
-    fn adoption_target(&self, bundle_id: &str, title: &str) -> Option<WindowId> {
+    pub(super) fn adoption_target(&self, bundle_id: &str, title: &str) -> Option<WindowId> {
         if bundle_id.is_empty() {
             return None;
         }
@@ -240,7 +219,7 @@ impl Controller {
     /// empty canvas a new window is centered, not docked) is not carried over:
     /// `clear_focus` leaves the nearest element in view to anchor like any
     /// unfocused state.
-    fn auto_spawn(
+    pub(super) fn auto_spawn(
         &self,
         viewport: &Viewport,
         usable: Rect,
@@ -308,348 +287,6 @@ impl Controller {
                 .map(|(x, y)| (x.round(), y.round())),
         )
     }
-    /// Upstream's placement of a new toplevel at its first sized commit:
-    /// `window_placement` picks the spot (cursor_placement_pos,
-    /// auto_placement_pos, else the `focus_placement` point of the navigation
-    /// that follows), and cascade_position walks it off any window whose
-    /// top-left it would sit on. Without an active output upstream has no view
-    /// to place in and uses the origin. The pointer is a global screen point,
-    /// read through the active output's own bounds and camera.
-    fn spawn(
-        &self,
-        output: Option<OutputId>,
-        pointer: Option<Point>,
-        size: Size,
-    ) -> Result<Arrival, Error> {
-        // Upstream geometry is whole pixels: the policy sees the rounded size,
-        // the world frame keeps the true one.
-        let (w, h) = (size.width.round(), size.height.round());
-        let config = self.config();
-        let (mut at, mut at_cursor) = ((0.0, 0.0), false);
-        if let Some(output) = output {
-            let viewport = self
-                .scene
-                .output(output)
-                .ok_or(Error::Invalid("unknown output"))?;
-            let context = self.navigation_context(output)?;
-            let usable = context.usable_rect_local;
-            let (camera, zoom) = (viewport.camera, viewport.zoom);
-            let chosen = match config.window_placement {
-                WindowPlacement::Center => None,
-                WindowPlacement::Cursor => pointer.map(|pointer| {
-                    let cursor = viewport.screen_to_world(pointer);
-                    let low = camera + usable.origin / zoom;
-                    let high = camera + Point::new(usable.right(), usable.bottom()) / zoom;
-                    // An oversized frame keeps its top-left on the usable edge.
-                    let x = (cursor.x - w / 2.0).clamp(low.x, (high.x - w).max(low.x));
-                    let y = (cursor.y - h / 2.0).clamp(low.y, (high.y - h).max(low.y));
-                    (x.round(), y.round())
-                }),
-                WindowPlacement::Auto => self.auto_spawn(viewport, usable, (w, h))?,
-            };
-            at_cursor = chosen.is_some() && config.window_placement == WindowPlacement::Cursor;
-            at = chosen.unwrap_or_else(|| {
-                // The align point takes the zoom the navigation lands at, the
-                // canvas conversion the current one; halving is upstream's
-                // integer division.
-                let landing = if config.zoom_reset_on_new_window {
-                    1.0
-                } else {
-                    zoom
-                };
-                let align = context.align_point(Size::new(w, h), landing);
-                (
-                    (camera.x + align.x / zoom).round() - (w / 2.0).trunc(),
-                    (camera.y + align.y / zoom).round() - (h / 2.0).trunc(),
-                )
-            });
-        }
-        let step = f64::from(config.decorations.title_bar_height.max(1));
-        while self.scene.windows().iter().any(|window| {
-            let origin = self.placed_rect(window).origin;
-            (origin.x.round() - at.0).abs() <= 2.0 && (origin.y.round() - at.1).abs() <= 2.0
-        }) {
-            at = (at.0 + step, at.1 + step);
-        }
-        let rect = Rect::new(at.0, at.1, size.width, size.height);
-        readable(rect).map_err(Error::Refused)?;
-        Ok(Arrival::Place {
-            rect,
-            at_cursor,
-            background: false,
-        })
-    }
-    /// Placement of an unsolicited post-launch window (isolated by
-    /// `UNSOLICITED_PLACEMENT`): groups with an existing canvas window of the
-    /// same `bundle_id`, or places just outside the active viewport's right
-    /// edge so background launches do not cover the active workspace.
-    fn unsolicited_spawn(
-        &self,
-        output: Option<OutputId>,
-        pointer: Option<Point>,
-        bundle_id: &str,
-        size: Size,
-    ) -> Result<Arrival, Error> {
-        if UNSOLICITED_PLACEMENT == UnsolicitedPlacement::Configured {
-            return self.spawn(output, pointer, size);
-        }
-        let (w, h) = (size.width.round(), size.height.round());
-        let config = self.config();
-        let gap = config.snap_gap;
-        let step = f64::from(config.decorations.title_bar_height.max(1));
-        let view_info = if let Some(output) = output {
-            let viewport = self
-                .scene
-                .output(output)
-                .ok_or(Error::Invalid("unknown output"))?;
-            let context = self.navigation_context(output)?;
-            let zoom = viewport.zoom.max(1e-6);
-            let view_w = viewport.screen_bounds.size.width / zoom;
-            let view_h = viewport.screen_bounds.size.height / zoom;
-            let margin = gap.max(context.outer_gap()).max(48.0);
-            let raw_view = auto_placement::Rect {
-                x: viewport.camera.x.floor(),
-                y: viewport.camera.y.floor(),
-                w: view_w.ceil(),
-                h: view_h.ceil(),
-            };
-            let protected_view = auto_placement::Rect {
-                x: (viewport.camera.x - margin).floor(),
-                y: (viewport.camera.y - margin).floor(),
-                w: (view_w + 2.0 * margin).ceil(),
-                h: (view_h + 2.0 * margin).ceil(),
-            };
-            let mid_y = viewport.camera.y + context.usable_rect_local.center().y / zoom;
-            Some((raw_view, protected_view, mid_y))
-        } else {
-            None
-        };
-        let canvas_windows: Vec<&Window> = self
-            .scene
-            .windows()
-            .iter()
-            .filter(|win| self.on_canvas(win.id))
-            .collect();
-        let window_rects: Vec<auto_placement::Rect> = canvas_windows
-            .iter()
-            .map(|win| {
-                let r = self.placed_rect(win);
-                auto_placement::Rect {
-                    x: r.origin.x.round(),
-                    y: r.origin.y.round(),
-                    w: r.size.width.round(),
-                    h: r.size.height.round(),
-                }
-            })
-            .collect();
-        let sibling_indices: Vec<usize> = (0..canvas_windows.len())
-            .filter(|&i| !bundle_id.is_empty() && self.bundle(canvas_windows[i].id) == bundle_id)
-            .collect();
-        let chosen_sibling = match UNSOLICITED_PLACEMENT {
-            UnsolicitedPlacement::SiblingOrOutsideViewport => sibling_indices
-                .iter()
-                .rev()
-                .copied()
-                .find(|&i| view_info.is_none_or(|(_, pv, _)| !rects_overlap(window_rects[i], pv)))
-                .or_else(|| sibling_indices.last().copied()),
-            UnsolicitedPlacement::SiblingOffscreenOrConfigured => {
-                let any_visible = sibling_indices.iter().any(|&i| {
-                    view_info.is_some_and(|(rv, _, _)| rects_overlap(window_rects[i], rv))
-                });
-                if any_visible || sibling_indices.is_empty() {
-                    return self.spawn(output, pointer, size);
-                }
-                sibling_indices.last().copied()
-            }
-            UnsolicitedPlacement::Configured => None,
-        };
-        let mut at = if let Some(sibling_idx) = chosen_sibling {
-            let anchor = window_rects[sibling_idx];
-            let mut rects = window_rects.clone();
-            let eligible: HashSet<usize> = (0..rects.len()).collect();
-            if let Some((_, pv, _)) = view_info
-                && !rects_overlap(anchor, pv)
-            {
-                // Keep the sibling's cluster growth out of the active viewport.
-                rects.push(pv);
-            }
-            place_auto(
-                &rects,
-                sibling_idx,
-                &eligible,
-                w,
-                h,
-                (anchor.cx(), anchor.cy()),
-                gap,
-            )
-            .map(|(x, y)| (x.round(), y.round()))
-            .unwrap_or((anchor.x, (anchor.y_high() + gap).round()))
-        } else if let Some((_, pv, mid_y)) = view_info {
-            let mut rects = Vec::with_capacity(1 + window_rects.len());
-            rects.push(pv);
-            rects.extend_from_slice(&window_rects);
-            let eligible: HashSet<usize> = (0..rects.len()).collect();
-            let park_x = pv.x_high() + gap.round();
-            let park_y = (mid_y - (h / 2.0).trunc()).round();
-            let bias = (park_x + w / 2.0 + 16.0, mid_y);
-            place_auto(&rects, 0, &eligible, w, h, bias, gap)
-                .map(|(x, y)| (x.round(), y.round()))
-                .unwrap_or((park_x, park_y))
-        } else {
-            (0.0, 0.0)
-        };
-        while self.scene.windows().iter().any(|window| {
-            let origin = self.placed_rect(window).origin;
-            (origin.x.round() - at.0).abs() <= 2.0 && (origin.y.round() - at.1).abs() <= 2.0
-        }) {
-            at = (at.0 + step, at.1 + step);
-        }
-        let rect = Rect::new(at.0, at.1, size.width, size.height);
-        readable(rect).map_err(Error::Refused)?;
-        Ok(Arrival::Place {
-            rect,
-            at_cursor: false,
-            background: false,
-        })
-    }
-    /// A window has appeared: the slot it adopts, or where it is placed. `rule`
-    /// is what its window rules merge to. An adopted window keeps its slot
-    /// whatever the rule says of position or pinning, as upstream's does.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn arrival(
-        &self,
-        output: Option<OutputId>,
-        pointer: Option<Point>,
-        bundle_id: &str,
-        title: &str,
-        size: Size,
-        rule: Option<&AppliedWindowRule>,
-        unsolicited: bool,
-    ) -> Result<Arrival, Error> {
-        if output.is_some_and(|output| self.scene.output(output).is_none()) {
-            return Err(Error::Invalid("unknown output"));
-        }
-        if pointer.is_some_and(|pointer| !pointer.valid()) {
-            return Err(Error::Invalid("invalid screen point"));
-        }
-        if let Some(slot) = self.adoption_target(bundle_id, title) {
-            return Ok(Arrival::Adopt(slot));
-        }
-        // Upstream: a rule's pin or position comes before the placement policy,
-        // and fullscreen before auto, cursor and center: a new window never
-        // lands on a fullscreen one, and nothing cascades it.
-        if let Some(arrival) = self.rule_arrival(output, size, rule)? {
-            return Ok(arrival);
-        }
-        if unsolicited && self.lifecycle.settled {
-            return self.unsolicited_spawn(output, pointer, bundle_id, size);
-        }
-        match self.fullscreen_background(output, size) {
-            Some(rect) => Ok(Arrival::Place {
-                rect,
-                at_cursor: false,
-                background: true,
-            }),
-            None => self.spawn(output, pointer, size),
-        }
-    }
-    /// What upstream does once the new window is mapped. An adopted window
-    /// keeps its slot's frame and stacking and the camera stays; it takes the
-    /// focus only when its stand-in held it. A placed window is raised, focused
-    /// and navigated to, resetting the zoom with `zoom.reset_on_new_window`;
-    /// cursor placement stays put unless that reset has a zoomed-out view to
-    /// rescue. A window pinned by its rule is raised and focused without a
-    /// navigation; a widget, a window whose rule says `focus_on_open = false`,
-    /// or an unsolicited window is neither focused nor navigated to. During the
-    /// launch pass nothing asks for native focus or moves a camera: those
-    /// windows were already open, and nobody opened them here.
-    pub(crate) fn settle_arrival(
-        &mut self,
-        window: WindowId,
-        output: Option<OutputId>,
-        arrival: Arrival,
-        unsolicited: bool,
-    ) -> Result<Value, Error> {
-        let (mut effect, mut navigation) = (Value::Null, Value::Null);
-        self.log_arrival(window, output, arrival)?;
-        // Upstream: a widget and a `focus_on_open = false` window map without
-        // taking the focus or moving the camera; unsolicited arrivals do too.
-        let rule = self.policy.applied.get(&window);
-        let is_widget = rule.is_some_and(|r| r.widget);
-        let quiet =
-            unsolicited || is_widget || rule.is_some_and(|r| r.focus_on_open == Some(false));
-        let focus_on_open_suppressed = self.lifecycle.settled
-            && !is_widget
-            && (unsolicited || rule.is_some_and(|r| r.focus_on_open == Some(false)));
-        let reveal = self.lifecycle.settled && !quiet;
-        match arrival {
-            Arrival::Adopt(_) => {
-                if self.scene.focused() == Some(window) {
-                    if reveal {
-                        effect = self.request_focus(window)?["effect"].take();
-                    } else if !quiet {
-                        // Nothing is asked during the launch pass, so no answer
-                        // can come: the focus the slot kept enters the history
-                        // as a request answered `focus_logical` does, unless
-                        // the slot is screen-pinned. A widget, and a window
-                        // whose rule says `focus_on_open = false`, asks for
-                        // nothing and records nothing at any time.
-                        self.confirm_focus(window)?;
-                    }
-                }
-            }
-            // A pinned window has no canvas position to navigate to: it is
-            // raised and focused where it is.
-            Arrival::Pin { .. } => {
-                if reveal {
-                    effect = self.raise_and_focus(window)?.effect;
-                }
-            }
-            // Upstream: a window placed in the background never activates.
-            Arrival::Place {
-                at_cursor,
-                background,
-                ..
-            } => {
-                if let Some(output) = output.filter(|_| reveal && !background) {
-                    let reset = self.config().zoom_reset_on_new_window;
-                    let zoom = self
-                        .scene
-                        .output(output)
-                        .ok_or(Error::Invalid("unknown output"))?
-                        .zoom;
-                    let stays = at_cursor && !(reset && zoom < 1.0 - 1e-9);
-                    // A drag or resize in progress keeps its camera.
-                    if !stays && self.gesture.is_none() {
-                        let policy = if reset {
-                            ZoomPolicy::Reset
-                        } else {
-                            ZoomPolicy::Keep
-                        };
-                        navigation = self.arm_navigation(window, output, policy)?;
-                    }
-                    effect = self.raise_and_focus(window)?.effect;
-                }
-            }
-        }
-        let adopted = matches!(arrival, Arrival::Adopt(_));
-        let background = matches!(
-            arrival,
-            Arrival::Place {
-                background: true,
-                ..
-            }
-        );
-        let mut reply = json!({"window":window,"adopted":adopted,"background":background,"effect":effect,"navigation":navigation,"dirty":true});
-        // Native applications may activate themselves while opening. Only an
-        // explicit post-launch rule supplies authority for the shell to correct
-        // that initial activation; widgets and startup adoption do not.
-        if focus_on_open_suppressed {
-            reply["focus_on_open_suppressed"] = json!(true);
-        }
-        Ok(reply)
-    }
-
     /// The window's frame on the output's screen, and the usable rectangle.
     fn on_screen(&self, window: WindowId, output: OutputId) -> Option<(Point, Point, Rect)> {
         let viewport = self.scene.output(output)?;

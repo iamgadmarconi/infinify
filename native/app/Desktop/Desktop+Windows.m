@@ -54,9 +54,6 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     NSMutableDictionary *command=[@{@"op":@"attach",@"identity":source.identity,@"bundle_id":window.bundleIdentifier?:@"",@"title":window.title?:@"Untitled",@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)},@"source_rect":DWRectJSON(bounds)} mutableCopy];
     if(placed){
         NSNumber *output=[self viewOutput];if(output)command[@"output"]=output;command[@"pointer"]=pointJSON(pointer());
-        if(self.adopted&&self.navigation.filterUnsolicitedActivations&&!window.displayFixed
-            &&![self.navigation consumeAttachIntentForPID:pid birth:processBirth bundle:window.bundleIdentifier])
-            command[@"unsolicited"]=@YES;
     }
     else if(logical)command[@"logical_id"]=logical;else {if(!world){NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];NSDictionary *o=[snapshot[@"outputs"]firstObject];double zoom=[o[@"zoom"]doubleValue];CGPoint camera=jsonPoint(o[@"camera"]);world=DWRectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command[@"world_rect"]=world;}
     if(window.displayFixed){
@@ -69,7 +66,7 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
         CGRect screen=DWRectFromJSON(chosen[@"screen_bounds"]);
         command[@"screen_pin"]=@{@"output":chosen[@"id"],@"screen_pos":pointJSON(CGPointMake(bounds.origin.x-screen.origin.x,bounds.origin.y-screen.origin.y))};
     }
-    NSDictionary *reply=[self call:command];source.logical=reply[@"window"];if(!source.logical)return NO;source.observationToken=++self.observationEpoch;self.sources[source.logical]=source;
+    NSDictionary *reply=self.navigation?[self.navigation attach:command arrived:placed adopted:self.adopted utility:window.displayFixed]:[self call:command];source.logical=reply[@"window"];if(!source.logical)return NO;source.observationToken=++self.observationEpoch;self.sources[source.logical]=source;
     source.window=self.native?nil:window.shareable;source.nativeReplica=self.native!=nil;[self.native bound:source.identity bounds:bounds];source.title=DWTyped(info[(id)kCGWindowName],NSString.class)?:command[@"title"];
     [self refreshNativeButtons:source];
     // A new frame redraws only the outputs that show this window. The first picture of a window that just opened begins its open animation, which the frame timer plays.
@@ -82,8 +79,6 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     if(!self.manager&&![self startCapture:source size:source.buffer interval:[self captureInterval]]&&!source.captureRecovering){[self detach:source];return NO;}
     if(!privateAvailable)self.statusText=@"Live view only: private per-window input is unavailable on this OS.";
     if(placed){
-        if(self.navigation.filterUnsolicitedActivations||(self.navigationTap&&self.navigationTapSource&&CGEventTapIsEnabled(self.navigationTap)))
-            [self.navigation preserveBackgroundArrival:reply];
         [self follow:reply];
         if([reply[@"focus_on_open_suppressed"]boolValue])[self.navigation observe];
     }
@@ -97,7 +92,9 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 // request the controller has dropped. Such a reply carries no other effect, but for the size transaction of a window whose
 // rule names a size, which -attach:logical:world:placed: hands to the resize coordinator itself.
 - (void)follow:(NSDictionary *)reply {
-    NSDictionary *effect=DWTyped(reply[@"effect"],NSDictionary.class);[self.navigation perform:effect?@{@"effect":effect}:@{}];
+    NSMutableDictionary *focus=[reply mutableCopy]?:[NSMutableDictionary dictionary];
+    if(!DWTyped(reply[@"effect"],NSDictionary.class))[focus removeObjectForKey:@"effect"];
+    [focus removeObjectForKey:@"effects"];[self.navigation perform:focus];
     if(DWTyped(reply[@"navigation"],NSDictionary.class)){if(!self.navigation)self.flying=YES;[self ensureFrames];}
     if(![reply[@"dirty"]isEqual:@NO])self.sceneDirty=YES;
 }

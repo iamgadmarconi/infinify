@@ -39,9 +39,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
             if(!clicked)for(DesktopView *view in desktop.views)if((CGWindowID)view.window.windowNumber==top){
                 NSNumber *output=[view outputAt:point];clicked=output?DWTyped([view hit:point output:output][@"window"],NSNumber.class):nil;break;
             }
-            NSNumber *focused=DWTyped(DWTyped([desktop call:@{@"op":@"snapshot"}][@"focus"][@"observed_native"],NSDictionary.class)[@"window"],NSNumber.class);
-            if(clicked&&focused&&[clicked isEqual:focused])[desktop.navigation noteFocusedWindowClick];
-            else [desktop.navigation cancelBackgroundArrival];
+            [desktop.navigation noteWindowClick:clicked];
         }
         if(up)return event;
     }
@@ -89,6 +87,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     self.navigation=[[DWNavigationCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak navigationCall:c];} driver:[DWNativeFocusDriver new] clock:^uint64_t{return (uint64_t)(CACurrentMediaTime()*1e9);} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
     self.navigation.enabled=YES;self.cycleHold=[DWCycleHold new];
     self.navigation.filterUnsolicitedActivations=!self.windowed&&self.managing&&!self.scope;
+    self.navigation.arrivalProtection=^BOOL{Desktop *d=weak;return d.navigation.filterUnsolicitedActivations||(d.navigationTap&&d.navigationTapSource&&CGEventTapIsEnabled(d.navigationTap));};
     self.navigation.changed=^{[weak render];[weak ensureFrames];};
     self.navigation.settled=^{[weak saveScene];};
     self.navigation.output=^NSNumber *{return [weak viewOutput];};

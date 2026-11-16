@@ -490,6 +490,17 @@ menu bar, Spotlight, Control Center, Notification Center) or inside the
 confirmed focused window record owner switch/launch intent, and ordinary typing
 does not cancel a background focus restoration.
 
+Intent classification, process authorization, background-arrival cohorts and
+restore budgets are owned by the controller's
+[focus and arrival policy](../../../crates/desktop/FOCUS.md#focus-and-arrival-policy).
+The event tap reports timestamped evidence, not a snapshot-based classification.
+`DWNavigationCoordinator` keeps the `DWNavigationDriver` seam, worker epochs,
+guarded native delivery, click completion and flights. Its single `attach:`
+adapter reports arrival, applies returned cancellation before sending attach,
+and relays the returned `unsolicited` value unchanged. Consumption survives
+attach failure. `perform:` reports the full arrival reply before focus delivery,
+so `Desktop+Windows.m` no longer installs protection itself.
+
 ### Native focus is followed
 
 When Accessibility access exists, the shell reads which window the frontmost

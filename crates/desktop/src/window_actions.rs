@@ -53,13 +53,6 @@ const NEAREST_ANCHOR_THRESHOLD: f64 = 1.0;
 /// A pan that lands a frame flush on an edge carries float rounding through the
 /// camera anchor, and a hair's overhang must not read as clipped.
 pub(crate) const IN_VIEW_NOISE: f64 = 1e-6;
-/// Upstream ACTIVATION_VISIBLE_THRESHOLD: an activated window that is clipped
-/// at all is brought fully into view.
-const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
-/// Upstream ACTIVATION_ONSCREEN_THRESHOLD: separates clipped to a hair from
-/// off screen entirely.
-const ACTIVATION_ONSCREEN_THRESHOLD: f64 = f64::EPSILON;
-
 /// Why the shell activates a window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,7 +116,7 @@ pub(crate) enum MinimalPan {
 }
 
 impl Controller {
-    fn window_rect(&self, window: WindowId) -> Result<Rect, Error> {
+    pub(super) fn window_rect(&self, window: WindowId) -> Result<Rect, Error> {
         Ok(self
             .scene
             .window(window)
@@ -139,7 +132,7 @@ impl Controller {
     /// whole pixels and these are fractional, so the frame is measured by the
     /// largest whole-pixel rectangle inside it: a frame that navigation has
     /// just parked flush against an edge still counts as entirely visible.
-    fn visible_share(&self, window: WindowId, output: OutputId) -> Result<f64, Error> {
+    pub(super) fn visible_share(&self, window: WindowId, output: OutputId) -> Result<f64, Error> {
         let viewport = self
             .scene
             .output(output)
@@ -752,170 +745,5 @@ impl Controller {
         self.focus.logical = None;
         self.scene.clear_focus();
         focused
-    }
-    /// The zoom an activation's reveal lands at: `zoom.reset_on_activation`.
-    fn activation_zoom(&self) -> ZoomPolicy {
-        match self.config().zoom_reset_on_activation {
-            true => ZoomPolicy::Reset,
-            false => ZoomPolicy::Keep,
-        }
-    }
-    /// What upstream does when a window is clicked or asks to be activated:
-    /// the command's reply.
-    pub(crate) fn activate(
-        &mut self,
-        window: WindowId,
-        output: Option<OutputId>,
-        cause: ActivationCause,
-        identity: Option<SourceIdentity>,
-        generation: Option<u64>,
-    ) -> Result<Value, Error> {
-        self.window_rect(window)?;
-        self.require_source_interactive(window)?;
-        if let Some(output) = output {
-            self.navigation_context(output)?;
-        }
-        if let Some(identity) = &identity {
-            self.fresh(window, identity)?;
-        }
-        if let Some(generation) = generation {
-            let source = self
-                .sources
-                .get(&window)
-                .ok_or(Error::Invalid("unbound source"))?;
-            if source.generation != generation {
-                return Err(Error::Invalid("stale binding generation"));
-            }
-        }
-        let moved = match cause {
-            // Upstream's click-to-focus fallback: raise and focus at the press.
-            // The camera stays, so the press and its drags reach the window
-            // where the pointer is.
-            ActivationCause::Click => self.raise_and_focus(window)?,
-            // Upstream resolve_click_navigate and fire_click_navigate: with
-            // `auto_navigate_on_click`, a completed click on a window that
-            // still holds focus and is not wholly inside the usable area
-            // brings it into view at the current zoom. No focus is requested,
-            // so the reply has no `effect`: the press's request stays as it is.
-            ActivationCause::ClickRelease => {
-                let navigation = match output {
-                    // Upstream arms no click navigation for a widget, and a
-                    // pinned window has no canvas position to bring into view.
-                    // v0.20: judged at the live view the click was made on,
-                    // not the landing view, so a window shown whole leaves a
-                    // flight under way alone, and the click scrolls the
-                    // window just far enough to show it whole instead of
-                    // centering it, so that it stays near the pointer.
-                    Some(output)
-                        if self.config().auto_navigate_on_click
-                            && self.on_canvas(window)
-                            && self.scene.focused() == Some(window)
-                            && !self
-                                .fully_in_viewport(window, output)
-                                .map_err(Error::Refused)? =>
-                    {
-                        let (camera, zoom) = self.landing_view(output)?;
-                        match self.reveal_frame(window) {
-                            Some(frame) => {
-                                self.hover_parked();
-                                self.pan_minimally(output, &frame, camera, zoom, MinimalPan::Whole)?
-                            }
-                            None => Value::Null,
-                        }
-                    }
-                    _ => Value::Null,
-                };
-                return Ok(json!({"navigation":navigation,"dirty":false}));
-            }
-            ActivationCause::Native | ActivationCause::NativeFamily => {
-                let family = cause == ActivationCause::NativeFamily;
-                let source = self
-                    .sources
-                    .get(&window)
-                    .ok_or(Error::Invalid("unbound source"))?;
-                let observed = FocusEffect {
-                    op: "observed_native_focus",
-                    effect_id: 0,
-                    window,
-                    identity: source.identity.clone(),
-                    generation: source.generation,
-                };
-                // A fullscreen window's home is the output it fills, whatever
-                // other camera happens to show the canvas it is parked on.
-                let home = match self.fullscreen_output_of(window) {
-                    Some(own) => Some(own).filter(|own| self.scene.output(*own).is_some()),
-                    None => self.home_output(window, output)?,
-                };
-                let shown = |controller: &Self| match home {
-                    Some(home) => controller.visible_share(window, home),
-                    None => Ok(0.0),
-                };
-                let share = shown(self)?;
-                // Upstream window_already_active: the window holds the keyboard
-                // and is at least partly on screen, so the request asks for
-                // what already holds.
-                let holds_keyboard = if family {
-                    self.focus.logical == Some(window)
-                } else {
-                    self.focus.observed_native.as_ref().is_some_and(|held| {
-                        held.window == window
-                            && held.identity == observed.identity
-                            && held.generation == observed.generation
-                    })
-                };
-                // Event delivery (docs/crates/desktop/LIFECYCLE.md): the same report again while
-                // the window is still off screen and the flight the first one
-                // armed is in the air asks for what is already under way.
-                // Upstream's repeat sets the camera target it already has.
-                let revealing = home.is_some_and(|home| {
-                    self.on_canvas(window) && self.flying_to(window, home, self.activation_zoom())
-                });
-                if self.scene.focused() == Some(window)
-                    && holds_keyboard
-                    && (share >= ACTIVATION_ONSCREEN_THRESHOLD || revealing)
-                {
-                    return Ok(Moved::default().reply_with_dirty());
-                }
-                // A hover focus's own echo: recorded where the window stands.
-                if !family && let Some(echo) = self.hover_echo(&observed)? {
-                    return Ok(echo);
-                }
-                // Upstream activate_window_output_local: another window being
-                // activated on a fullscreen output ends that fullscreen first,
-                // so the target is not focused behind it and what is visible
-                // is judged by the restored camera, not the parked one.
-                let ended = home
-                    .filter(|home| self.fullscreen_on(*home).is_some_and(|held| held != window))
-                    .and_then(|home| self.exit_fullscreen_on(home));
-                let share = match ended {
-                    Some(_) => shown(self)?,
-                    None => share,
-                };
-                // The observation is the focus: nothing is asked of the adapter.
-                self.finish_cycle();
-                self.focus.pending_effect = None;
-                self.focus.logical = family.then_some(window);
-                self.scene.focus(window)?;
-                self.confirm_focus(window)?;
-                self.focus.observed_native = (!family).then_some(observed);
-                // Upstream activate_window_output_local: wholly visible on its
-                // home output is focus only; any clipping pans that output. A
-                // widget or a screen-pinned window is focused where it is.
-                let navigation = match home {
-                    Some(home)
-                        if share < ACTIVATION_VISIBLE_THRESHOLD && self.on_canvas(window) =>
-                    {
-                        self.arm_navigation(window, home, self.activation_zoom())?
-                    }
-                    _ => Value::Null,
-                };
-                Moved {
-                    effect: Value::Null,
-                    navigation,
-                    refocused: true,
-                }
-            }
-        };
-        Ok(moved.reply_with_dirty())
     }
 }

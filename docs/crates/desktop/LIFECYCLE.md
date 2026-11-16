@@ -1,5 +1,12 @@
 # Window lifecycle, ABI 1
 
+Arrival response and placement now live in `src/focus_policy.rs` (`spawn`,
+`arrival`, `settle_arrival`, `unsolicited_spawn`), alongside intent and native
+focus decisions. `lifecycle.rs` retains source adoption, close/suspend and the
+placement search helpers. The [focus policy interface](FOCUS.md#focus-and-arrival-policy)
+describes exact pre-attach consumption and failure order; the `attach` wire
+format below is unchanged.
+
 In DriftWM every toplevel is managed: it is placed when it maps, it leaves when
 it is destroyed, and a stand-in can stay behind for it. This is that contract
 for the controller. A window that appears is adopted into a waiting slot or

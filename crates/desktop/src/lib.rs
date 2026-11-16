@@ -743,6 +743,10 @@ pub(crate) enum Command {
     CancelFocusCycle {},
     FocusPolicy {
         timestamp_ns: u64,
+        #[serde(default)]
+        filter: bool,
+        #[serde(default)]
+        focus_allowed: bool,
         fact: focus_policy::FocusFact,
     },
     FocusLost {},
@@ -1018,7 +1022,13 @@ impl Controller {
             _ => {}
         }
         match command {
-            Command::FocusPolicy { timestamp_ns, fact } => {
+            Command::FocusPolicy {
+                timestamp_ns,
+                filter,
+                focus_allowed,
+                fact,
+            } => {
+                self.focus.policy.configure(filter, focus_allowed);
                 return self.focus_policy_fact(timestamp_ns, fact);
             }
             // `execute` answers these from the controller itself, before it
