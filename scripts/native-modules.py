@@ -58,14 +58,15 @@ def visibility(data):
     for name, module in modules.items():
         directory = ROOT / module["path"]
         public = set(module["public_headers"])
-        actual = {p.name for p in directory.glob("*.h")}
+        public_directory = directory / module["public"]
+        actual = {p.name for p in public_directory.glob("*.h")}
         if actual != public:
             raise ValueError(f"{name}: public header list differs from directory: {actual ^ public}")
         for path in directory.rglob("*"):
             if path.suffix not in (".h", ".m", ".c"):
                 continue
             relative = path.relative_to(ROOT).as_posix()
-            owners[relative] = (name, path.parent == directory and path.name in public)
+            owners[relative] = (name, path.parent == public_directory and path.name in public)
             if path.name in by_name:
                 raise ValueError(f"ambiguous native filename: {path.name}")
             by_name[path.name] = relative
@@ -107,7 +108,7 @@ def include_flags(data, names, private=False):
         for name in names:
             flags.append("-I" + modules[name]["path"] + "/" + modules[name]["private"])
     for name in closure(modules, names):
-        flags.append("-I" + modules[name]["path"])
+        flags.append("-I" + str(Path(modules[name]["path"]) / modules[name]["public"]))
     # Non-native includes are private to the compilation owner.
     for name in names:
         flags.extend("-I" + path for path in modules[name].get("include_dirs", []))
