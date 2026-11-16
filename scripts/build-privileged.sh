@@ -27,10 +27,8 @@ if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
   echo 'Privileged helper requires Apple Silicon macOS 26+.' >&2; exit 1
 fi
 mkdir -p "$out"
-# Sources import each other by bare name; each helper module directory is a header search path (scripts/native-includes.sh).
-. scripts/native-includes.sh
-xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -Wall -Wextra -Werror $helper_includes \
-  native/dock-helper/Loader/DWDoctor.m -framework Foundation -o "$out/doctor"
+# Production source lists and restricted header paths live in one module description.
+python3 scripts/native-modules.py build doctor --output "$out/doctor"
 # Apple arm64e payload is for Dock. The arm64 build is for our ordinary fixture
 # host; macOS may prohibit arm64e third-party processes without boot policy changes.
 # native/dock-helper/Payload/DWPayload.m (with the fragments it #imports) holds the helper; compile only that file.
@@ -39,25 +37,22 @@ architectures=arm64e
 for arch in $architectures; do
   # The install name is part of the signed payload bytes. Keep staging paths out
   # of its identity so rebuilding unchanged source preserves helper reuse hashes.
-  xcrun clang -O2 -arch "$arch" -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $helper_includes -dynamiclib \
-    -Wl,-install_name,"@rpath/payload-$arch.dylib" \
-    native/dock-helper/Payload/DWPayload.m -framework AppKit -o "$out/payload-$arch.dylib"
+  python3 scripts/native-modules.py build payload --arch "$arch" --output "$out/payload-$arch.dylib"
 done
 # Protocol v2 client library for the desktop shell.
-xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror $helper_includes -c \
-  native/dock-helper/Client/DWHelperClient.c -o "$out/dwclient.o"
+python3 scripts/native-modules.py build client --arch arm64 --output "$out/dwclient.o"
 # The loader's authenticated v2 readiness audit needs its own arm64e client;
 # the arm64 object used by the shell cannot be linked into this executable.
-xcrun clang -O2 -arch arm64e -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror $helper_includes -c \
-  native/dock-helper/Client/DWHelperClient.c -o "$out/dwclient-arm64e.o"
+python3 scripts/native-modules.py build client --arch arm64e --output "$out/dwclient-arm64e.o"
 if [ "$mode" = all ]; then
+  # Non-production fixture compiles retain the legacy flat header environment.
+  . scripts/native-includes.sh
   xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $helper_includes \
     tests/native/dock-helper/Payload/HostFixture.m -framework AppKit -o "$out/host"
   xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -std=gnu11 -Wall -Wextra -Werror $helper_includes \
     tests/native/dock-helper/Client/ClientFixture.c "$out/dwclient.o" -o "$out/fixture-client"
 fi
-xcrun clang -O2 -arch arm64e -mmacosx-version-min=26.0 -Wall -Wextra -Werror $helper_includes \
-  native/dock-helper/Loader/DWLoader.m native/dock-helper/Lifecycle/DWHelperLifecycle.m native/dock-helper/Lifecycle/DWHelperMacEnvironment.m "$out/dwclient-arm64e.o" -framework AppKit -framework Security -o "$out/loader-arm64e"
+python3 scripts/native-modules.py build loader --output "$out/loader-arm64e"
 # Ad-hoc sign the standalone production tools and Dock payload, exactly as yabai
 # signs its scripting addition binaries (yabai dd845723416f5fe92af49fad5ebab00369e07edd
 # src/sa.m scripting_addition_prepare_binaries: "codesign -f -s -"). An ad hoc build signs every one of them so.
@@ -92,9 +87,9 @@ codesign --verify --strict "$out/loader-arm64e"
 # ad-hoc build ships no daemon plist (launchd will not run an ad-hoc daemon, and the daemon needs a team to name its caller).
 loader_sha256=$(shasum -a 256 "$out/loader-arm64e" | cut -d ' ' -f 1)
 payload_sha256=$(shasum -a 256 "$out/payload-arm64e.dylib" | cut -d ' ' -f 1)
-xcrun clang -O2 -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $helper_includes \
-  -DINFINIFY_LOADER_SHA256="\"$loader_sha256\"" -DINFINIFY_PAYLOAD_SHA256="\"$payload_sha256\"" \
-  native/dock-helper/Daemon/Daemon.m native/dock-helper/Daemon/DWLoaddRequest.m native/dock-helper/Lifecycle/DWHelperLifecycle.m native/dock-helper/Lifecycle/DWHelperMacEnvironment.m -framework Foundation -framework Security -o "$out/loadd"
+python3 scripts/native-modules.py build daemon \
+  --define "INFINIFY_LOADER_SHA256=\"$loader_sha256\"" --define "INFINIFY_PAYLOAD_SHA256=\"$payload_sha256\"" \
+  --output "$out/loadd"
 codesign --force --sign - --identifier com.marengox.infinify.loadd "$out/loadd"
 codesign --verify --strict "$out/loadd"
 if [ "$identity" = - ]; then signed=ad-hoc; else signed='signed (the payload and the daemon ad hoc here; packaging signs the daemon with the identity, hardened runtime)'; fi

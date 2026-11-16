@@ -2,6 +2,7 @@
 // Split from native/desktop/main.m at 37b27b1: this entry point is what stays of it after the split.
 // Infinify's entry point: the command line, the IPC/login-item/native-desktop dispatch before AppKit, and the run loop around Desktop.
 #import "Desktop.h"
+#include "driftwm_desktop.h"
 #import "DWDesktopSupport.h"
 #import <libproc.h>
 #import <signal.h>

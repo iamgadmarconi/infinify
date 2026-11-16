@@ -30,7 +30,7 @@ Do not commit generated build products, local scene saves, or runtime credential
   `native/dock-helper/Payload`) names each fragment for its area; a fragment may define several small classes.
 - Tests mirror the layout: `tests/native/<same path as the module>/<Module>Tests.m` (`.c`, `.py`), fixture programs are
   `<What>Fixture.*`, end-to-end scripts are `tests/e2e/<name>.sh` (kebab-case, like every shell script).
-- The header search path for native compiles is defined once, in `scripts/native-includes.sh`; a new module directory or
-  source file is added there and to the build list in `scripts/build-app.sh`.
+- Native sources, public headers and dependencies are declared once in `scripts/native-modules.json`; production builds use `scripts/native-modules.sh`.
+- Public headers stay at the module root; internal headers live in `<Module>/Private/`, visible only to that module.
 - All Markdown under `native/` and `crates/` lives under `docs/` (`docs/native/...`, `docs/crates/<crate>/...`).
   Licence texts and notices bundled in the app stay next to what needs them.

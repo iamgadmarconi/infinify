@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
-#include "driftwm_desktop.h"
+typedef struct DriftDesktop DriftDesktop;
 
 // Filesystem work runs on a serial worker with an independent controller copy.
 // At most one running and one pending snapshot; the latest pending save wins.

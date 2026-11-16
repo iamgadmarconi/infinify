@@ -1,0 +1,1614 @@
+{
+  "schema": 1,
+  "modules": {
+    "app-Canvas": {
+      "path": "native/app/Canvas",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWCanvasAttachment.h",
+        "DWCanvasCursor.h",
+        "DWCanvasRenderer.h",
+        "DWFrameDriver.h",
+        "DWMacWallpaperCache.h",
+        "DWMacWallpaperRefresh.h",
+        "IFBackground.h"
+      ],
+      "dependencies": [
+        "app-Controller",
+        "app-Support",
+        "app-System"
+      ],
+      "sources": [
+        {
+          "path": "DWCanvasCursor.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCanvasRenderer.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCanvasRenderer+Fullscreen.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCanvasRenderer+Families.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCanvasRenderer+Lifecycle.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCanvasRenderer+GeometryTransitions.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCanvasRenderer+Screenshot.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCanvasAttachment.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWFrameDriver.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFCDeviceResources.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFCompositorFrame.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCompositorRasterizers.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFCompositorRenderer.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFCompositorRenderer+Draw.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFCompositorRenderer+Blur.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFCompositorLayer.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFBackgroundProgram.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFBGDeviceResources.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWBackgroundGLSLTranslation.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWBackgroundFiles.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFBGChunk.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFBGShaderChunks.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFBGTileChunks.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWMacWallpaperCache.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFBGTiffSource.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "IFBGShaderDecl.m",
+          "products": [
+            "app"
+          ]
+        }
+      ]
+    },
+    "app-CompositorMode": {
+      "path": "native/app/CompositorMode",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWNativeDecorations.h",
+        "DWNativeDragTakeover.h",
+        "DWNativeFamily.h",
+        "DWNativePlacementValidation.h",
+        "DWNativePointerGrab.h",
+        "DWNativePresenter.h",
+        "DWNativeRelativeMotion.h",
+        "DWNativeReplicaFamilies.h",
+        "DWNativeReplicaInput.h",
+        "DWNativeResizePresentation.h",
+        "DWNativeTabletRouter.h",
+        "DWNativeTransition.h",
+        "DWNativeViews.h",
+        "DWNativeWindowServer.h"
+      ],
+      "dependencies": [
+        "app-Canvas",
+        "app-Controller",
+        "app-Navigation",
+        "app-Support",
+        "dock-helper-Client"
+      ],
+      "sources": [
+        {
+          "path": "DWNativeWindowServer.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePresenter.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePresenter+Acknowledgement.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePresenter+Families.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePresenter+Withholding.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePresenter+Frames.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePresenterGroup.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeDisplaySpace.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeTransition.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeResizePresentation.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeViews.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePlacementValidation.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeReplicaInput.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeReplicaFamilies.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeReplicaFamilies+Recovery.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeReplicaFamilies+Ordering.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWReplicaMember.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWReplicaRecovery.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWReplicaOrder.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeTabletRouter.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativePointerGrab.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeRelativeMotion.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeFamily.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeDecorations.m",
+          "products": [
+            "app"
+          ]
+        }
+      ]
+    },
+    "app-Controller": {
+      "path": "native/app/Controller",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWBinding.h",
+        "DWController+External.h",
+        "DWController+Focus.h",
+        "DWController.h",
+        "DWControllerNative.h",
+        "DWControllerReply.h",
+        "DWControllerValue.h",
+        "DWCornerActions.h",
+        "DWDecoration.h",
+        "DWDrawnValue.h",
+        "DWEffect.h",
+        "DWFlight.h",
+        "DWFocus.h",
+        "DWFocusCorrection.h",
+        "DWFocusEffect.h",
+        "DWFullscreen.h",
+        "DWGestureAction.h",
+        "DWGestureState.h",
+        "DWHit.h",
+        "DWHotCornerSettings.h",
+        "DWIdentity.h",
+        "DWLifecycle.h",
+        "DWLifecycleEvent.h",
+        "DWMetadata.h",
+        "DWModifiers.h",
+        "DWNativeResult.h",
+        "DWNavigation.h",
+        "DWNavigationContext.h",
+        "DWOutput.h",
+        "DWPin.h",
+        "DWPlacement.h",
+        "DWPointerDemand.h",
+        "DWPointerSettings.h",
+        "DWRGBA.h",
+        "DWRender.h",
+        "DWRenderBackground.h",
+        "DWRenderChrome.h",
+        "DWRenderEffects.h",
+        "DWRenderOutline.h",
+        "DWResizeBorder.h",
+        "DWResizeTransaction.h",
+        "DWScene.h",
+        "DWSceneWriter.h",
+        "DWScreenshotRegionTarget.h",
+        "DWScreenshotTarget.h",
+        "DWScreenshotWindowTarget.h",
+        "DWShellEffect.h",
+        "DWSizeEffect.h",
+        "DWSource.h",
+        "DWSourceBinding.h",
+        "DWWindow.h",
+        "DWWindowRule.h"
+      ],
+      "dependencies": [
+        "app-Navigation",
+        "app-Support"
+      ],
+      "sources": [
+        {
+          "path": "DWSnapshotMirror.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWBackingArray.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWBinding.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWController+External.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWController+Focus.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWController.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWControllerNative.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWControllerReply.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWControllerValue.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCornerActions.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWDecoration.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWDrawnValue.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWEffect.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWFlight.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWFocus.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWFocusCorrection.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWFocusEffect.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWFullscreen.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWGestureState.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWGestureAction.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWHit.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWHotCornerSettings.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWIdentity.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWLifecycle.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWLifecycleEvent.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWMetadata.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWModifiers.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeResult.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNavigation.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNavigationContext.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWOutput.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPin.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPlacement.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPointerDemand.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPointerSettings.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWProjectedArray.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWRGBA.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWRender.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWRenderBackground.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWRenderChrome.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWRenderEffects.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWRenderOutline.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWResizeBorder.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWResizeTransaction.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWScene.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWScreenshotRegionTarget.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWScreenshotTarget.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWScreenshotWindowTarget.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWShellEffect.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSizeEffect.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSource.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSourceBinding.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindow.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindowRule.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSceneWriter.m",
+          "products": [
+            "app"
+          ]
+        }
+      ],
+      "include_dirs": [
+        "crates/desktop/src"
+      ]
+    },
+    "app-Desktop": {
+      "path": "native/app/Desktop",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWCaptureConfiguration.h",
+        "DWChildProcess.h",
+        "DWDesktopSupport.h",
+        "DWPressAdmission.h",
+        "DWPressPairing.h",
+        "DWRootCaptureMailbox.h",
+        "Desktop.h",
+        "LiveSource.h",
+        "Router.h"
+      ],
+      "dependencies": [
+        "app-Canvas",
+        "app-CompositorMode",
+        "app-Controller",
+        "app-Input",
+        "app-Navigation",
+        "app-Support",
+        "app-System",
+        "app-Windows"
+      ],
+      "sources": [
+        {
+          "path": "Desktop.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Input.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+NativeMouse.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+CapturedInput.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPressNativeAdapter.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPressSceneAdapter.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPressPairing.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPressGesture.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPressAdmission.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+NativeTitles.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Gestures.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Navigation.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Hover.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Windows.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Visibility.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Chooser.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Capture.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Session.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Updates.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Config.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Actions.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Bindings.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+IPC.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Desktop+Rendering.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DesktopView.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DesktopView+Scroll.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DesktopView+Pointer.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "LiveSource.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWRootCaptureMailbox.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "Router.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWExportFrame.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "FlippedView.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "FixtureWindow.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "CanvasPanel.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DesktopPanel.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWChildProcess.m",
+          "products": [
+            "app"
+          ]
+        }
+      ]
+    },
+    "app-Input": {
+      "path": "native/app/Input",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWCycleHold.h",
+        "DWDockControl.h",
+        "DWDockGuard.h",
+        "DWHotCorners.h",
+        "DWHotKeys.h",
+        "DWInputSources.h",
+        "DWMultitouchSource.h",
+        "DWNativeInput.h",
+        "DWPointerHover.h",
+        "DWTapKeys.h",
+        "DWTrackpadGestureEvent.h",
+        "DWTrackpadGestures.h"
+      ],
+      "dependencies": [
+        "app-CompositorMode",
+        "app-Controller",
+        "app-Desktop",
+        "app-Support"
+      ],
+      "sources": [
+        {
+          "path": "DWNativeInput.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWHotKeys.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWTapKeys.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWCycleHold.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWHotCorners.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWInputSources.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWTrackpadGestureEvent.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWTrackpadGestures.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWMultitouchSource.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWDockGuard.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPointerHover.m",
+          "products": [
+            "app"
+          ]
+        }
+      ]
+    },
+    "app-Navigation": {
+      "path": "native/app/Navigation",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWNativeFocus.h",
+        "DWNativeFocusDriver.h",
+        "DWNativeResize.h",
+        "DWNativeResizeDriver.h",
+        "DWNavigationCoordinator.h",
+        "DWResizeCoordinator.h",
+        "DWSizeTransition.h",
+        "DWSizeTransitionHost.h"
+      ],
+      "dependencies": [
+        "app-CompositorMode",
+        "app-Controller",
+        "app-Desktop",
+        "app-Support"
+      ],
+      "sources": [
+        {
+          "path": "DWSizeTransition.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNavigationCoordinator.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeFocusDriver.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeFocus.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWResizeCoordinator.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeResizeDriver.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeResize.m",
+          "products": [
+            "app"
+          ]
+        }
+      ]
+    },
+    "app-Support": {
+      "path": "native/app/Support",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWAXLookup.h",
+        "DWDebugTrace.h",
+        "DWGeometryJSON.h",
+        "DWOwnerFile.h",
+        "DWTypedValue.h"
+      ],
+      "dependencies": [],
+      "sources": []
+    },
+    "app-System": {
+      "path": "native/app/System",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWConfigWatcher.h",
+        "DWDockReloader.h",
+        "DWIPCServer.h",
+        "DWInstall.h",
+        "DWLoaderService.h",
+        "DWLoginItem.h",
+        "DWNativeDesktopCLI.h",
+        "DWOnboarding.h",
+        "DWScreenshotWriter.h",
+        "DWSessionWatch.h",
+        "DWSetupAssistant.h",
+        "DWSetupState.h",
+        "DWSystemTakeover.h",
+        "DWUninstall.h",
+        "DWUpdateCheck.h"
+      ],
+      "dependencies": [
+        "app-Support",
+        "dock-helper-Daemon",
+        "dock-helper-Lifecycle",
+        "dock-helper-Loader"
+      ],
+      "sources": [
+        {
+          "path": "DWIPCServer.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWConfigWatcher.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWScreenshotWriter.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWLoginItem.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWOnboarding.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSystemTakeover.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSessionWatch.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWNativeDesktopCLI.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWLoaderService.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWDockReloader.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSetupState.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSetupButton.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWSetupAssistant.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWUninstall.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWInstall.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWUpdateCheck.m",
+          "products": [
+            "app"
+          ]
+        }
+      ],
+      "include_dirs": [
+        "crates/desktop/src"
+      ]
+    },
+    "app-Windows": {
+      "path": "native/app/Windows",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWPanLaunch.h",
+        "DWWindowCandidate.h",
+        "DWWindowEvents.h",
+        "DWWindowManager.h",
+        "DWWindowObserver.h"
+      ],
+      "dependencies": [
+        "app-CompositorMode",
+        "app-Navigation",
+        "app-Support"
+      ],
+      "sources": [
+        {
+          "path": "DWWindowObserver.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindowManager.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindowManager+Discovery.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindowCandidate.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindowEvents.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindowEvents+Applications.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWWindowEvents+Observation.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWApplicationWatch.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWApplicationCatalogWatch.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWApplicationMetadata.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWObservedApplication.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWObservedWindow.m",
+          "products": [
+            "app"
+          ]
+        },
+        {
+          "path": "DWPanLaunch.m",
+          "products": [
+            "app"
+          ]
+        }
+      ]
+    },
+    "dock-helper-Client": {
+      "path": "native/dock-helper/Client",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWHelperClient.h",
+        "DWHelperProtocol.h",
+        "DWJournalFields.h"
+      ],
+      "dependencies": [],
+      "sources": [
+        {
+          "path": "DWHelperClient.c",
+          "products": [
+            "client",
+            "loader",
+            "app"
+          ]
+        }
+      ]
+    },
+    "dock-helper-Daemon": {
+      "path": "native/dock-helper/Daemon",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWLoaddRequest.h"
+      ],
+      "dependencies": [
+        "dock-helper-Lifecycle",
+        "dock-helper-Loader"
+      ],
+      "sources": [
+        {
+          "path": "DWLoaddRequest.m",
+          "products": [
+            "app",
+            "daemon"
+          ]
+        },
+        {
+          "path": "Daemon.m",
+          "products": [
+            "daemon"
+          ],
+          "entry": true
+        }
+      ]
+    },
+    "dock-helper-Lifecycle": {
+      "path": "native/dock-helper/Lifecycle",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWHelperLauncher.h",
+        "DWHelperLifecycle.h"
+      ],
+      "dependencies": [
+        "app-Support",
+        "dock-helper-Client"
+      ],
+      "sources": [
+        {
+          "path": "DWHelperLifecycle.m",
+          "products": [
+            "app",
+            "loader",
+            "daemon"
+          ]
+        },
+        {
+          "path": "DWHelperMacEnvironment.m",
+          "products": [
+            "app",
+            "loader",
+            "daemon"
+          ]
+        },
+        {
+          "path": "DWHelperLauncher.m",
+          "products": [
+            "app"
+          ]
+        }
+      ]
+    },
+    "dock-helper-Loader": {
+      "path": "native/dock-helper/Loader",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [
+        "DWPreflight.h",
+        "DWStagedPayload.h"
+      ],
+      "dependencies": [
+        "dock-helper-Client",
+        "dock-helper-Lifecycle"
+      ],
+      "sources": [
+        {
+          "path": "DWDoctor.m",
+          "products": [
+            "doctor"
+          ],
+          "entry": true
+        },
+        {
+          "path": "DWLoader.m",
+          "products": [
+            "loader"
+          ],
+          "entry": true
+        }
+      ]
+    },
+    "dock-helper-Payload": {
+      "path": "native/dock-helper/Payload",
+      "public": ".",
+      "private": "Private",
+      "public_headers": [],
+      "dependencies": [
+        "dock-helper-Client"
+      ],
+      "sources": [
+        {
+          "path": "DWPayload.m",
+          "products": [
+            "payload"
+          ]
+        }
+      ],
+      "fragments": [
+        "DWPayloadArrival.m",
+        "DWPayloadFrames.m",
+        "DWPayloadIdentity.m",
+        "DWPayloadJournal.m",
+        "DWPayloadMove.m",
+        "DWPayloadRestore.m",
+        "DWPayloadSpace.m",
+        "DWPayloadState.m"
+      ]
+    }
+  },
+  "products": {
+    "app": {
+      "arch": "arm64",
+      "arc": true,
+      "frameworks": [
+        "AppKit",
+        "ScreenCaptureKit",
+        "CoreMedia",
+        "CoreVideo",
+        "QuartzCore",
+        "Carbon",
+        "Metal",
+        "CoreGraphics",
+        "CoreText",
+        "IOSurface",
+        "ImageIO",
+        "Accelerate",
+        "Security",
+        "SystemConfiguration",
+        "ServiceManagement",
+        "UserNotifications"
+      ],
+      "entry": {
+        "path": "native/app/main.m",
+        "dependencies": [
+          "app-Desktop",
+          "app-Navigation",
+          "app-Support",
+          "app-System"
+        ],
+        "include_dirs": [
+          "crates/desktop/src"
+        ]
+      },
+      "libraries": [
+        "target/release/libdriftwm_desktop.a"
+      ]
+    },
+    "doctor": {
+      "arch": "arm64",
+      "arc": false,
+      "frameworks": [
+        "Foundation"
+      ]
+    },
+    "payload": {
+      "arch": "arm64e",
+      "arc": true,
+      "frameworks": [
+        "AppKit"
+      ],
+      "dynamic": true
+    },
+    "client": {
+      "arch": "arm64",
+      "arc": false,
+      "frameworks": [],
+      "object": true
+    },
+    "loader": {
+      "arch": "arm64e",
+      "arc": false,
+      "frameworks": [
+        "AppKit",
+        "Security"
+      ]
+    },
+    "daemon": {
+      "arch": "arm64",
+      "arc": true,
+      "frameworks": [
+        "Foundation",
+        "Security"
+      ]
+    }
+  }
+}

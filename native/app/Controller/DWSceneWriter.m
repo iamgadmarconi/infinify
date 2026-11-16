@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "DWSceneWriter.h"
+#include "driftwm_desktop.h"
 #include <os/lock.h>
 #include <stdio.h>
 #include <string.h>
