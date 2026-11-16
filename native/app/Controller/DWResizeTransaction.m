@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#import "DWScene+Private.h"
+@implementation DWResizeTransaction
+- (NSNumber *)transaction { return DWNumber(self.rawDictionary[@"transaction"]); }
+- (NSNumber *)window { return DWNumber(self.rawDictionary[@"window"]); }
+- (DWIdentity *)identity { return [self cachedProjection:@"identity" make:^id{return DWProject(DWIdentity.class,self.rawDictionary[@"identity"]);}]; }
+- (NSNumber *)generation { return DWNumber(self.rawDictionary[@"generation"]); }
+- (NSNumber *)output { return DWNumber(self.rawDictionary[@"output"]); }
+- (NSString *)edges { return DWString(self.rawDictionary[@"edges"]); }
+- (NSNumber *)interactive { return DWNumber(self.rawDictionary[@"interactive"]); }
+- (NSNumber *)screenSpace { return DWNumber(self.rawDictionary[@"screen_space"]); }
+- (CGSize)initialSize { return DWSceneSize(self.rawDictionary[@"initial_size"]); }
+- (CGSize)lastCommittedSize { return DWSceneSize(self.rawDictionary[@"last_committed_size"]); }
+- (CGSize)latestRequested { return DWSceneSize(self.rawDictionary[@"latest_requested"]); }
+- (CGSize)lastSent { return DWSceneSize(self.rawDictionary[@"last_sent"]); }
+- (CGRect)requestedOutline { return DWSceneRect(self.rawDictionary[@"requested_outline"]); }
+- (CGSize)coalescedLatest { return DWSceneSize(self.rawDictionary[@"coalesced_latest"]); }
+- (CGPoint)nativeOrigin { return DWScenePoint(self.rawDictionary[@"native_origin"]); }
+- (DWSizeEffect *)pendingEffect { return [self cachedProjection:@"pendingEffect" make:^id{return (DWSizeEffect *)DWProjectEffect(self.rawDictionary[@"pending_effect"]);}]; }
+- (NSString *)phase { return DWString(self.rawDictionary[@"phase"]); }
+- (NSNumber *)baselineObserved { return DWNumber(self.rawDictionary[@"baseline_observed"]); }
+- (NSNumber *)released { return DWNumber(self.rawDictionary[@"released"]); }
+- (NSNumber *)cancelled { return DWNumber(self.rawDictionary[@"cancelled"]); }
+- (NSNumber *)uncertainMutation { return DWNumber(self.rawDictionary[@"uncertain_mutation"]); }
+- (DWNativeResult *)lastResult { return [self cachedProjection:@"lastResult" make:^id{return DWProject(DWNativeResult.class,self.rawDictionary[@"last_result"]);}]; }
+- (DWValuePresence)pendingEffectPresence { return DWPresence(self.rawDictionary[@"pending_effect"],NSDictionary.class); }
+- (DWValuePresence)initialSizePresence { return DWPresence(self.rawDictionary[@"initial_size"],NSDictionary.class); }
+- (BOOL)initialSizeHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"initial_size"],1); }
+- (DWValuePresence)lastCommittedSizePresence { return DWPresence(self.rawDictionary[@"last_committed_size"],NSDictionary.class); }
+- (BOOL)lastCommittedSizeHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"last_committed_size"],1); }
+- (DWValuePresence)latestRequestedPresence { return DWPresence(self.rawDictionary[@"latest_requested"],NSDictionary.class); }
+- (BOOL)latestRequestedHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"latest_requested"],1); }
+- (DWValuePresence)lastSentPresence { return DWPresence(self.rawDictionary[@"last_sent"],NSDictionary.class); }
+- (BOOL)lastSentHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"last_sent"],1); }
+- (DWValuePresence)requestedOutlinePresence { return DWPresence(self.rawDictionary[@"requested_outline"],NSDictionary.class); }
+- (BOOL)requestedOutlineHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"requested_outline"],2); }
+- (DWValuePresence)coalescedLatestPresence { return DWPresence(self.rawDictionary[@"coalesced_latest"],NSDictionary.class); }
+- (BOOL)coalescedLatestHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"coalesced_latest"],1); }
+- (DWValuePresence)nativeOriginPresence { return DWPresence(self.rawDictionary[@"native_origin"],NSDictionary.class); }
+- (BOOL)nativeOriginHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"native_origin"],0); }
+- (CGRect)requestedOutlineOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"requested_outline"],2)?self.requestedOutline:CGRectNull; }
+@end
