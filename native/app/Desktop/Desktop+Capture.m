@@ -140,7 +140,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 // wins, including pinned windows and widgets. Cropping does not lower density. Native ownership and world geometry are unchanged.
 - (CGSize)capturePixels:(LiveSource *)source native:(CGSize)native placements:(NSArray *)placements scales:(NSDictionary *)scales demandDensity:(double *)demand {
     double density=0;
-    for(NSDictionary *p in placements)if([p[@"window"]isEqual:source.logical]){CGRect r=DWRectFromJSON(p[@"screen_rect"]);if(CGRectIsNull(r))continue;double scale=[scales[p[@"output"]]doubleValue];density=fmax(density,fmax(r.size.width/native.width,r.size.height/native.height)*(scale>0?scale:2));}
+    for(DWPlacement *p in placements)if([p.window isEqual:source.logical]){CGRect r=p.screenRect;if(CGRectIsNull(r))continue;double scale=[scales[p.output]doubleValue];density=fmax(density,fmax(r.size.width/native.width,r.size.height/native.height)*(scale>0?scale:2));}
     if(density<=0)density=source.captureNativeSize.width>0?source.captureSize.width/source.captureNativeSize.width:2;
     density=fmin(2,fmax(1.0/32,density));if(demand)*demand=density;
     density=fmax(density,exp2(ceil(2*log2(density))*.5));
@@ -162,28 +162,28 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 - (void)captureDemand {
     if(!self.manager||!self.sources.count||self.sessionInactive){[self.nativeFamilies reset];return;}
     if(self.native.ended){[self.nativeFamilies reset];for(LiveSource *source in self.sources.allValues){source.replicaWanted=NO;[self stopCapture:source];}return;}
-    NSDictionary *snapshot=[self presentationSnapshot];if(!snapshot)return;
+    DWScene *snapshot=[self presentationSnapshot];if(!snapshot)return;
     if(self.native&&!self.nativeViews.capturedWindows.count){
         BOOL draining=NO;for(LiveSource *source in self.sources.allValues)if(source.stream||source.replicaWanted){draining=YES;break;}
         if(!draining){[self.nativeFamilies reset];return;}
     }
     NSMutableDictionary *outputs=[NSMutableDictionary dictionary],*captureSites=[NSMutableDictionary dictionary],*scales=[NSMutableDictionary dictionary];
-    for(NSDictionary *output in snapshot[@"outputs"])if(output[@"id"])outputs[output[@"id"]]=output;
+    for(DWOutput *output in snapshot.outputs)if(output.identifier)outputs[output.identifier]=output;
     for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)scales[output]=@(view.window.backingScaleFactor);
     NSMutableSet<NSNumber *> *placed=[NSMutableSet set];NSMutableArray *pictures=[NSMutableArray array];
-    for(NSDictionary *p in snapshot[@"placements"])if(!self.native||[self.nativeViews replica:p[@"window"] output:p[@"output"]]){
-        NSNumber *window=p[@"window"];[placed addObject:window];[pictures addObject:p];
+    for(DWPlacement *p in snapshot.placements)if(!self.native||[self.nativeViews replica:p.window output:p.output]){
+        NSNumber *window=p.window;[placed addObject:window];[pictures addObject:p];
         if(!captureSites[window])captureSites[window]=[NSMutableArray array];
         // The viewport is the output, not the root's clip: a child may extend
         // into it from outside its root, including family-only placements.
-        NSDictionary *output=outputs[p[@"output"]];double scale=[scales[p[@"output"]]doubleValue],zoom=[p[@"pinned"]boolValue]?1:[output[@"zoom"]doubleValue];
+        DWOutput *output=outputs[p.output];double scale=[scales[p.output]doubleValue],zoom=p.pinned.boolValue?1:output.zoom.doubleValue;
         // Surface origin/extent round before zoom, then both final corners
         // round again. Include that error plus a physical pixel of fringe.
         NSNumber *margin=scale>0&&isfinite(scale)&&zoom>0&&isfinite(zoom)?@((MAX(1,zoom)+1)/scale):nil;
-        [captureSites[window]addObject:@{@"screen_rect":p[@"screen_rect"]?:NSNull.null,@"viewport":output[@"screen_bounds"]?:NSNull.null,@"pixel_margin":margin?:NSNull.null}];
+        [captureSites[window]addObject:DWNativeCaptureSite(p,output,margin)];
     }
     BOOL captureAll=self.compositor.hasFamilyGeometryTransitions;
-    NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(NSDictionary *window in snapshot[@"windows"])if(DWTyped(window[@"source"],NSDictionary.class))bindings[window[@"window"]]=window[@"source"];
+    NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(DWWindow *window in snapshot.windows)if(window.source)bindings[window.window]=window.source;
     CMTime interval=[self captureInterval];
     NSMutableArray *familyRoots=[NSMutableArray array];NSInteger familyRate=(NSInteger)llround(1/CMTimeGetSeconds(interval));
     for(LiveSource *source in self.sources.allValues){
@@ -200,10 +200,10 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
         double densityDemand=0;CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales demandDensity:&densityDemand];
         CFTimeInterval demandTime=CACurrentMediaTime();
         if(source.captureDemandDensity!=densityDemand){source.captureDemandDensity=densityDemand;source.captureDemandSince=demandTime;}
-        NSDictionary *binding=bindings[source.logical];
-        if(self.native&&[placed containsObject:source.logical]&&boundIdentity(source.identity,binding[@"identity"])&&binding[@"generation"]){
+        DWSource *binding=bindings[source.logical];
+        if(self.native&&[placed containsObject:source.logical]&&boundIdentity(source.identity,DWNativeIdentity(binding.identity))&&binding.generation){
             double density=running&&source.captureSize.width>0?source.captureSize.width/bounds.size.width:pixels.width/bounds.size.width;
-            [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":DWRectJSON(bounds),@"density":@(density),@"capture_sites":[captureSites[source.logical]copy]?:@[],@"capture_all":@(captureAll)}];
+            [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding.generation,@"native_bounds":DWRectJSON(bounds),@"density":@(density),@"capture_sites":[captureSites[source.logical]copy]?:@[],@"capture_all":@(captureAll)}];
         }
         if(!running){[self startCapture:source size:pixels interval:interval];continue;}
         if(source.captureUpdating)continue;
@@ -222,12 +222,12 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
     // a child can extend into a display while its root is offscreen. Only
     // placements request capture; observation alone starts no child stream.
     if(!self.native)for(LiveSource *source in self.sources.allValues){
-        NSDictionary *binding=bindings[source.logical];CGRect bounds=CGRectZero;
-        if(source.detached||source.error||!source.router.bounds||!boundIdentity(source.identity,binding[@"identity"])||!binding[@"generation"]
+        DWSource *binding=bindings[source.logical];CGRect bounds=CGRectZero;
+        if(source.detached||source.error||!source.router.bounds||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||!binding.generation
            ||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&bounds)||CGRectIsEmpty(bounds)||CGRectIsInfinite(bounds))continue;
         CGSize pixels=[self capturePixels:source native:bounds.size placements:pictures scales:scales demandDensity:NULL];
         double density=pixels.width/bounds.size.width;
-        [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":DWRectJSON(bounds),@"density":@(density),@"capture":@(source.replicaWanted),@"capture_sites":[captureSites[source.logical]copy]?:@[],@"capture_all":@(captureAll)}];
+        [familyRoots addObject:@{@"window":source.logical,@"identity":source.identity,@"generation":binding.generation,@"native_bounds":DWRectJSON(bounds),@"density":@(density),@"capture":@(source.replicaWanted),@"capture_sites":[captureSites[source.logical]copy]?:@[],@"capture_all":@(captureAll)}];
     }
     if(!self.nativeFamilies){__weak Desktop *weak=self;self.nativeFamilies=[[DWNativeReplicaFamilies alloc]initWithChanged:^(NSNumber *window){Desktop *d=weak;if(!d||d.cleaning||d.sessionInactive)return;
         if(!d.native&&d.overlayFamilyDescriptions!=d.nativeFamilies.descriptions){[d render];return;}
@@ -243,7 +243,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
     for(LiveSource *source in self.sources.allValues)if(source.captureRecovering&&!source.detached&&(!self.native||source.replicaWanted)&&source.captureRetryAt<=now)[due addObject:source];
     if(!due.count)return;
     if(self.manager){
-        NSMutableSet *placed=[NSMutableSet set];for(NSDictionary *p in [self presentationSnapshot][@"placements"])if(!self.native||[self.nativeViews replica:p[@"window"] output:p[@"output"]])[placed addObject:p[@"window"]];
+        NSMutableSet *placed=[NSMutableSet set];for(DWPlacement *p in [self presentationSnapshot].placements)if(!self.native||[self.nativeViews replica:p.window output:p.output])[placed addObject:p.window];
         for(LiveSource *source in due.copy)if(![self.manager capture:source.logical placed:[placed containsObject:source.logical]])[due removeObject:source];
     }
     if(!due.count)return;
@@ -281,12 +281,12 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 // can require the main queue: return the IPC handler before waiting for it. The
 // request owns its snapshots, leaves live-stream configuration alone, and expires
 // after two seconds. Late completions cannot install pixels or answer twice.
-- (void)prepareScreenshot:(NSDictionary *)effect completed:(void (^)(NSString *))completed {
+- (void)prepareScreenshot:(DWShellEffect *)effect completed:(void (^)(NSString *))completed {
     if(!self.manager){completed(nil);return;}
     if(self.exportSources){completed(@"another screenshot is preparing");return;}
     if(!CGPreflightScreenCaptureAccess()){completed(@"Screen Recording access is unavailable; no snapshot requested");return;}
     if(self.native.ended){completed(@"native presentation has ended");return;}
-    NSDictionary *alone=DWTyped(DWTyped(effect[@"target"],NSDictionary.class)[@"Window"],NSDictionary.class);NSDictionary *focus=DWTyped([self call:@{@"op":@"snapshot"}][@"focus"],NSDictionary.class);NSNumber *wanted=alone?(DWTyped(alone[@"window"],NSNumber.class)?:DWTyped(focus[@"intent"],NSNumber.class)):nil;
+    DWScreenshotWindowTarget *alone=effect.target.window;DWFocus *focus=self.controller.scene.focus;NSNumber *wanted=alone?(alone.window?:focus.intent):nil;
     NSArray *windows=alone?(wanted?@[wanted]:@[]):self.sources.allKeys;self.exportSources=[NSMutableDictionary dictionary];self.exportAttachments=[NSMutableDictionary dictionary];self.exportOrdering=nil;
     DWExportFrame *request=[DWExportFrame new];
     void (^finish)(NSString *)=^(NSString *failure){if(atomic_exchange(&request->completed,YES))return;completed(failure);};
@@ -294,11 +294,11 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
     // Native presentation has neither an SCWindow nor a capture stream. Enumerate
     // once, then select only the fresh identities already bound by this run.
     if(windows.count){
-        NSMutableArray *roots=[NSMutableArray array];NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
-        for(NSNumber *logical in windows){LiveSource *source=self.sources[logical];if(!source)continue;NSDictionary *binding=nil;
-            for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:logical])binding=DWTyped(window[@"source"],NSDictionary.class);
-            if(source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,binding[@"identity"])||!binding[@"generation"]){finish(@"native screenshot binding expired");return;}
-            [roots addObject:@{@"window":logical,@"source":source,@"identity":[source.identity copy],@"generation":binding[@"generation"],@"capture_key":NSUUID.UUID.UUIDString}];}
+        NSMutableArray *roots=[NSMutableArray array];DWScene *snapshot=self.controller.scene;
+        for(NSNumber *logical in windows){LiveSource *source=self.sources[logical];if(!source)continue;DWSource *binding=nil;
+            for(DWWindow *window in snapshot.windows)if([window.window isEqual:logical])binding=window.source;
+            if(source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||!binding.generation){finish(@"native screenshot binding expired");return;}
+            [roots addObject:@{@"window":logical,@"source":source,@"identity":[source.identity copy],@"generation":binding.generation,@"capture_key":NSUUID.UUID.UUIDString}];}
         NSArray *asked=roots.copy;request->presenter=self.native;request->nativeFamilies=!self.native||self.native.familiesNeeded;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
             NSString *failure=nil;NSArray *plan=DWNativeExportPlan(asked,request->nativeFamilies,&failure);
@@ -330,11 +330,11 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 - (void)captureNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt content:(SCShareableContent *)content completed:(void (^)(NSString *))completed {
     if(atomic_load(&request->completed))return;
     if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
-    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
-    for(NSDictionary *item in request->nativeItems){LiveSource *source=item[@"source"];NSDictionary *binding=nil;
-        for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:item[@"window"]])binding=DWTyped(window[@"source"],NSDictionary.class);
+    DWScene *snapshot=self.controller.scene;
+    for(NSDictionary *item in request->nativeItems){LiveSource *source=item[@"source"];DWSource *binding=nil;
+        for(DWWindow *window in snapshot.windows)if([window.window isEqual:item[@"window"]])binding=window.source;
         if(self.sources[item[@"window"]]!=source||source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,item[@"identity"])
-            ||!boundIdentity(source.identity,binding[@"identity"])||![binding[@"generation"]isEqual:item[@"generation"]]){completed(@"native screenshot binding changed during capture");return;}}
+            ||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||![binding.generation isEqual:item[@"generation"]]){completed(@"native screenshot binding changed during capture");return;}}
     if(index>=request->nativeItems.count){
         // Re-read the complete family before composition. A new/removed child,
         // changed bounds or changed child order cannot silently produce a partial
@@ -347,9 +347,9 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
             NSString *failure=nil;NSArray *fresh=DWNativeExportPlan(asked,request->nativeFamilies,&failure);BOOL same=[fresh isEqual:request->nativeItems];
             dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed))return;
                 if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
-                NSDictionary *current=[self call:@{@"op":@"snapshot"}];NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(NSDictionary *window in current[@"windows"])if(DWTyped(window[@"source"],NSDictionary.class))bindings[window[@"window"]]=window[@"source"];
-                for(NSDictionary *item in request->nativeItems){NSDictionary *binding=bindings[item[@"window"]];LiveSource *source=item[@"source"];
-                    if(self.sources[item[@"window"]]!=source||source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,item[@"identity"])||!boundIdentity(item[@"identity"],binding[@"identity"])||![item[@"generation"]isEqual:binding[@"generation"]]){completed(@"native screenshot source changed before composition");return;}}
+                DWScene *current=self.controller.scene;NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(DWWindow *window in current.windows)if(window.source)bindings[window.window]=window.source;
+                for(NSDictionary *item in request->nativeItems){DWSource *binding=bindings[item[@"window"]];LiveSource *source=item[@"source"];
+                    if(self.sources[item[@"window"]]!=source||source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,item[@"identity"])||!boundIdentity(item[@"identity"],DWNativeIdentity(binding.identity))||![item[@"generation"]isEqual:binding.generation]){completed(@"native screenshot source changed before composition");return;}}
                 if(same)self.exportOrdering=DWExportOrderCohort(request->nativeItems);
                 completed(same?nil:failure?:@"native screenshot family changed before composition");
             });

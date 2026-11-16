@@ -173,11 +173,11 @@
     for(int step=0;step<16;step++){
         while((self.sizeTransition.obligations||![self.sizeTransition canRemove:nil])&&CACurrentMediaTime()<deadline){self.statusText=@"Quit pending: waiting for native resize result";[self render];DWDesktopPump(.01);}
         if(self.sizeTransition.obligations||![self.sizeTransition canRemove:nil])return;
-        NSArray *outputs=asArray([self call:@{@"op":@"snapshot"}][@"outputs"]);NSNumber *held=nil;
-        for(id o in outputs)if(DWTyped(DWTyped(o,NSDictionary.class)[@"fullscreen"],NSDictionary.class)){held=DWTyped(DWTyped(o,NSDictionary.class)[@"id"],NSNumber.class);break;}
-        NSNumber *output=held?:DWTyped(DWTyped(outputs.firstObject,NSDictionary.class)[@"id"],NSNumber.class);if(!output)return;
+        NSArray<DWOutput *> *outputs=self.controller.scene.outputs;NSNumber *held=nil;
+        for(DWOutput *o in outputs)if(o.fullscreen){held=o.identifier;break;}
+        NSNumber *output=held?:outputs.firstObject.identifier;if(!output)return;
         NSString *status=self.statusText;
-        NSDictionary *reply=[self call:held?@{@"op":@"action",@"output":held,@"action":@"toggle-fullscreen"}:@{@"op":@"ipc",@"output":output,@"request":@"State"}];
+        DWControllerReply *reply=held?[self.controller toggleFullscreenOnOutput:held]:[self.controller stateOnOutput:output];
         if(!reply){self.statusText=status;return;}
         if(![self.sizeTransition consumeSize:reply]&&!held)return;
     }
@@ -230,7 +230,7 @@
     CFTimeInterval stopDeadline=CACurrentMediaTime()+2;
     while(self.pendingStops.count&&CACurrentMediaTime()<stopDeadline){self.statusText=@"Shutdown pending: waiting for capture streams";DWDesktopPump(.01);}
     if(self.pendingStops.count){self.captureStopsTimedOut=self.pendingStops.count;fprintf(stderr,"Infinify: %lu capture stops did not complete within 2 s; detached callbacks are ignored during process exit\n",(unsigned long)self.captureStopsTimedOut);[self.pendingStops removeAllObjects];}
-    for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.sizeTransition consume:reply];}
+    for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){DWControllerReply *reply=[self.controller removeOutput:output];[self.sizeTransition consume:reply];}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}[self.panels removeAllObjects];[self.views removeAllObjects];
     // Every compositor layer, kept pixel buffer and background program goes with the panels.
     [self.compositor reset];self.compositor=nil;self.backgroundNote=nil;

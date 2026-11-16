@@ -32,7 +32,7 @@ static NSTextField *label(NSString *text, NSRect rect) {
 - (void)fillRebind:(BOOL)keep {
     NSNumber *chosen=keep?self.rebind.selectedItem.representedObject:nil;
     [self.rebind removeAllItems];[self.rebind addItemWithTitle:@"Create a new world window"];
-    for(NSDictionary *w in [self call:@{@"op":@"snapshot"}][@"windows"])if(!self.sources[w[@"window"]]){[self.rebind addItemWithTitle:[NSString stringWithFormat:@"Rebind %@: %@",w[@"window"],w[@"metadata"][@"title"]?:@"window"]];self.rebind.lastItem.representedObject=w[@"window"];}
+    for(DWWindow *w in self.controller.scene.windows)if(!self.sources[w.window]){[self.rebind addItemWithTitle:[NSString stringWithFormat:@"Rebind %@: %@",w.window,w.metadata.title?:@"window"]];self.rebind.lastItem.representedObject=w.window;}
     NSInteger kept=chosen?[self.rebind indexOfItemWithRepresentedObject:chosen]:-1;if(kept>=0)[self.rebind selectItemAtIndex:kept];
 }
 - (void)showChooser:(id)sender {

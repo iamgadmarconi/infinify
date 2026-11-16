@@ -51,23 +51,23 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     BOOL privateAvailable=[source.router loadPrivate];source.identity=@{@"pid":@(pid),@"birth_sec":processBirth[0],@"birth_usec":processBirth[1],@"wid":@(wid)};
     if(self.native&&![self.native allowsWindow:source.identity])return NO;
     source.buffer=CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2));
-    NSMutableDictionary *command=[@{@"op":@"attach",@"identity":source.identity,@"bundle_id":window.bundleIdentifier?:@"",@"title":window.title?:@"Untitled",@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)},@"source_rect":DWRectJSON(bounds)} mutableCopy];
+    DWAttachRequest *command=[DWAttachRequest new];command.identity=DWControllerIdentity(source.identity);command.bundleID=window.bundleIdentifier?:@"";command.title=window.title?:@"Untitled";command.buffer=source.buffer;command.sourceRect=bounds;
     if(placed){
-        NSNumber *output=[self viewOutput];if(output)command[@"output"]=output;command[@"pointer"]=pointJSON(pointer());
+        NSNumber *output=[self viewOutput];if(output)command.output=output;command.pointer=[NSValue valueWithPoint:NSPointFromCGPoint(pointer())];
     }
-    else if(logical)command[@"logical_id"]=logical;else {if(!world){NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];NSDictionary *o=[snapshot[@"outputs"]firstObject];double zoom=[o[@"zoom"]doubleValue];CGPoint camera=jsonPoint(o[@"camera"]);world=DWRectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command[@"world_rect"]=world;}
+    else if(logical)command.logicalID=logical;else {if(!world){DWOutput *o=self.controller.scene.outputs.firstObject;double zoom=o.zoom.doubleValue;CGPoint camera=o.camera;world=DWRectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command.worldRect=[NSValue valueWithRect:NSRectFromCGRect(DWRectFromJSON(world))];}
     if(window.displayFixed){
-        NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*chosen=nil;double best=INFINITY;
+        DWScene *snapshot=self.controller.scene;DWOutput *chosen=nil;double best=INFINITY;
         CGPoint center=CGPointMake(CGRectGetMidX(bounds),CGRectGetMidY(bounds));
-        for(NSDictionary *output in snapshot[@"outputs"]){CGRect screen=DWRectFromJSON(output[@"screen_bounds"]);if(CGRectIsEmpty(screen))continue;
+        for(DWOutput *output in snapshot.outputs){CGRect screen=output.screenBounds;if(CGRectIsEmpty(screen))continue;
             double dx=center.x-fmin(CGRectGetMaxX(screen),fmax(CGRectGetMinX(screen),center.x)),dy=center.y-fmin(CGRectGetMaxY(screen),fmax(CGRectGetMinY(screen),center.y));double distance=dx*dx+dy*dy;
             if(distance<best){best=distance;chosen=output;}}
         if(!chosen){self.statusText=@"Utility panel has no live display to pin to";return NO;}
-        CGRect screen=DWRectFromJSON(chosen[@"screen_bounds"]);
-        command[@"screen_pin"]=@{@"output":chosen[@"id"],@"screen_pos":pointJSON(CGPointMake(bounds.origin.x-screen.origin.x,bounds.origin.y-screen.origin.y))};
+        CGRect screen=chosen.screenBounds;
+        command.pinOutput=chosen.identifier;command.pinPosition=CGPointMake(bounds.origin.x-screen.origin.x,bounds.origin.y-screen.origin.y);
     }
-    NSDictionary *reply=self.navigation?[self.navigation attach:command arrived:placed adopted:self.adopted utility:window.displayFixed]:[self call:command];source.logical=reply[@"window"];if(!source.logical)return NO;source.observationToken=++self.observationEpoch;self.sources[source.logical]=source;
-    source.window=self.native?nil:window.shareable;source.nativeReplica=self.native!=nil;[self.native bound:source.identity bounds:bounds];source.title=DWTyped(info[(id)kCGWindowName],NSString.class)?:command[@"title"];
+    DWControllerReply *reply=self.navigation?[self.navigation attach:command arrived:placed adopted:self.adopted utility:window.displayFixed]:[self.controller attach:command];source.logical=reply.window;if(!source.logical)return NO;source.observationToken=++self.observationEpoch;self.sources[source.logical]=source;
+    source.window=self.native?nil:window.shareable;source.nativeReplica=self.native!=nil;[self.native bound:source.identity bounds:bounds];source.title=DWTyped(info[(id)kCGWindowName],NSString.class)?:command.title;
     [self refreshNativeButtons:source];
     // A new frame redraws only the outputs that show this window. The first picture of a window that just opened begins its open animation, which the frame timer plays.
     {__weak Desktop *weak=self;NSNumber *logical=source.logical;source.presented=^{Desktop *d=weak;if([d.compositor contentChanged:logical])[d startFrames];};}
@@ -80,7 +80,7 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     if(!privateAvailable)self.statusText=@"Live view only: private per-window input is unavailable on this OS.";
     if(placed){
         [self follow:reply];
-        if([reply[@"focus_on_open_suppressed"]boolValue])[self.navigation observe];
+        if(reply.focusOnOpenSuppressed.boolValue)[self.navigation observe];
     }
     [self render];return YES;
 }
@@ -91,12 +91,10 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 // request of any other reply; a reply without one withdraws only work in flight for a
 // request the controller has dropped. Such a reply carries no other effect, but for the size transaction of a window whose
 // rule names a size, which -attach:logical:world:placed: hands to the resize coordinator itself.
-- (void)follow:(NSDictionary *)reply {
-    NSMutableDictionary *focus=[reply mutableCopy]?:[NSMutableDictionary dictionary];
-    if(!DWTyped(reply[@"effect"],NSDictionary.class))[focus removeObjectForKey:@"effect"];
-    [focus removeObjectForKey:@"effects"];[self.navigation perform:focus];
-    if(DWTyped(reply[@"navigation"],NSDictionary.class)){if(!self.navigation)self.flying=YES;[self ensureFrames];}
-    if(![reply[@"dirty"]isEqual:@NO])self.sceneDirty=YES;
+- (void)follow:(DWControllerReply *)reply {
+    [self.navigation perform:[DWControllerReply lifecycleFollowReply:reply]];
+    if(reply.navigation){if(!self.navigation)self.flying=YES;[self ensureFrames];}
+    if(![reply.dirty isEqual:@NO])self.sceneDirty=YES;
 }
 // Native readback: is a size transaction of this window live with no effect owed? Only a resize grab is, between two sizes it asks: the
 // controller takes no close, removal or observation of the window meanwhile, exactly as while a result is owed.
@@ -108,7 +106,7 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     if(source.detached)return;if([[self.sizeTransition busyWindow]isEqual:source.logical]||[self grabbed:source])[self.sizeTransition cancel];
     [self cancelCapturedInputForWindow:source.logical];
     for(DesktopView *view in self.views)if(view.pressedSource==source)[view releasePressed];
-    if(![self call:@{@"op":@"remove_source",@"window":source.logical,@"identity":source.identity,@"keep_placeholder":@YES}])return;
+    if(![self.controller removeSourceWindow:source.logical identity:DWControllerIdentity(source.identity) keepPlaceholder:YES])return;
     [self drop:source];
 }
 // The shell's half of a source the controller no longer binds: held button, kept frame, stream and table.
@@ -126,8 +124,8 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 // A refusal keeps the world place the way a lost source always did.
 - (void)closed:(LiveSource *)source {
     if(source.detached)return;
-    NSMutableDictionary *command=[@{@"op":@"window_closed",@"window":source.logical,@"identity":source.identity}mutableCopy];NSNumber *output=[self viewOutput];if(output)command[@"output"]=output;
-    NSDictionary *reply=[self call:command];
+    NSNumber *output=[self viewOutput];
+    DWControllerReply *reply=[self.controller windowClosed:source.logical identity:DWControllerIdentity(source.identity) output:output];
     if(!reply){[self detach:source];return;}
     [self drop:source];[self follow:reply];[self render];
 }
@@ -189,7 +187,8 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 // their slots while one that closed in between left its slot behind.
 - (void)discoveryCompleted:(NSArray<NSDictionary *> *)present {
     if(self.adopted||self.cleaning)return;self.adopted=YES;
-    NSString *status=self.statusText;NSDictionary *reply=[self call:@{@"op":@"adoption_complete",@"present":present?:@[]}];
+    NSMutableArray<DWPresentWindow *> *windows=[NSMutableArray array];for(NSDictionary *item in present)[windows addObject:[DWPresentWindow windowWithBundleID:item[@"bundle_id"] title:item[@"title"]]];
+    NSString *status=self.statusText;DWControllerReply *reply=[self.controller adoptionComplete:windows];
     if(!reply){fprintf(stderr,"adoption_complete: %s\n",self.statusText.UTF8String);self.statusText=status;return;}
     [self follow:reply];[self render];
 }
@@ -201,7 +200,7 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     [self flashStatus:note];[self render];
 }
 // Did close-window or suspend-window ask this window to close? The controller's mark.
-- (BOOL)marked:(LiveSource *)source { return DWTyped([self call:@{@"op":@"snapshot"}][@"lifecycle"][@"marks"],NSDictionary.class)[source.logical.stringValue]!=nil; }
+- (BOOL)marked:(LiveSource *)source { return [self.controller.scene.lifecycle hasMarkForWindow:source.logical]; }
 // Work owed to the observer, kept apart so one hint does not become an audit of everything: a discovery pass enumerates candidates only,
 // an audit reads the bound sources named (every one, a pid's, or single logicals). Invalidation itself is never delayed by this.
 - (void)wantWindowAudit:(BOOL)all pid:(pid_t)pid logical:(NSNumber *)logical {
@@ -319,9 +318,8 @@ static void observeStats(NSUInteger sources,BOOL all) {
 // an unchanged source identity/generation/previous-bounds fence. A second look
 // that finds nothing new sends no window_closed and no retitle.
 // One window's source binding straight from the controller's current state, shaped as the snapshot's windows[].source. Absent or unbound fails closed (nil); the owner stays NSNull when the controller has none, as the snapshot's JSON null.
-- (NSDictionary *)sourceBinding:(NSNumber *)window {
-    DriftDesktopSourceBinding b;if(!self.controller||!window||!driftwm_desktop_source_binding(self.controller,window.unsignedLongLongValue,&b))return nil;
-    return @{@"identity":@{@"pid":@(b.pid),@"birth_sec":@(b.birth_sec),@"birth_usec":@(b.birth_usec),@"wid":@(b.wid),@"owner":b.owner?@(b.owner):(id)NSNull.null},@"generation":@(b.generation),@"observation_known":@(b.observation_known!=0),@"observed_rect":DWRectJSON(CGRectMake(b.x,b.y,b.width,b.height))};
+- (DWSource *)sourceBinding:(NSNumber *)window {
+    return [self.controller sourceBindingForWindow:window];
 }
 - (void)track:(LiveSource *)source { [self track:source info:windowInfo(source.router.wid)]; }
 - (void)track:(LiveSource *)source info:(NSDictionary *)w { [self track:source info:w observation:nil]; }
@@ -339,7 +337,7 @@ static void observeStats(NSUInteger sources,BOOL all) {
         if(source.nativeMouseOwnership&&!source.nativeMouseAdopting&&!gone)return;
         // Titles follow in a managed run, under native resize too. A refused title is not offered again.
         NSString *title=self.manager&&!gone?DWTyped(w[(id)kCGWindowName],NSString.class):nil;
-        if(title&&![title isEqual:source.title]){[source invalidateNativeButtons];source.title=title;NSString *status=self.statusText;NSDictionary *reply=[self call:@{@"op":@"retitle",@"window":source.logical,@"identity":source.identity,@"title":title}];if(reply)[self follow:reply];else self.statusText=status;}
+        if(title&&![title isEqual:source.title]){[source invalidateNativeButtons];source.title=title;NSString *status=self.statusText;DWControllerReply *reply=[self.controller retitleWindow:source.logical identity:DWControllerIdentity(source.identity) title:title];if(reply)[self follow:reply];else self.statusText=status;}
 
         // A managed run tells a window that closed from a capture that failed: only the second keeps today's placeholder.
         // A manual run does so for a window close-window or suspend-window asked to close: the controller's mark decides what is left.
@@ -397,16 +395,15 @@ static void observeStats(NSUInteger sources,BOOL all) {
         BOOL spaceReflow=self.native&&[self.native observeSpaceReflow:source.identity bounds:bounds nativeInput:source.nativeMouseAdopting];
         if(spaceReflow&&DWDebugTrace()&&!CGSizeEqualToSize(prior.size,bounds.size))
             fprintf(stderr,"debug: native Space reflow window=#%s pid=%d wid=%u before=%gx%g observed=%gx%g world_size=preserved native_frame_restore=unowned\n",source.logical.description.UTF8String,source.router.pid,source.router.wid,prior.size.width,prior.size.height,bounds.size.width,bounds.size.height);
-        DriftDesktopObservation controllerObservation={.window=source.logical.unsignedLongLongValue,.birth_sec=[source.identity[@"birth_sec"]longLongValue],.x=bounds.origin.x,.y=bounds.origin.y,.width=bounds.size.width,.height=bounds.size.height,.pid=[source.identity[@"pid"]intValue],.birth_usec=[source.identity[@"birth_usec"]intValue],.wid=[source.identity[@"wid"]unsignedIntValue],.owner=[source.identity[@"owner"]unsignedIntValue],.buffer_width=(uint32_t)source.buffer.width,.buffer_height=(uint32_t)source.buffer.height};
-        BOOL current=self.native&&driftwm_desktop_observation_current(self.controller,&controllerObservation);
+        BOOL current=self.native&&[self.controller observationCurrentForWindow:source.logical identity:DWControllerIdentity(source.identity) bounds:bounds buffer:source.buffer];
         if(!current){
-            NSDictionary *seen=[self call:@{@"op":spaceReflow?@"observe_presentation":@"observe",@"window":source.logical,@"identity":source.identity,@"source_rect":DWRectJSON(bounds),@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)}}];
-            if([DWTyped(seen[@"resized"],NSNumber.class)boolValue])self.sceneDirty=YES;
+            DWControllerReply *seen=spaceReflow?[self.controller observePresentationWindow:source.logical identity:DWControllerIdentity(source.identity) rect:bounds buffer:source.buffer]:[self.controller observeWindow:source.logical identity:DWControllerIdentity(source.identity) rect:bounds buffer:source.buffer];
+            if(seen.resized.boolValue)self.sceneDirty=YES;
         }
         if(self.native){
-            NSDictionary *binding=family?[self sourceBinding:source.logical]:nil;
-            if(family&&boundIdentity(family[@"identity"],source.identity)&&boundIdentity(binding[@"identity"],source.identity)&&binding[@"generation"]&&[binding[@"observation_known"]boolValue]&&CGRectEqualToRect(DWRectFromJSON(binding[@"observed_rect"]),bounds)){
-                NSDictionary *description=@{@"identity":source.identity,@"generation":binding[@"generation"],@"native_bounds":DWRectJSON(bounds),@"members":asArray(family[@"members"])?:@[]};
+            DWSource *binding=family?[self sourceBinding:source.logical]:nil;
+            if(family&&boundIdentity(family[@"identity"],source.identity)&&boundIdentity(DWNativeIdentity(binding.identity),source.identity)&&binding.generation&&binding.observationKnown.boolValue&&CGRectEqualToRect(binding.observedRect,bounds)){
+                NSDictionary *description=@{@"identity":source.identity,@"generation":binding.generation,@"native_bounds":DWRectJSON(bounds),@"members":asArray(family[@"members"])?:@[]};
                 if(![source.nativeFamily isEqual:description]){source.nativeFamily=description;self.nativeFamilyRevision++;}
             }else [self forgetNativeFamily:source];
         }
