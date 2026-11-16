@@ -167,7 +167,9 @@ def dependencies(path):
 def compiler_identity():
     compiler = subprocess.check_output(["xcrun", "--find", "clang"], text=True).strip()
     return [compiler, subprocess.check_output([compiler, "--version"], text=True),
-            subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()]
+            subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip(),
+            {key: os.environ.get(key) for key in ("SDKROOT", "DEVELOPER_DIR", "TOOLCHAINS",
+             "CPATH", "C_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "SOURCE_DATE_EPOCH")}]
 
 
 def build(data, product, arch, defines, module=None):

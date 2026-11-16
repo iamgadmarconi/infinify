@@ -36,7 +36,8 @@ dist=target/dist/$version
 # that the Dock loads it so. INFINIFY_SIGN_PAYLOAD=0 keeps it ad hoc.
 INFINIFY_SIGN_PAYLOAD=${INFINIFY_SIGN_PAYLOAD:-1}
 export INFINIFY_SIGN_PAYLOAD
-INFINIFY_VERSION=$version INFINIFY_BUILD_NUMBER=$build INFINIFY_RELEASE_REPOSITORY=$repository ./scripts/build-app.sh
+# Release native code is always compiled from an empty object cache.
+INFINIFY_NATIVE_CLEAN=1 INFINIFY_VERSION=$version INFINIFY_BUILD_NUMBER=$build INFINIFY_RELEASE_REPOSITORY=$repository ./scripts/build-app.sh
 python3 -I scripts/build-app-package.py verify-source --root "$PWD" >/dev/null
 
 mkdir -p "$dist"
