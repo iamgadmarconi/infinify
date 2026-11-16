@@ -62,7 +62,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 - (nullable DWControllerReply *)hoverWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation output:(NSNumber *)output screen:(CGPoint)screen time:(nullable NSNumber *)time forwardMotion:(nullable NSNumber *)forward;
 - (nullable DWControllerReply *)pointerOnOutput:(nullable NSNumber *)output screen:(CGPoint)screen;
 - (nullable DWControllerReply *)pickWindow:(NSNumber *)window output:(NSNumber *)output;
-- (nullable DWControllerReply *)pointerNearestOnOutput:(NSNumber *)output screen:(CGPoint)screen start:(CGPoint)start held:(BOOL)held focus:(BOOL)focus;
+- (nullable DWControllerReply *)pointerNearestOnOutput:(nullable NSNumber *)output screen:(CGPoint)screen start:(CGPoint)start held:(BOOL)held focus:(BOOL)focus;
 - (nullable DWControllerReply *)beginDragWindow:(NSNumber *)window output:(NSNumber *)output group:(BOOL)group;
 - (nullable DWControllerReply *)beginResizeWindow:(NSNumber *)window output:(NSNumber *)output edges:(DWControllerResizeEdges)edges group:(BOOL)group;
 - (nullable DWControllerReply *)gestureTo:(CGPoint)delta pointer:(nullable NSValue *)pointer;

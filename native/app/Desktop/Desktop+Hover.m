@@ -86,7 +86,7 @@
         ||[hit.placeholder boolValue]||hit.nativeMember||![self nativeOwnershipReady:source]
         ||CGEventGetIntegerValueField(event.CGEvent,kCGEventTargetUnixProcessID)!=getpid()
         ||CGEventGetIntegerValueField(event.CGEvent,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent)!=view.window.windowNumber
-        ||binding!=nil||[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output]
+        ||binding.hasDefinition||[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output]
         ||(button==0&&[self replicaGreen:source at:point output:output]))return NO;
     return [self nativeHoverSite:source hit:hit view:view output:output at:point];
 }
@@ -128,7 +128,7 @@
     if(!output||![self nativeOwnershipReady:source]||![self.nativeViews replica:source.logical output:output]
         ||[hit.pick boolValue]||[hit.widget boolValue]||[hit.placeholder boolValue]||hit.nativeMember
         ||self.nativeOwnershipTransfer||[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]
-        ||[self mouseBinding:@"left" source:nil flags:flags window:YES under:source.logical pick:NO]
+        ||[self mouseBinding:@"left" source:nil flags:flags window:YES under:source.logical pick:NO].hasDefinition
         ||[view resizeBorderForButton:0 flags:flags hit:hit at:point output:output]
         ||[self replicaGreen:source at:point output:output]){[self cancelNativeHoverForWindow:nil];return;}
     if(![self nativeHoverSite:source hit:hit view:view output:output at:point]){[self cancelNativeHoverForWindow:nil];return;}
