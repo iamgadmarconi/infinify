@@ -14,7 +14,7 @@
 #include <string.h>
 
 static NSDictionary *P(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
-static NSDictionary *R(CGRect r) { return @{@"x":@(r.origin.x),@"y":@(r.origin.y),@"width":@(r.size.width),@"height":@(r.size.height)}; }
+static NSDictionary *R(CGRect r) { return DWSceneRectDictionary(r); }
 static NSDictionary *B(CGSize b) { return @{@"width":@(b.width),@"height":@(b.height)}; }
 static NSDictionary *M(DWModifierFlags m) { return @{@"control":@(m.control),@"option":@(m.option),@"shift":@(m.shift),@"command":@(m.command)}; }
 static NSDictionary *I(DWIdentity *identity) { return identity.rawDictionary; }
@@ -43,6 +43,8 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 - (void)fail:(NSString *)reason { if(self.failed)self.failed(reason); }
 - (void)setSnapshotDictionary:(NSDictionary *)dictionary {
     if(dictionary==_snapshotDictionary)return;
+    if(_snapshotValue)_seedScene=_snapshotValue;
+    else if(!_seedScene)_seedScene=_visualValue;
     if(_visualDictionary==_snapshotDictionary)_visualValue=_snapshotValue;
     _snapshotDictionary=dictionary;_snapshotValue=nil;
 }
@@ -51,11 +53,19 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     _visualDictionary=dictionary;_visualValue=dictionary==_snapshotDictionary?_snapshotValue:nil;
 }
 - (DWScene *)cachedScene {
-    if(!_snapshotValue&&_snapshotDictionary)_snapshotValue=[DWScene sceneWithDictionary:_snapshotDictionary];
+    if(!_snapshotValue&&_snapshotDictionary){
+        _snapshotValue=_seedScene.rawDictionary==_snapshotDictionary?_seedScene:
+            [[DWScene sceneWithDictionary:_snapshotDictionary]sceneBySeedingProjectionsFrom:_seedScene];
+        _seedScene=nil;
+    }
     return _snapshotValue;
 }
 - (DWScene *)visualScene {
-    if(!_visualValue&&_visualDictionary)_visualValue=_visualDictionary==_snapshotDictionary?self.cachedScene:[DWScene sceneWithDictionary:_visualDictionary];
+    if(!_visualValue&&_visualDictionary){
+        if(_visualDictionary==_snapshotDictionary)_visualValue=self.cachedScene;
+        else _visualValue=_seedScene.rawDictionary==_visualDictionary?_seedScene:
+            [[DWScene sceneWithDictionary:_visualDictionary]sceneBySeedingProjectionsFrom:_seedScene];
+    }
     return _visualValue;
 }
 - (DWScene *)scene {
@@ -70,24 +80,23 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     NSDictionary *value=[self executeDictionary:command query:NO rawResponse:NULL];
     return value?[DWControllerReply replyWithDictionary:value]:nil;
 }
-// This classification exists only for external compatibility and the temporary
-// migration shim. Every semantic method below chooses query/mutation directly.
-- (NSDictionary *)legacyCommand:(NSDictionary *)command raw:(NSData *__autoreleasing *)raw {
-    NSString *op=DWTyped(command[@"op"],NSString.class);
-    BOOL query=(command.count==1&&[op isEqual:@"snapshot"])||[op isEqual:@"hit"]||[op isEqual:@"input"]||[op isEqual:@"resize_border"]||[op isEqual:@"gesture_fingers"]||[op isEqual:@"focus_policy"];
-    return [self executeDictionary:command query:query rawResponse:raw];
-}
+// The external bridge's only callers send IPC and screenshot completion
+// commands. Forward even malformed commands unchanged to Rust's validator;
+// as before, these transactions invalidate caches before any possible mutation.
 - (DWControllerReply *)executeExternalCommand:(NSDictionary *)command rawResponse:(NSData *__autoreleasing *)raw {
-    NSDictionary *value=[self legacyCommand:command raw:raw];
+    NSDictionary *value=[self executeDictionary:command query:NO rawResponse:raw];
     return value?[DWControllerReply replyWithDictionary:value]:nil;
 }
-- (DWControllerReply *)navigationCommandDictionary:(NSDictionary *)command {
-    NSDictionary *value=[self legacyCommand:command raw:NULL];
-    DWControllerReply *reply=value?[DWControllerReply replyWithDictionary:value]:nil;
+- (DWControllerReply *)navigationQueryDictionary:(NSDictionary *)command {
+    DWControllerReply *reply=[self query:command];
+    return self.navigationPostprocess?self.navigationPostprocess(reply):reply;
+}
+- (DWControllerReply *)navigationMutationDictionary:(NSDictionary *)command {
+    DWControllerReply *reply=[self mutate:command];
     return self.navigationPostprocess?self.navigationPostprocess(reply):reply;
 }
 - (DWControllerReply *)policyFactDictionary:(NSDictionary *)fact timestamp:(uint64_t)timestamp filter:(BOOL)filter focusAllowed:(BOOL)focusAllowed {
-    return [self navigationCommandDictionary:@{@"op":@"focus_policy",@"timestamp_ns":@(timestamp),@"filter":@(filter),@"focus_allowed":@(focusAllowed),@"fact":fact}];
+    return [self navigationQueryDictionary:@{@"op":@"focus_policy",@"timestamp_ns":@(timestamp),@"filter":@(filter),@"focus_allowed":@(focusAllowed),@"fact":fact}];
 }
 
 - (NSDictionary *)executeDictionary:(NSDictionary *)command query:(BOOL)query rawResponse:(NSData *__autoreleasing *)raw {

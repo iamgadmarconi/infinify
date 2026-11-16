@@ -843,6 +843,109 @@ pub(crate) enum Command {
         path: String,
     },
 }
+// A command's execution contract is chosen once from its typed payload,
+// before any state can change. Reads and policy facts both preserve the scene,
+// but only policy facts may mutate (and roll back) policy-private state.
+enum CommandExecution {
+    Read(ReadCommand),
+    Policy(PolicyFactCommand),
+    NavigationTick { timestamp_ns: u64 },
+    Transaction(Command),
+}
+enum ReadCommand {
+    Snapshot,
+    GestureFingers,
+    Hit {
+        output: OutputId,
+        screen: Point,
+    },
+    Input {
+        output: OutputId,
+        screen: Point,
+        identity: SourceIdentity,
+    },
+    ResizeBorder {
+        output: OutputId,
+        screen: Point,
+    },
+}
+struct PolicyFactCommand {
+    timestamp_ns: u64,
+    filter: bool,
+    focus_allowed: bool,
+    fact: focus_policy::FocusFact,
+}
+impl Command {
+    fn into_execution(self) -> CommandExecution {
+        match self {
+            Self::Snapshot {} => CommandExecution::Read(ReadCommand::Snapshot),
+            Self::GestureFingers {} => CommandExecution::Read(ReadCommand::GestureFingers),
+            Self::Hit { output, screen } => {
+                CommandExecution::Read(ReadCommand::Hit { output, screen })
+            }
+            Self::Input {
+                output,
+                screen,
+                identity,
+            } => CommandExecution::Read(ReadCommand::Input {
+                output,
+                screen,
+                identity,
+            }),
+            Self::ResizeBorder { output, screen } => {
+                CommandExecution::Read(ReadCommand::ResizeBorder { output, screen })
+            }
+            Self::FocusPolicy {
+                timestamp_ns,
+                filter,
+                focus_allowed,
+                fact,
+            } => CommandExecution::Policy(PolicyFactCommand {
+                timestamp_ns,
+                filter,
+                focus_allowed,
+                fact,
+            }),
+            Self::TickNavigation { timestamp_ns } => {
+                CommandExecution::NavigationTick { timestamp_ns }
+            }
+            command => CommandExecution::Transaction(command),
+        }
+    }
+}
+impl ReadCommand {
+    fn execute(self, controller: &Controller) -> Result<Value, Error> {
+        match self {
+            Self::Snapshot => controller.pointer_snapshot(),
+            Self::GestureFingers => Ok(controller.gesture_fingers()),
+            Self::Hit { output, screen } => controller.pointer_hit(output, screen, None),
+            Self::Input {
+                output,
+                screen,
+                identity,
+            } => controller.pointer_hit(output, screen, Some(&identity)),
+            Self::ResizeBorder { output, screen } => {
+                Ok(json!({"border":controller.resize_border(output, screen)}))
+            }
+        }
+    }
+}
+impl PolicyFactCommand {
+    fn execute(self, controller: &mut Controller) -> Result<Value, Error> {
+        // Facts change only serde-skipped policy state, never settled scene,
+        // focus or camera state. Keep failure atomic without cloning windows.
+        let before = controller.focus.policy.clone();
+        controller
+            .focus
+            .policy
+            .configure(self.filter, self.focus_allowed);
+        let result = controller.focus_policy_fact(self.timestamp_ns, self.fact);
+        if result.is_err() {
+            controller.focus.policy = before;
+        }
+        result
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Edges {
@@ -914,40 +1017,23 @@ impl Controller {
         if request.version != ABI_VERSION {
             return Err(Error::Invalid("unsupported desktop schema"));
         }
-        // Construction and successful mutations leave state settled. These
-        // queries borrow it directly, without cloning or changing the state
-        // that the native caller may already have decoded from a snapshot.
-        if let Some(reply) = self.read_only(&request.command) {
-            return reply;
-        }
-        if let Command::TickNavigation { timestamp_ns } = &request.command
-            && self.navigation_clock_only()
-        {
-            // No timed settlement or scene mutation is possible here.
-            // Validate the clock before its sole write, without cloning
-            // every window or revalidating an unchanged settled scene.
-            return self.tick_navigation_clock(*timestamp_ns);
-        }
-        if let Command::FocusPolicy {
-            timestamp_ns,
-            filter,
-            focus_allowed,
-            fact,
-        } = request.command
-        {
-            // Facts change only serde-skipped policy state, never settled scene,
-            // focus or camera state. Keep failure atomic without cloning windows.
-            let before = self.focus.policy.clone();
-            self.focus.policy.configure(filter, focus_allowed);
-            let result = self.focus_policy_fact(timestamp_ns, fact);
-            if result.is_err() {
-                self.focus.policy = before;
+        let command = match request.command.into_execution() {
+            CommandExecution::Read(command) => return command.execute(self),
+            CommandExecution::Policy(command) => return command.execute(self),
+            CommandExecution::NavigationTick { timestamp_ns } => {
+                if self.navigation_clock_only() {
+                    // No timed settlement or scene mutation is possible here.
+                    // Validate the clock before its sole write, without cloning
+                    // windows or revalidating an unchanged settled scene.
+                    return self.tick_navigation_clock(timestamp_ns);
+                }
+                Command::TickNavigation { timestamp_ns }
             }
-            return result;
-        }
+            CommandExecution::Transaction(command) => command,
+        };
         let mut next = self.clone();
-        let carries = fullscreen::carries(&request.command);
-        let mut result = next.apply(request.command)?;
+        let carries = fullscreen::carries(&command);
+        let mut result = next.apply(command)?;
         // A size a fullscreen exit still owes leaves with a reply the shell
         // performs size transactions from.
         if carries {
@@ -956,24 +1042,6 @@ impl Controller {
         next.settle_state()?;
         *self = next;
         Ok(result)
-    }
-    /// The reply to a command that only reads, or `None` for one that may
-    /// change the controller.
-    fn read_only(&self, command: &Command) -> Option<Result<Value, Error>> {
-        Some(match command {
-            Command::Snapshot {} => self.pointer_snapshot(),
-            Command::GestureFingers {} => Ok(self.gesture_fingers()),
-            Command::Hit { output, screen } => self.pointer_hit(*output, *screen, None),
-            Command::Input {
-                output,
-                screen,
-                identity,
-            } => self.pointer_hit(*output, *screen, Some(identity)),
-            Command::ResizeBorder { output, screen } => {
-                Ok(json!({"border":self.resize_border(*output, *screen)}))
-            }
-            _ => return None,
-        })
     }
     fn settle_state(&mut self) -> Result<(), Error> {
         // Fullscreen restoration reads close marks. Prune them first so an

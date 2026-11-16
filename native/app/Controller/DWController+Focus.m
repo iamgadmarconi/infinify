@@ -22,7 +22,11 @@
     return [self policyFactDictionary:fact timestamp:context.timestamp filter:context.filter focusAllowed:context.focusAllowed].rawDictionary;
 }
 - (DWScene *)navigationScene {
-    return [DWScene sceneWithDictionary:[self navigationCommandDictionary:@{@"op":@"snapshot"}].rawDictionary];
+    DWControllerReply *reply=[self navigationQueryDictionary:@{@"op":@"snapshot"}];
+    if(reply.rawDictionary==self.snapshotDictionary)return self.cachedScene;
+    // A postprocess adapter may replace the reply. Preserve that result without
+    // forcing construction of the ordinary cached scene merely to seed it.
+    return [[DWScene sceneWithDictionary:reply.rawDictionary]sceneBySeedingProjectionsFrom:self.snapshotValue?:self.seedScene];
 }
 - (DWEffect *)navigationEffectForReply:(DWControllerReply *)reply {
     return reply.navigationEffect;
@@ -39,7 +43,9 @@
         if([kind isEqual:@"cancel_click"])[execution navigationCancelNativeClick];
         else if([kind isEqual:@"advance"])[execution navigationAdvanceReleasingHold:[step[@"release_hold"]boolValue]];
         else if([kind isEqual:@"send"]){
-            DWControllerReply *reply=[self navigationCommandDictionary:step[@"command"]];
+            // Policy sends describe scene mutations only (focus, activation,
+            // observation or cycle cancellation), never snapshot/policy queries.
+            DWControllerReply *reply=[self navigationMutationDictionary:step[@"command"]];
             if([step[@"receipt"]isKindOfClass:NSDictionary.class]){
                 NSDictionary *decision=[self navigationPolicyFact:@{@"kind":@"observation_receipt",@"context":step[@"receipt"],@"reply":reply.rawDictionary?:NSNull.null} context:context];
                 [self navigationSteps:decision[@"steps"] capturedEpoch:epoch receivedReply:reply context:context execution:execution];
@@ -55,7 +61,7 @@
 - (void)navigationConsumePolicy:(NSDictionary *)decision context:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution {
     if([decision[@"cancel_work"]boolValue]){
         [execution navigationCancelNativeClick];[execution navigationAdvanceReleasingHold:YES];
-        [self navigationCommandDictionary:@{@"op":@"cancel_focus_cycle"}];
+        [self navigationMutationDictionary:@{@"op":@"cancel_focus_cycle"}];
     }
     if([decision[@"advance"]boolValue]){[execution navigationCancelNativeClick];[execution navigationAdvanceReleasingHold:NO];}
     if([decision[@"reply"]isKindOfClass:NSDictionary.class])
@@ -71,9 +77,9 @@
         [self navigationConsumePolicy:decision context:context execution:execution];
         NSMutableDictionary *attach=[command mutableCopy];
         attach[@"unsolicited"]=decision?decision[@"unsolicited"]:@YES;
-        return [self navigationCommandDictionary:attach];
+        return [self navigationMutationDictionary:attach];
     }
-    return [self navigationCommandDictionary:command];
+    return [self navigationMutationDictionary:command];
 }
 - (void)observeIdentity:(DWIdentity *)actual familyBinding:(DWSourceBinding *)family eventAt:(uint64_t)observedAt output:(NSNumber *)output capturedEpoch:(uint64_t)epoch context:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution {
     NSDictionary *decision=[self navigationPolicyFact:@{@"kind":@"observation",@"actual":actual.rawDictionary,@"family":family.rawDictionary?:NSNull.null,@"event_at":@(observedAt),@"output":output?:NSNull.null} context:context];
@@ -117,19 +123,19 @@
     NSMutableDictionary *command=[effect.rawDictionary mutableCopy];
     command[@"op"]=logical?@"focus_logical":@"focus_result";
     if(!logical)command[@"success"]=@(success);
-    return [self navigationCommandDictionary:command];
+    return [self navigationMutationDictionary:command];
 }
-- (DWControllerReply *)navigationCancelFocusCycle { return [self navigationCommandDictionary:@{@"op":@"cancel_focus_cycle"}]; }
-- (DWControllerReply *)navigationEndFocusCycle { return [self navigationCommandDictionary:@{@"op":@"end_focus_cycle"}]; }
-- (DWControllerReply *)navigationCancelOnOutput:(NSNumber *)output { return [self navigationCommandDictionary:@{@"op":@"cancel_navigation",@"output":output}]; }
-- (DWControllerReply *)navigationTickAt:(uint64_t)timestamp { return [self navigationCommandDictionary:@{@"op":@"tick_navigation",@"timestamp_ns":@(timestamp)}]; }
+- (DWControllerReply *)navigationCancelFocusCycle { return [self navigationMutationDictionary:@{@"op":@"cancel_focus_cycle"}]; }
+- (DWControllerReply *)navigationEndFocusCycle { return [self navigationMutationDictionary:@{@"op":@"end_focus_cycle"}]; }
+- (DWControllerReply *)navigationCancelOnOutput:(NSNumber *)output { return [self navigationMutationDictionary:@{@"op":@"cancel_navigation",@"output":output}]; }
+- (DWControllerReply *)navigationTickAt:(uint64_t)timestamp { return [self navigationMutationDictionary:@{@"op":@"tick_navigation",@"timestamp_ns":@(timestamp)}]; }
 - (DWControllerReply *)navigationActivateBinding:(DWSourceBinding *)binding cause:(DWNavigationActivationCause)cause output:(NSNumber *)output {
     NSMutableDictionary *command=[binding.rawDictionary mutableCopy];command[@"op"]=@"activate";
     command[@"cause"]=cause==DWNavigationActivationClick?@"click":@"click_release";command[@"output"]=output;
-    return [self navigationCommandDictionary:command];
+    return [self navigationMutationDictionary:command];
 }
 - (DWControllerReply *)navigationObserveBinding:(DWSourceBinding *)binding {
     NSMutableDictionary *command=[binding.rawDictionary mutableCopy];command[@"op"]=@"observe_focus";
-    return [self navigationCommandDictionary:command];
+    return [self navigationMutationDictionary:command];
 }
 @end
