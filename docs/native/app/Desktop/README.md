@@ -17,8 +17,47 @@ native takeover/reposition effects) and `DWPressSceneLookup` (renderer-ordered h
 bindings and unchanged JSON controller calls, `DWPressSceneAdapter`). Missing
 evidence refuses admission; a swallowed down keeps its tail even after logical
 cancellation. Session admission precedes annotated admission on the main thread.
-Chrome retention, the 0.5 s title lifetime, 1 s green lifetime, 0.2 s refresh and
-the one-entry on-demand title cache live in admission, not the AX lookup.
+Chrome retention, the 0.5 s title lifetime, 1 s green lifetime and the one-entry
+on-demand title cache live in admission, not the AX lookup. The 0.2 s periodic
+refresh runs only for the hovered window while the pointer is in its reported
+title/caption/toolbar/button regions, expanded by 8 native points (at least 4
+display points), or a conservative resize-edge ring. The ring contains the
+controller's 8-canvas-point exterior and 5-native/3-display-point interior bands.
+Missing, failed, incomplete or invalidated maps keep the entire hovered window
+hot. An old map defines where to *refresh*, never where to claim a chrome press.
+Focused windows are no longer refreshed merely for being focused.
+
+Motion primes the hovered window with the existing 0.1/0.2 s throttles; a changed
+hover target or the first motion after a 0.2 s rest bypasses the read throttle.
+Existing frame/title/family observations, focus and display notifications prime
+asynchronously too. The existing listen-only navigation tap observes qualifying
+key-downs when ListenEvent access was already granted: Command/Control chords,
+Escape and function keys only. One read is requested 50 ms after the first key
+of a burst and one 250 ms after its last key, coalesced with any in-flight read.
+Plain typing schedules no reads; periodic band refresh remains independent.
+
+A complete, settled last good map can refuse a point outside that band without
+AX or WindowServer queries **inside the refusal**. It must still be the published
+map for the same identity, controller generation, native bounds, chrome revision
+and native session, with no read in flight, request outstanding or key burst owed.
+This is negative evidence only: it cannot authorize a canvas-owned press. All
+other title/green checks retain their lifetimes, geometry/identity checks and
+synchronous stale-map fallback. That fallback has a nominal 150 ms AX deadline
+(20 ms per-message limit), plus owner WindowServer queries outside that deadline;
+a failed/expired title read refuses chrome and leaves the native path available.
+A synchronous fallback makes scheduling conservative until a complete scheduled
+read publishes again. Failed/incomplete asynchronous reads retain cached maps
+under the unchanged 0.5 s/exact-geometry rule.
+
+Consequently there is no periodic chrome AX/WindowServer work with the pointer
+parked in known content or outside managed windows; resting on chrome still
+costs up to five reads/second. A silent layout change turning last-known content
+into chrome under a stationary pointer now sends a subsequent press native
+instead of recovering through the synchronous read. No freshness claim is made
+for such unnotified changes. This scheduling change has compile-only verification;
+live title drags/border resizes below zoom 1 after 1/5/60 s rests, focused and
+unfocused, remain required for TextEdit, Finder and Chrome (Find bar on/off).
+
 `LiveSource` still carries published chrome observations and their source-revision
 tokens so discovery can invalidate them. Its native-drag ownership record remains
 a published per-window fact, written/reset by admission and read by visibility,

@@ -470,5 +470,5 @@ static void observeStats(NSUInteger sources,BOOL all) {
     self.discoveryWanted=YES;[self requestWindowObservation];
 }
 // Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
-- (void)focusChanged { if(self.cleaning||[self nativeUnavailable]||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }
+- (void)focusChanged { [self.pressAdmission refreshHoveredChrome];if(self.cleaning||[self nativeUnavailable]||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }
 @end

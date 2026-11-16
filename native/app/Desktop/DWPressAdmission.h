@@ -53,6 +53,7 @@ typedef NS_ENUM(NSInteger,DWPressStage) { DWPressSession, DWPressAnnotated };
 - (void)refreshNativeButtons:(LiveSource *)source;
 - (void)pollNativeButtons;
 - (void)refreshHoveredChrome;
+- (void)chromeKeyDown:(CGEventRef)event;
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point;
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output;
 - (BOOL)consume:(CGEventType)type event:(CGEventRef)event stage:(DWPressStage)stage;

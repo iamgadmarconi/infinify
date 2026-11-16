@@ -90,6 +90,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
 @property CGPoint chromePointer;
 @property BOOL chromePointerKnown;
 - (void)readNativeButtons:(LiveSource *)source;
+- (void)requestNativeButtons:(LiveSource *)source;
 - (BOOL)settledContent:(LiveSource *)source at:(CGPoint)point;
 - (void)refreshNativeButtons:(LiveSource *)source;
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point;
@@ -151,8 +152,10 @@ static uint64_t DWClickRevertToken;
 }
 - (BOOL)titleHit:(NSDictionary *)identity report:(NSDictionary *)report at:(CGPoint)point {
     if(!NSThread.isMainThread)return decorationDragMiss(identity,point,"stale_report");
+    LiveSource *mappedSource=nil;
     for(LiveSource *source in self.desktop.sources.allValues)
-        if([source.identity isEqual:identity]&&[self settledContent:source at:point])return NO;
+        if([source.identity isEqual:identity]){mappedSource=source;break;}
+    if([self settledContent:mappedSource at:point])return NO;
     NSDictionary *recipient=[self.nativeLookup recipient:point];
     for(NSString *key in @[@"pid",@"wid",@"birth_sec",@"birth_usec"])if(!identity[key]||![identity[key]isEqual:recipient[key]])return decorationDragMiss(identity,point,"recipient_changed");
     
@@ -167,6 +170,10 @@ static uint64_t DWClickRevertToken;
         report=self.onDemandButtons;usable=YES;
     }
     if(!usable){
+        // Only a completed scheduled read settles negative evidence. The
+        // synchronous fallback (including failure) makes the whole window hot
+        // until that asynchronous path publishes a complete map again.
+        [self chromeSchedule:mappedSource].failed=YES;
         NSDictionary *fresh=[self.nativeLookup buttons:identity];
         if(fresh){self.onDemandButtons=fresh;report=fresh;usable=[report[@"identity"]isEqual:identity]&&[self.nativeLookup mediaTime]-[report[@"sampled_at"]doubleValue]<=.5;}
     }
@@ -248,6 +255,7 @@ static uint64_t DWClickRevertToken;
     return CGRectContainsPoint(outer,point)&&!CGRectContainsPoint(inner,point);
 }
 - (BOOL)settledContent:(LiveSource *)source at:(CGPoint)point {
+    if(!source)return NO;
     DWPressChromeSchedule *state=[self.chromeSchedules objectForKey:source];
     return source&&!source.detached&&state.goodMap&&state.goodMap==source.nativeButtons
         &&!state.failed&&!state.keyBurst&&!source.nativeButtonsReading
@@ -269,7 +277,40 @@ static uint64_t DWClickRevertToken;
 }
 - (void)refreshHoveredChrome {
     if(self.desktop.cleaning||self.desktop.sessionInactive)return;
-    [self refreshNativeButtons:[self hoveredChromeSource]];
+    [self requestNativeButtons:[self hoveredChromeSource]];
+}
+- (void)chromeKeyDown:(CGEventRef)event {
+    CGEventFlags flags=CGEventGetFlags(event);
+    NSEvent *key=[NSEvent eventWithCGEvent:event];NSString *characters=key.charactersIgnoringModifiers;
+    unichar character=characters.length?[characters characterAtIndex:0]:0;
+    if(!(flags&(kCGEventFlagMaskCommand|kCGEventFlagMaskControl))
+        &&CGEventGetIntegerValueField(event,kCGKeyboardEventKeycode)!=53
+        &&!(character>=NSF1FunctionKey&&character<=NSF35FunctionKey))return;
+    if(self.desktop.cleaning||self.desktop.sessionInactive)return;
+    LiveSource *source=[self hoveredChromeSource];if(!source)return;
+    DWPressChromeSchedule *state=[self chromeSchedule:source];
+    NSDictionary *identity=source.identity.copy;uint64_t session=self.desktop.nativeSessionEpoch;
+    uint64_t serial=++state.keySerial;__weak DWPressAdmission *weak=self;
+    if(!state.keyBurst){
+        state.keyBurst=YES;
+        // One early trailing read per burst, after the app sees the key.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,50*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+            DWPressAdmission *admission=weak;
+            if(admission.desktop.nativeSessionEpoch==session&&[source.identity isEqual:identity]
+                &&[admission.chromeSchedules objectForKey:source]==state)
+                [admission requestNativeButtons:source];
+        });
+    }
+    // One late read after 250 ms of quiet; obsolete timers never read AX.
+    // Until both reads are accounted for, cached-content refusal is disabled.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,250*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+        DWPressAdmission *admission=weak;
+        if(state.keySerial!=serial)return;
+        state.keyBurst=NO;
+        if(admission.desktop.nativeSessionEpoch==session&&[source.identity isEqual:identity]
+            &&[admission.chromeSchedules objectForKey:source]==state)
+            [admission requestNativeButtons:source];
+    });
 }
 - (void)pollNativeButtons {
     // Draining an event request is independent of the band. Idle periodic work
@@ -283,6 +324,14 @@ static uint64_t DWClickRevertToken;
         [self readNativeButtons:hovered];
 }
 - (void)refreshNativeButtons:(LiveSource *)source {
+    // Existing observation call sites name the changed window. Also re-resolve
+    // the stationary pointer: that event may have moved a different window under
+    // it. This is event work, never an idle poll's WindowServer query.
+    LiveSource *hovered=[self hoveredChromeSource];
+    [self requestNativeButtons:source];
+    if(hovered!=source)[self requestNativeButtons:hovered];
+}
+- (void)requestNativeButtons:(LiveSource *)source {
     if(!source)return;
     [self chromeSchedule:source].requested++;
     [self readNativeButtons:source];
@@ -332,6 +381,7 @@ static uint64_t DWClickRevertToken;
         ||!info[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&displayed)
         ||!CGRectContainsPoint(displayed,point)||![self.nativeLookup bounds:source.router.wid result:&own])return NO;
     if(!source.nativeButtons||[self.nativeLookup mediaTime]-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime){
+        [self chromeSchedule:source].failed=YES;
         NSDictionary *fresh=[self.nativeLookup buttons:source.identity];
         if(fresh)source.nativeButtons=fresh;
     }
@@ -692,11 +742,10 @@ static uint64_t DWClickRevertToken;
         self.chromePointer=point;self.chromePointerKnown=YES;
         if(sameHover&&now-self.nativeButtonMotion<.1)return NO;
         BOOL rested=!sameHover||now-self.nativeButtonMotion>=.2;
-        self.chromePointer=point;self.chromePointerKnown=YES;
         self.nativeButtonMotion=now;self.nativeButtonHover=hovered;
         // The first packet after rest must not wait on the last poll's throttle.
         if(hoveredSource&&rested)hoveredSource.nativeButtonsNext=0;
-        if(hoveredSource)[self refreshNativeButtons:hoveredSource];
+        if(hoveredSource)[self requestNativeButtons:hoveredSource];
         return NO;
     }
     BOOL down=type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown;
@@ -819,7 +868,7 @@ static uint64_t DWClickRevertToken;
                     self.gestureView=view;self.nativeGestureButton=button;return YES;
                 }
             }
-            [self refreshNativeButtons:source];
+            [self requestNativeButtons:source];
             if(replica)return NO; // Canvas view owns ordinary replica input and bound gestures.
             NSString *kind=DWTyped(binding[@"kind"],NSString.class);
             claimed|=[@[@"pan_viewport",@"move_window",@"move_snapped_windows",@"resize_window",@"resize_window_snapped",@"center_nearest",@"action"]containsObject:kind?:@""];

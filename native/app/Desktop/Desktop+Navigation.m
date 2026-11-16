@@ -22,7 +22,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     if(tag&&[desktop.postingTags containsObject:@(tag)])return event;
     if(tag)for(LiveSource *source in desktop.sources.allValues)if(source.router.tag==tag)return event;
     [desktop cancelNativeTitleClick];
-    if(type==kCGEventKeyDown)return event;
+    if(type==kCGEventKeyDown){[desktop.pressAdmission chromeKeyDown:event];return event;}
     CGPoint point=CGEventGetLocation(event);
     BOOL down=type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown;
     BOOL up=type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp;
