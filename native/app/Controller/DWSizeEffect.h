@@ -11,5 +11,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) DWValuePresence nativeOriginPresence;
 @property(nonatomic,readonly) BOOL requestedHasNumericComponents;
 @property(nonatomic,readonly) BOOL nativeOriginHasNumericComponents;
+@property(nonatomic,readonly) BOOL nativeOriginIsExactPoint;
+// Native resize driver alone uses direct doubleValue (numeric strings accepted).
+@property(nonatomic,readonly) CGSize nativeRequestedSize;
 @end
 NS_ASSUME_NONNULL_END

@@ -26,7 +26,7 @@
 + (instancetype)unansweredForSizeEffect:(DWSizeEffect *)effect {
     BOOL setter=effect.requestedPresence==DWValuePresent;
     DWResizeResult r={.outcome=DWResizeTimedOut,.ax_error=-25204,.mutation_attempted=setter,
-        .observed=false,.requested=setter?effect.requested:CGSizeZero,.actual_ax=CGRectZero,.actual_cg=CGRectZero};
+        .observed=false,.requested=setter?effect.nativeRequestedSize:CGSizeZero,.actual_ax=CGRectZero,.actual_cg=CGRectZero};
     return [self resultWithNativeResize:r];
 }
 - (DWNativeResult *)withMutationAttempted:(BOOL)attempted {
