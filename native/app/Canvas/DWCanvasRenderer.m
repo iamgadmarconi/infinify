@@ -461,7 +461,7 @@ static NSArray<DWPlacement *> *orderBinding(DWScene *snapshot,NSNumber *output) 
         [self flushMenuBackground:state];
         // An animation that has run out at this frame's time, which the frame no longer showed: upstream drops the snapshot or the fade, and a window that has opened is the plain window.
         for(IFCompositorElement *element in state.leaving.count?state.leaving.copy:nil)if([frame lifecycleFinishedForElement:element]){[state.leaving removeObject:element];[frame.elements removeObject:element];state.orderDirty=YES;}
-        if(state.orderDirty)[self applyOrderForOutput:state.orderOutput.id state:state];
+        if(state.orderDirty)[self applyOrderForOutput:state.orderOutput.identifier state:state];
         for(IFCompositorElement *element in frame.elements)if(element.lifecycle==IFCompositorLifecycleOpening&&[frame lifecycleFinishedForElement:element]){element.lifecycle=IFCompositorLifecycleNone;element.lifecycleStartTime=NAN;}
     }
     if(began&&any){double took=CACurrentMediaTime()-began;_counts.flushes++;_counts.flushSeconds+=took;_counts.flushWorst=fmax(_counts.flushWorst,took);}

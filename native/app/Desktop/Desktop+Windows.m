@@ -304,7 +304,7 @@ static void observeStats(NSUInteger sources,BOOL all) {
             if(observation.state!=DWWindowObservationPresent){[d track:source];describe=YES;continue;}
             if(!DWInScope(d.scope,source.router.pid))continue;
             [d track:source info:observation.info observation:observation];
-            if(d.sources[source.logical]!=source||source.detached||!d.controllerVisualSnapshot||source.title!=beforeTitle
+            if(d.sources[source.logical]!=source||source.detached||!d.controller.visualScene||source.title!=beforeTitle
                 ||source.router.bounds!=beforeBounds||d.nativeFamilyRevision!=beforeFamilyRev
                 ||presenter.stateRevision!=beforePresenterRev||source.nativeVisibilityHeld!=beforeVisHeld
                 ||source.nativeMinimized!=beforeMinimized)describe=YES;
