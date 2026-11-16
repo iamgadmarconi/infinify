@@ -108,7 +108,7 @@
     return DWProject(DWFocusCorrection.class,decision);
 }
 - (void)focusAnswerBegan:(DWEffect *)effect success:(BOOL)success context:(DWFocusPolicyContext *)context {
-    [self navigationPolicyFact:@{@"kind":@"answer",@"effect_id":effect.effectID,@"success":@(success)} context:context];
+    [self navigationPolicyFact:@{@"kind":@"answer",@"effect_id":effect.rawDictionary[@"effect_id"],@"success":@(success)} context:context];
 }
 - (void)focusConfirmed:(DWIdentity *)identity context:(DWFocusPolicyContext *)context {
     [self navigationPolicyFact:@{@"kind":@"confirmed",@"identity":identity.rawDictionary} context:context];
@@ -123,9 +123,9 @@
 - (DWControllerReply *)navigationEndFocusCycle { return [self navigationCommandDictionary:@{@"op":@"end_focus_cycle"}]; }
 - (DWControllerReply *)navigationCancelOnOutput:(NSNumber *)output { return [self navigationCommandDictionary:@{@"op":@"cancel_navigation",@"output":output}]; }
 - (DWControllerReply *)navigationTickAt:(uint64_t)timestamp { return [self navigationCommandDictionary:@{@"op":@"tick_navigation",@"timestamp_ns":@(timestamp)}]; }
-- (DWControllerReply *)navigationActivateBinding:(DWSourceBinding *)binding cause:(NSString *)cause output:(NSNumber *)output includeOutput:(BOOL)includeOutput {
-    NSMutableDictionary *command=[binding.rawDictionary mutableCopy];command[@"op"]=@"activate";command[@"cause"]=cause;
-    if(includeOutput)command[@"output"]=output?:NSNull.null;
+- (DWControllerReply *)navigationActivateBinding:(DWSourceBinding *)binding cause:(DWNavigationActivationCause)cause output:(NSNumber *)output {
+    NSMutableDictionary *command=[binding.rawDictionary mutableCopy];command[@"op"]=@"activate";
+    command[@"cause"]=cause==DWNavigationActivationClick?@"click":@"click_release";command[@"output"]=output;
     return [self navigationCommandDictionary:command];
 }
 - (DWControllerReply *)navigationObserveBinding:(DWSourceBinding *)binding {

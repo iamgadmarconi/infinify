@@ -3,6 +3,11 @@
 #import "DWController.h"
 NS_ASSUME_NONNULL_BEGIN
 
+typedef NS_ENUM(NSUInteger,DWNavigationActivationCause) {
+    DWNavigationActivationClick,
+    DWNavigationActivationClickRelease
+};
+
 // Providers are sampled for EACH policy fact, including synchronous receipts.
 @interface DWFocusPolicyContext : NSObject
 - (instancetype)initWithClock:(uint64_t (^)(void))clock
@@ -50,7 +55,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable DWControllerReply *)navigationEndFocusCycle;
 - (nullable DWControllerReply *)navigationCancelOnOutput:(NSNumber *)output;
 - (nullable DWControllerReply *)navigationTickAt:(uint64_t)timestamp;
-- (nullable DWControllerReply *)navigationActivateBinding:(DWSourceBinding *)binding cause:(NSString *)cause output:(nullable NSNumber *)output includeOutput:(BOOL)includeOutput;
+- (nullable DWControllerReply *)navigationActivateBinding:(DWSourceBinding *)binding cause:(DWNavigationActivationCause)cause output:(NSNumber *)output;
 - (nullable DWControllerReply *)navigationObserveBinding:(DWSourceBinding *)binding;
 @end
 

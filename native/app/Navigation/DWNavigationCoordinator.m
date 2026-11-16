@@ -2,160 +2,164 @@
 #import "DWNavigationCoordinator.h"
 #include <stdio.h>
 #include <stdlib.h>
-static BOOL sameIdentity(NSDictionary *a,NSDictionary *b) {
+// These conversions describe the independently observed native driver's identity
+// schema, not controller scene/reply dictionaries. Projections are made on main.
+static DWIdentity *observedIdentity(NSDictionary *value) {
+    if(!value)return nil;
+    id owner=value[@"owner"];if(owner==NSNull.null)owner=nil;
+    return [DWIdentity identityWithPID:value[@"pid"] birthSeconds:value[@"birth_sec"] birthMicroseconds:value[@"birth_usec"] windowID:value[@"wid"] owner:owner];
+}
+static NSDictionary *driverIdentity(DWIdentity *value) {
+    if(!value)return nil;
+    NSMutableDictionary *native=[@{@"pid":value.pid,@"birth_sec":value.birthSeconds,@"birth_usec":value.birthMicroseconds,@"wid":value.wid}mutableCopy];
+    if(value.owner)native[@"owner"]=value.owner;return native.copy;
+}
+static BOOL sameIdentity(DWIdentity *a,DWIdentity *b) {
+    return [a.pid isEqual:b.pid]&&[a.birthSeconds isEqual:b.birthSeconds]&&[a.birthMicroseconds isEqual:b.birthMicroseconds]&&[a.wid isEqual:b.wid]
+        &&((!a.owner&&!b.owner)||[a.owner isEqual:b.owner]);
+}
+static BOOL sameNativeIdentity(NSDictionary *a,NSDictionary *b) {
     for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"])if(![a[key]isEqual:b[key]])return NO;
     BOOL aOwner=a[@"owner"]&&a[@"owner"]!=NSNull.null,bOwner=b[@"owner"]&&b[@"owner"]!=NSNull.null;
     return aOwner==bOwner&&(!aOwner||[a[@"owner"]isEqual:b[@"owner"]]);
 }
-// The one focus request a reply can carry: "effect" as focus, navigate_window and activate
-// answer, or the focus_native_window entry of an action or IPC reply's "effects".
-static NSDictionary *focusEffect(NSDictionary *reply) {
-    id effect=reply[@"effect"],effects=reply[@"effects"];if([effect isKindOfClass:NSDictionary.class])return effect;
-    if([effects isKindOfClass:NSArray.class])for(id e in [effects reverseObjectEnumerator])if([e isKindOfClass:NSDictionary.class]&&[e[@"op"]isEqual:@"focus_native_window"])return e;
-    return nil;
-}
-@interface DWNavigationCoordinator ()
-@property (copy) DWCommand command;
+@interface DWNavigationCoordinator () <DWNavigationExecution>
+@property id<DWNavigationController> controller;
+@property DWFocusPolicyContext *policyContext;
 @property id<DWNavigationDriver> driver;
 @property (copy) uint64_t (^clock)(void);
 @property (copy) DWSchedule worker, main;
 @property NSLock *lock;
 @property uint64_t epoch;
 @property BOOL closed, observing, flying;
-@property BOOL again; // native focus was reported to have moved while a read of it was under way
-@property NSDictionary *work; // the request handed to the driver and not yet answered
-@property NSUInteger held; // modifiers keeping a cycle session open, 0 for none
-@property NSDictionary *nativeClick;
-@property NSDictionary *nativeClickPose;
+@property BOOL again;
+@property DWEffect *work;
+@property NSUInteger held;
+@property DWSourceBinding *nativeClick;
+@property NSNumber *nativeClickOutput;
+@property DWOutput *nativeClickPose;
 @property BOOL nativeClickReleased,nativeClickCompleted,nativeClickConfirmed;
-@property uint64_t nativeClickDeadline;
-@property uint64_t nativeClickPoll;
+@property uint64_t nativeClickDeadline,nativeClickPoll;
 @end
 @implementation DWNavigationCoordinator
-- (instancetype)initWithCommand:(DWCommand)c driver:(id<DWNavigationDriver>)d clock:(uint64_t (^)(void))clock worker:(DWSchedule)worker main:(DWSchedule)main {
-    if((self=[super init])){_command=[c copy];_driver=d;_clock=[clock copy];_worker=[worker copy];_main=[main copy];_lock=[NSLock new];}return self;
+- (instancetype)initWithController:(id<DWNavigationController>)controller driver:(id<DWNavigationDriver>)driver clock:(uint64_t (^)(void))clock worker:(DWSchedule)worker main:(DWSchedule)main {
+    if((self=[super init])){
+        _controller=controller;_driver=driver;_clock=[clock copy];_worker=[worker copy];_main=[main copy];_lock=[NSLock new];
+        __weak DWNavigationCoordinator *weak=self;
+        _policyContext=[[DWFocusPolicyContext alloc]initWithClock:clock filter:^BOOL{return weak.filterUnsolicitedActivations;} focusAllowed:^BOOL{return weak.focusAllowed;}];
+    }return self;
 }
 - (uint64_t)nowNanoseconds { return self.clock?self.clock():0; }
 - (BOOL)current:(uint64_t)epoch { [self.lock lock];BOOL valid=!self.closed&&self.epoch==epoch;[self.lock unlock];return valid; }
 - (uint64_t)advance { self.work=nil;[self.lock lock];uint64_t epoch=++self.epoch;[self.lock unlock];return epoch; }
-- (void)cancelNativeClick { self.nativeClick=nil;self.nativeClickPose=nil;self.nativeClickReleased=self.nativeClickCompleted=self.nativeClickConfirmed=NO; }
-- (void)cancelFocus { [self clearBackgroundArrival];[self cancelNativeClick];[self advance];self.held=0;if(!self.closed&&self.enabled)self.command(@{@"op":@"cancel_focus_cycle"}); }
+- (void)cancelNativeClick { self.nativeClick=nil;self.nativeClickOutput=nil;self.nativeClickPose=nil;self.nativeClickReleased=self.nativeClickCompleted=self.nativeClickConfirmed=NO; }
+- (void)cancelFocus {
+    [self clearBackgroundArrival];[self cancelNativeClick];[self advance];self.held=0;
+    if(!self.closed&&self.enabled)[self.controller navigationCancelFocusCycle];
+}
 - (void)interrupt { [self cancelBackgroundArrival];if(self.work)[self cancelFocus]; }
-- (void)invalidate { [self cancelFocus];if(!self.closed&&self.enabled)for(NSDictionary *o in self.command(@{@"op":@"snapshot"})[@"outputs"])self.command(@{@"op":@"cancel_navigation",@"output":o[@"id"]}); }
-- (void)shutdown { [self invalidate];if(!self.closed)[self policy:@{@"kind":@"reset_policy"}];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil;self.output=nil;self.observationBinding=nil;self.nativeClickReleaseReady=nil;self.arrivalProtection=nil; }
-- (BOOL)binding:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
-    for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:effect[@"window"]]){
-        id source=window[@"source"];return [source isKindOfClass:NSDictionary.class]&&[source[@"identity"]isEqual:effect[@"identity"]]&&[source[@"generation"]isEqual:effect[@"generation"]];
-    }
-    return NO;
+- (void)invalidate {
+    [self cancelFocus];if(!self.closed&&self.enabled)for(DWOutput *output in [self.controller navigationScene].outputs)[self.controller navigationCancelOnOutput:output.identifier];
 }
-- (void)complete:(NSDictionary *)effect epoch:(uint64_t)epoch success:(BOOL)success {
-    [self answer:effect epoch:epoch with:@{@"op":@"focus_result",@"success":success?@YES:@NO}];
+- (void)shutdown {
+    [self invalidate];if(!self.closed)[self.controller resetFocusPolicyWithContext:self.policyContext];
+    [self.lock lock];self.closed=YES;[self.lock unlock];self.controller=nil;self.changed=nil;self.settled=nil;self.output=nil;self.observationBinding=nil;self.nativeClickReleaseReady=nil;self.arrivalProtection=nil;
 }
-// The controller's pending request is answered once: the driver's result, or focus_logical when the driver is never asked.
-- (void)answer:(NSDictionary *)effect epoch:(uint64_t)epoch with:(NSDictionary *)fields {
+- (BOOL)binding:(DWEffect *)effect snapshot:(DWScene *)snapshot {
+    DWWindow *window=[snapshot windowWithID:effect.window];DWSource *source=window.source;
+    return source&&[source.identity isEqual:effect.identity]&&[source.generation isEqual:effect.generation];
+}
+- (void)complete:(DWEffect *)effect epoch:(uint64_t)epoch success:(BOOL)success {
+    [self answer:effect epoch:epoch logical:NO success:success];
+}
+// The policy answer fact, snapshot validation, result, advance and confirmation
+// are separate synchronous calls, matching the old command path exactly.
+- (void)answer:(DWEffect *)effect epoch:(uint64_t)epoch logical:(BOOL)logical success:(BOOL)success {
     if(![self current:epoch])return;
-    self.work=nil;[self policy:@{@"kind":@"answer",@"effect_id":effect[@"effect_id"],@"success":fields[@"success"]?:@YES}];NSDictionary *snapshot=self.command(@{@"op":@"snapshot"});
-    if([snapshot[@"focus"][@"pending_effect"]isEqual:effect]&&[self binding:effect snapshot:snapshot]){
-        NSMutableDictionary *result=[effect mutableCopy];[result addEntriesFromDictionary:fields];self.command(result);[self advance];
-        if([fields[@"success"]boolValue]){NSDictionary *id=effect[@"identity"];[self policy:@{@"kind":@"confirmed",@"identity":id}];}
+    self.work=nil;[self.controller focusAnswerBegan:effect success:logical?YES:success context:self.policyContext];
+    DWScene *snapshot=[self.controller navigationScene];
+    if([snapshot.focus.pendingEffect isEqual:effect]&&[self binding:effect snapshot:snapshot]){
+        [self.controller navigationAnswerFocus:effect logical:logical success:success];[self advance];
+        if(success&&!logical)[self.controller focusConfirmed:effect.identity context:self.policyContext];
         if(self.changed)self.changed();
     }
 }
-- (void)perform:(NSDictionary *)reply {
+- (void)perform:(DWControllerReply *)reply {
     if(!self.enabled||self.closed||!reply)return;
-    if(!focusEffect(reply)&&![reply[@"background"]boolValue]&&![reply[@"focus_on_open_suppressed"]boolValue]){
+    if(![self.controller navigationEffectForReply:reply]&&![reply.background boolValue]&&![reply.focusOnOpenSuppressed boolValue]){
         [self perform:reply decision:nil];return;
     }
-    NSDictionary *decision=[self policy:@{@"kind":@"reply",@"reply":reply,@"protect":@(self.arrivalProtection&&self.arrivalProtection())}];
+    DWFocusCorrection *decision=[self.controller prepareFocusReply:reply protect:self.arrivalProtection&&self.arrivalProtection() context:self.policyContext];
     [self perform:reply decision:decision];
 }
-- (void)perform:(NSDictionary *)reply decision:(NSDictionary *)decision {
+- (void)perform:(DWControllerReply *)reply decision:(DWFocusCorrection *)decision {
     if(!self.enabled||self.closed||!reply)return;
-    NSDictionary *effect=[focusEffect(reply) copy];
-    if(effect||reply[@"effect"])[self cancelNativeClick];
+    DWEffect *effect=[[self.controller navigationEffectForReply:reply]copy];
+    BOOL hasEffect=reply.effectPresence!=DWValueAbsent;
+    if(effect||hasEffect)[self cancelNativeClick];
     if(!effect){
-        // Focus moved to something without a source, or was cleared: the request in flight is no longer the controller's.
-        if(reply[@"effect"]||(self.work&&![self.command(@{@"op":@"snapshot"})[@"focus"][@"pending_effect"]isEqual:self.work]))[self advance];
+        if(hasEffect||(self.work&&![[self.controller navigationScene].focus.pendingEffect isEqual:self.work]))[self advance];
         return;
     }
     uint64_t epoch=[self advance],deadline=self.clock()+1500000000;
-    // Logical-only focus is not a failure: it neither cancels a held cycle nor stays out of the most-recently-focused order.
-    if(!self.focusAllowed){[self answer:effect epoch:epoch with:@{@"op":@"focus_logical"}];return;}
-    if(effect[@"identity"][@"owner"]&&effect[@"identity"][@"owner"]!=NSNull.null){[self complete:effect epoch:epoch success:NO];return;}
-    // All captured values are immutable. The guard never enters the controller/main queue.
-    BOOL isCorrection=[decision[@"correction"]boolValue];
-    NSDictionary *arrival=isCorrection&&[decision[@"observed"]isKindOfClass:NSDictionary.class]?decision[@"observed"]:nil;
-    pid_t intruderPID=isCorrection?([decision[@"intruder_pid"]intValue]?:[arrival[@"pid"]intValue]):0,targetPID=[effect[@"identity"][@"pid"]intValue];
-    uint64_t startedAt=isCorrection?[decision[@"started_at"]unsignedLongLongValue]:0;
+    if(!self.focusAllowed){[self answer:effect epoch:epoch logical:YES success:NO];return;}
+    if(effect.identity.ownerPresence!=DWValueAbsent&&effect.identity.ownerPresence!=DWValueNull){[self complete:effect epoch:epoch success:NO];return;}
+    BOOL isCorrection=[decision.correction boolValue];
+    DWIdentity *arrivalIdentity=isCorrection?decision.observed:nil;
+    NSDictionary *arrival=driverIdentity(arrivalIdentity),*target=driverIdentity(effect.identity);
+    pid_t intruderPID=isCorrection?([decision.intruderPID intValue]?:[arrivalIdentity.pid intValue]):0,targetPID=[effect.identity.pid intValue];
+    uint64_t startedAt=isCorrection?[decision.startedAt unsignedLongLongValue]:0;
     DWGuard authorization=isCorrection&&intruderPID>0&&[self.driver respondsToSelector:@selector(authorization:overridingPID:)]
-        ?[self.driver authorization:effect[@"identity"] overridingPID:intruderPID]:[self.driver authorization:effect[@"identity"]];
+        ?[self.driver authorization:target overridingPID:intruderPID]:[self.driver authorization:target];
     self.work=effect;
     self.worker(^{if(![self current:epoch])return;
-        // A launch root may have opened its own sheet before this worker ran.
-        // Its former root observation never authorizes overriding that child.
         BOOL stillArrival=YES;
-        if(arrival)stillArrival=sameIdentity([self.driver observe],arrival);
+        if(arrival)stillArrival=sameNativeIdentity([self.driver observe],arrival);
         else if(intruderPID>0){
             NSDictionary *obs=[self.driver observe];
             if(obs)stillArrival=[obs[@"pid"]intValue]==intruderPID||[obs[@"pid"]intValue]==targetPID;
             else if([self.driver respondsToSelector:@selector(frontmostPID)]){pid_t front=[self.driver frontmostPID];stillArrival=front==intruderPID||front==targetPID;}
         }
-        BOOL success=stillArrival&&[self.driver select:effect[@"identity"] guard:^BOOL{return [self current:epoch]&&self.clock()<deadline&&authorization&&authorization();}];
+        BOOL success=stillArrival&&[self.driver select:target guard:^BOOL{return [self current:epoch]&&self.clock()<deadline&&authorization&&authorization();}];
         if(isCorrection&&getenv("INFINIFY_DEBUG")){
             uint64_t doneAt=self.clock();double bounceMs=startedAt&&doneAt>=startedAt?(double)(doneAt-startedAt)/1e6:0;
-            fprintf(stderr,"debug: focus restore target_pid=%d target_wid=%u intruder_pid=%d success=%d bounce_ms=%.2f\n",(int)targetPID,[effect[@"identity"][@"wid"]unsignedIntValue],(int)(intruderPID?:[arrival[@"pid"]intValue]),(int)success,bounceMs);
+            fprintf(stderr,"debug: focus restore target_pid=%d target_wid=%u intruder_pid=%d success=%d bounce_ms=%.2f\n",(int)targetPID,[target[@"wid"]unsignedIntValue],(int)(intruderPID?:[arrival[@"pid"]intValue]),(int)success,bounceMs);
         }
         self.main(^{[self complete:effect epoch:epoch success:success];});
     });
 }
-- (NSDictionary *)navigate:(NSDictionary *)command {
+- (DWControllerReply *)navigate:(DWControllerReply *(^)(void))command {
     if(!self.enabled||self.closed)return nil;
-    [self cancelBackgroundArrival];[self cancelNativeClick];[self policy:@{@"kind":@"reset_restores"}];
-    NSDictionary *reply=self.command(command);if(!reply)return nil;
+    [self cancelBackgroundArrival];[self cancelNativeClick];[self.controller resetFocusRestoresWithContext:self.policyContext];
+    DWControllerReply *reply=[self.controller navigationExecute:command];if(!reply)return nil;
     [self perform:reply];if(self.changed)self.changed();return reply;
 }
-- (void)clearBackgroundArrival { if(!self.closed)[self policy:@{@"kind":@"clear_background"}]; }
+- (void)clearBackgroundArrival { if(!self.closed)[self.controller clearBackgroundArrivalWithContext:self.policyContext]; }
 - (void)cancelBackgroundArrival {
     if(self.closed)return;
-    NSDictionary *decision=[self policy:@{@"kind":@"cancel_background"}];
-    [self consumePolicy:decision];
-}
-- (NSDictionary *)policy:(NSDictionary *)fact {
-    // Calls without a closed check are safe because stopNavigation sets self.navigation=nil immediately after shutdown.
-    return self.command(@{@"op":@"focus_policy",@"timestamp_ns":@(self.clock()),@"filter":@(self.filterUnsolicitedActivations),@"focus_allowed":@(self.focusAllowed),@"fact":fact});
+    [self.controller cancelBackgroundArrivalWithContext:self.policyContext execution:self];
 }
 - (void)noteSystemSwitchHeld:(BOOL)held {
     if(self.closed)return;
-    [self consumePolicy:[self policy:@{@"kind":@"switch",@"held":@(held)}]];
+    [self.controller systemSwitchHeld:held context:self.policyContext execution:self];
 }
 - (void)noteSystemUIIntent {
     if(self.closed)return;
-    [self consumePolicy:[self policy:@{@"kind":@"system_ui"}]];
+    [self.controller systemUIIntentWithContext:self.policyContext execution:self];
 }
 - (void)noteLaunchIntentForBundle:(NSString *)bundle {
     if(self.closed||!bundle.length)return;
-    [self consumePolicy:[self policy:@{@"kind":@"launch_intent",@"bundle":bundle}]];
+    [self.controller launchIntentForBundle:bundle context:self.policyContext execution:self];
 }
 - (void)noteWindowClick:(NSNumber *)window {
-    if(!self.closed)[self consumePolicy:[self policy:@{@"kind":@"window_click",@"window":window?:NSNull.null}]];
+    if(!self.closed)[self.controller windowClicked:window context:self.policyContext execution:self];
 }
-- (NSDictionary *)attach:(NSDictionary *)command arrived:(BOOL)arrived adopted:(BOOL)adopted utility:(BOOL)utility {
-    if(arrived&&adopted&&self.filterUnsolicitedActivations&&!utility){
-        NSDictionary *decision=[self policy:@{@"kind":@"window_arrived",@"identity":command[@"identity"],@"bundle":command[@"bundle_id"]}];
-        [self consumePolicy:decision];
-        NSMutableDictionary *attach=[command mutableCopy];
-        // Previously a nil authorizeProcess reply meant NO authorization.
-        attach[@"unsolicited"]=decision?decision[@"unsolicited"]:@YES;
-        return self.command(attach);
-    }
-    return self.command(command);
+- (DWControllerReply *)attach:(DWAttachRequest *)request arrived:(BOOL)arrived adopted:(BOOL)adopted utility:(BOOL)utility {
+    return [self.controller attach:request arrived:arrived adopted:adopted utility:utility context:self.policyContext execution:self];
 }
 - (void)application:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle activated:(BOOL)activated at:(uint64_t)at {
     if(pid<=0||birth.count!=2)return;
-    NSDictionary *decision=[self policy:@{@"kind":@"application",@"process":@{@"pid":@(pid),@"birth_sec":birth[0],@"birth_usec":birth[1]},@"bundle":bundle?:NSNull.null,@"event_at":@(at),@"activated":@(activated)}];
-    [self consumePolicy:decision];
-    if([decision[@"observe"]boolValue])[self observe];
+    if([self.controller applicationPID:pid birthSeconds:birth[0] microseconds:birth[1] bundle:bundle activated:activated eventAt:at context:self.policyContext execution:self])[self observe];
 }
 - (void)noteApplicationLaunched:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle at:(uint64_t)at {
     if(!self.filterUnsolicitedActivations||!self.enabled||self.closed)return;
@@ -165,116 +169,83 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
     if(!self.filterUnsolicitedActivations||!self.enabled||self.closed||!regular)return;
     [self application:pid birth:birth bundle:bundle activated:YES at:at];
 }
-- (void)consumePolicy:(NSDictionary *)decision {
-    if([decision[@"cancel_work"]boolValue]){[self cancelNativeClick];[self advance];self.held=0;self.command(@{@"op":@"cancel_focus_cycle"});}
-    if([decision[@"advance"]boolValue]){[self cancelNativeClick];[self advance];}
-    if([decision[@"reply"]isKindOfClass:NSDictionary.class])[self perform:decision[@"reply"]];
-    if([decision[@"changed"]boolValue]&&self.changed)self.changed();
-    [self observationSteps:decision[@"steps"] capturedEpoch:self.epoch receivedReply:nil];
+// Five synchronous actions. The controller alone interprets policy steps.
+- (uint64_t)currentEpoch { return self.epoch; }
+- (void)navigationCancelNativeClick { [self cancelNativeClick]; }
+- (void)navigationAdvanceReleasingHold:(BOOL)releaseHold { [self advance];if(releaseHold)self.held=0; }
+- (void)navigationAnswerEffect:(DWEffect *)effect logical:(BOOL)logical epoch:(uint64_t)epoch {
+    if(logical)[self answer:effect epoch:epoch logical:YES success:NO];else [self complete:effect epoch:epoch success:YES];
 }
-// Six fixed driver actions. Branch selection and ordering are entirely policy
-// decisions. A send's receipt is synchronous, on this same main-queue turn.
-- (void)observationSteps:(NSArray *)steps capturedEpoch:(uint64_t)epoch receivedReply:(NSDictionary *)received {
-    for(NSDictionary *step in steps){
-        NSString *kind=step[@"step"];
-        if([kind isEqual:@"cancel_click"])[self cancelNativeClick];
-        else if([kind isEqual:@"advance"]){[self advance];if([step[@"release_hold"]boolValue])self.held=0;}
-        else if([kind isEqual:@"send"]){
-            NSDictionary *reply=self.command(step[@"command"]);
-            if([step[@"receipt"]isKindOfClass:NSDictionary.class]){
-                NSDictionary *decision=[self policy:@{@"kind":@"observation_receipt",@"context":step[@"receipt"],@"reply":reply?:NSNull.null}];
-                [self observationSteps:decision[@"steps"] capturedEpoch:epoch receivedReply:reply];
-            }
-        }else if([kind isEqual:@"answer"]){
-            uint64_t answerEpoch=[step[@"captured_epoch"]boolValue]?epoch:self.epoch;
-            if([step[@"logical"]boolValue])[self answer:step[@"effect"] epoch:answerEpoch with:@{@"op":@"focus_logical"}];
-            else [self complete:step[@"effect"] epoch:answerEpoch success:YES];
-        }else if([kind isEqual:@"perform_reply"]){
-            // The receipt installed this exact immutable correction context.
-            // Do not call policy before the advance inside perform:decision:.
-            [self perform:received decision:step[@"correction"]];
-        }else if([kind isEqual:@"changed"]){if(self.changed)self.changed();}
-    }
+- (void)navigationPerformReply:(DWControllerReply *)reply correction:(DWFocusCorrection *)correction prepared:(BOOL)prepared {
+    if(prepared)[self perform:reply decision:correction];else [self perform:reply];
 }
+- (void)navigationChanged { if(self.changed)self.changed(); }
 - (void)hold:(NSUInteger)modifiers { self.held=modifiers; }
 - (BOOL)poll:(NSUInteger)down {
     if(!self.enabled||self.closed||!self.held)return NO;
     if((down&self.held)==self.held)return YES;
     self.held=0;[self releaseCycle];return NO;
 }
-- (void)releaseCycle { if(self.enabled&&!self.closed)self.command(@{@"op":@"end_focus_cycle"}); }
-- (void)beginNativeClick:(NSDictionary *)binding output:(NSNumber *)output {
+- (void)releaseCycle { if(self.enabled&&!self.closed)[self.controller navigationEndFocusCycle]; }
+- (void)beginNativeClick:(DWSourceBinding *)binding output:(NSNumber *)output {
     [self cancelNativeClick];
     if(!self.enabled||self.closed||!self.focusAllowed||!output)return;
-    NSDictionary *snapshot=self.command(@{@"op":@"snapshot"}),*pose=nil;
-    for(NSDictionary *view in snapshot[@"outputs"])if([view[@"id"]isEqual:output])pose=@{@"camera":view[@"camera"],@"zoom":view[@"zoom"],@"screen_bounds":view[@"screen_bounds"]};
-    if(!pose||![self binding:binding snapshot:snapshot])return;
-    [self cancelFocus];
-    self.command(@{@"op":@"cancel_navigation",@"output":output});
-    NSMutableDictionary *click=[binding mutableCopy];click[@"output"]=output;self.nativeClick=click.copy;
-    self.nativeClickPose=pose;self.nativeClickPoll=0;
+    DWScene *snapshot=[self.controller navigationScene];DWOutput *pose=[snapshot outputWithID:output];
+    DWWindow *window=[snapshot windowWithID:binding.window];DWSource *source=window.source;
+    if(!pose||!source||![source.identity isEqual:binding.identity]||![source.generation isEqual:binding.generation])return;
+    [self cancelFocus];[self.controller navigationCancelOnOutput:output];
+    self.nativeClick=binding;self.nativeClickOutput=output;self.nativeClickPose=pose;self.nativeClickPoll=0;
     [self observe];
 }
-- (void)endNativeClick:(NSDictionary *)binding completed:(BOOL)completed {
-    NSDictionary *click=self.nativeClick;
-    if(!click||![click[@"window"]isEqual:binding[@"window"]]||![click[@"generation"]isEqual:binding[@"generation"]]||!sameIdentity(click[@"identity"],binding[@"identity"]))return;
-    // Reconciliation can finish the native geometry hold after the real up.
-    // It must not overwrite that already classified physical completion.
+- (void)endNativeClick:(DWSourceBinding *)binding completed:(BOOL)completed {
+    DWSourceBinding *click=self.nativeClick;
+    if(!click||![click.window isEqual:binding.window]||![click.generation isEqual:binding.generation]||!sameIdentity(click.identity,binding.identity))return;
     if(self.nativeClickReleased)return;
     self.nativeClickReleased=YES;self.nativeClickCompleted=completed;self.nativeClickDeadline=self.clock()+1500000000;
     [self observe];
 }
-// Runs before duplicate-focus suppression: a click on an already focused root
-// still needs its optional release navigation. The observed identity is the
-// authority; the press alone never claims focus or calls the native driver.
-- (BOOL)observeNativeClick:(NSDictionary *)match snapshot:(NSDictionary *)snapshot {
-    NSDictionary *click=self.nativeClick;if(!click)return NO;NSDictionary *output=nil;
-    for(NSDictionary *view in snapshot[@"outputs"])if([view[@"id"]isEqual:click[@"output"]])output=view;
-    if(!self.focusAllowed||!output||![self binding:click snapshot:snapshot]||(self.nativeClickReleased&&self.clock()>self.nativeClickDeadline)){[self cancelNativeClick];return NO;}
-    if(![click[@"window"]isEqual:match[@"window"]]||![click[@"generation"]isEqual:match[@"generation"]]||!sameIdentity(click[@"identity"],match[@"identity"])){
-        // The worker can read the formerly focused app before AppKit receives
-        // the untouched down. Do not spend this press on that earlier focus.
-        return !self.nativeClickConfirmed;
-    }
+- (BOOL)observeNativeClick:(DWSourceBinding *)match snapshot:(DWScene *)snapshot {
+    DWSourceBinding *click=self.nativeClick;if(!click)return NO;NSNumber *clickOutput=self.nativeClickOutput;
+    DWOutput *output=[snapshot outputWithID:clickOutput];
+    DWSource *source=[snapshot windowWithID:click.window].source;
+    if(!self.focusAllowed||!output||!source||![source.identity isEqual:click.identity]||![source.generation isEqual:click.generation]||(self.nativeClickReleased&&self.clock()>self.nativeClickDeadline)){[self cancelNativeClick];return NO;}
+    if(![click.window isEqual:match.window]||![click.generation isEqual:match.generation]||!sameIdentity(click.identity,match.identity))return !self.nativeClickConfirmed;
     if(!self.nativeClickConfirmed){
         self.nativeClickConfirmed=YES;[self advance];
-        NSMutableDictionary *c=[match mutableCopy];c[@"op"]=@"activate";c[@"cause"]=@"click";c[@"output"]=click[@"output"];
-        NSDictionary *reply=self.command(c),*effect=focusEffect(reply);
+        DWControllerReply *reply=[self.controller navigationActivateBinding:match cause:DWNavigationActivationClick output:clickOutput];
+        DWEffect *effect=[self.controller navigationEffectForReply:reply];
         if(effect)[self complete:effect epoch:self.epoch success:YES];
-        else if(!reply){[c removeObjectsForKeys:@[@"cause",@"output"]];c[@"op"]=@"observe_focus";self.command(c);}
+        else if(!reply)[self.controller navigationObserveBinding:match];
     }
     if(self.nativeClickReleased){
-        for(NSString *key in @[@"camera",@"zoom",@"screen_bounds"])if(![output[key]isEqual:self.nativeClickPose[key]])self.nativeClickCompleted=NO;
-        if(self.nativeClickCompleted&&self.nativeClickReleaseReady&&!self.nativeClickReleaseReady(click))return YES;
+        if(![output hasSamePoseAsOutput:self.nativeClickPose])self.nativeClickCompleted=NO;
+        if(self.nativeClickCompleted&&self.nativeClickReleaseReady&&!self.nativeClickReleaseReady(click,clickOutput))return YES;
         BOOL completed=self.nativeClickCompleted;[self cancelNativeClick];
-        if(completed){NSMutableDictionary *c=[click mutableCopy];c[@"op"]=@"activate";c[@"cause"]=@"click_release";self.command(c);}
+        if(completed)[self.controller navigationActivateBinding:click cause:DWNavigationActivationClickRelease output:clickOutput];
     }
     if(self.changed)self.changed();return YES;
 }
 - (void)observe {
     if(!self.enabled||self.closed)return;
-    // A focus event may arrive while a read is under way, and that read may have looked before the change: one more follows it.
     if(self.observing){self.again=YES;return;}
     self.observing=YES;
     uint64_t epoch=self.epoch;
     DWObservedBinding resolve=self.observationBinding?self.observationBinding():nil;
-    self.worker(^{NSDictionary *actual=[self.driver observe];uint64_t observedAt=self.clock();NSDictionary *family=actual&&resolve?resolve(actual):nil;self.main(^{
-        // After this turn: what this read reports is followed first, so the next read is judged against the focus that leaves.
+    self.worker(^{NSDictionary *nativeActual=[self.driver observe];uint64_t observedAt=self.clock();DWSourceBinding *family=nativeActual&&resolve?resolve(nativeActual):nil;self.main(^{
         self.observing=NO;if(self.again){self.again=NO;self.main(^{[self observe];});}
-        if(!actual||![self current:epoch])return;
-        // Physical-click geometry is driver work; all ordinary focus and
-        // arrival classification stays in the controller, without snapshots.
+        if(!nativeActual||![self current:epoch])return;
+        DWIdentity *actual=observedIdentity(nativeActual);
         if(!family&&self.nativeClick){
-            NSDictionary *snapshot=self.command(@{@"op":@"snapshot"}),*match=nil;
-            for(NSDictionary *w in snapshot[@"windows"]){id source=w[@"source"];
-                if([source isKindOfClass:NSDictionary.class]&&sameIdentity(source[@"identity"],actual)){match=@{@"window":w[@"window"],@"identity":source[@"identity"],@"generation":source[@"generation"]};break;}}
-            if(!match){for(NSDictionary *w in snapshot[@"windows"]){id source=w[@"source"];if(![source isKindOfClass:NSDictionary.class])continue;NSMutableDictionary *plain=[source[@"identity"]mutableCopy];[plain removeObjectForKey:@"owner"];if(sameIdentity(plain,actual))return;}}
+            DWScene *snapshot=[self.controller navigationScene];DWSourceBinding *match=nil;
+            for(DWWindow *window in snapshot.windows){DWSource *source=window.source;
+                if(source&&sameIdentity(source.identity,actual)){match=[DWSourceBinding bindingWithWindow:window.window identity:source.identity generation:source.generation];break;}}
+            if(!match){for(DWWindow *window in snapshot.windows){DWSource *source=window.source;if(!source)continue;
+                DWIdentity *identity=source.identity;
+                if([identity.pid isEqual:actual.pid]&&[identity.birthSeconds isEqual:actual.birthSeconds]&&[identity.birthMicroseconds isEqual:actual.birthMicroseconds]&&[identity.wid isEqual:actual.wid]&&!actual.owner)return;}}
             if(self.clock()-observedAt>100000000)return;
             if([self observeNativeClick:match snapshot:snapshot])return;
         }
-        NSDictionary *decision=[self policy:@{@"kind":@"observation",@"actual":actual,@"family":family?:NSNull.null,@"event_at":@(observedAt),@"output":(self.output?self.output():nil)?:NSNull.null}];
-        if(!decision)decision=@{@"steps":@[@{@"step":@"cancel_click"},@{@"step":@"advance",@"release_hold":@NO},@{@"step":@"send",@"command":@{@"op":@"focus_lost"},@"receipt":NSNull.null},@{@"step":@"changed"}]};
-        [self observationSteps:decision[@"steps"] capturedEpoch:epoch receivedReply:nil];
+        [self.controller observeIdentity:actual familyBinding:family eventAt:observedAt output:self.output?self.output():nil capturedEpoch:epoch context:self.policyContext execution:self];
     });});
 }
 - (BOOL)frame {
@@ -282,10 +253,10 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
     if(self.nativeClick&&self.nativeClickReleased){
         uint64_t now=self.clock();
         if(now>self.nativeClickDeadline)[self cancelNativeClick];
-        else if(!self.observing&&now-self.nativeClickPoll>=50000000&&(!self.nativeClickCompleted||!self.nativeClickReleaseReady||self.nativeClickReleaseReady(self.nativeClick))){self.nativeClickPoll=now;[self observe];}
+        else if(!self.observing&&now-self.nativeClickPoll>=50000000&&(!self.nativeClickCompleted||!self.nativeClickReleaseReady||self.nativeClickReleaseReady(self.nativeClick,self.nativeClickOutput))){self.nativeClickPoll=now;[self observe];}
     }
-    NSDictionary *result=self.command(@{@"op":@"tick_navigation",@"timestamp_ns":@(self.clock())});
-    if([result[@"changed_outputs"]count]&&self.changed)self.changed();
-    BOOL active=[result[@"needs_frames"]boolValue];if(!active&&self.flying&&self.settled)self.settled();self.flying=active;return active;
+    DWControllerReply *result=[self.controller navigationTickAt:self.clock()];
+    if(result.changedOutputs.count&&self.changed)self.changed();
+    BOOL active=[result.needsFrames boolValue];if(!active&&self.flying&&self.settled)self.settled();self.flying=active;return active;
 }
 @end
