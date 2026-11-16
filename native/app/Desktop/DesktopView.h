@@ -8,7 +8,6 @@
 @interface DesktopView : FlippedView
 - (BOOL)focusChildIntent:(NSDictionary *)intent;
 - (void)holdPress:(NSEvent *)event window:(NSNumber *)window intent:(NSDictionary *)intent at:(CGPoint)point output:(NSNumber *)output;
-- (DWResizeBorder *)resizeBorderAt:(CGPoint)point output:(NSNumber *)output quiet:(BOOL)quiet;
 - (DWHit *)hit:(CGPoint)point output:(NSNumber *)output;
 - (DWResizeBorder *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(DWHit *)hit at:(CGPoint)p output:(NSNumber *)output;
 @property (weak) Desktop *desktop;
@@ -73,6 +72,7 @@
 @property DWPointerHover *hover;
 @end
 @interface DesktopView (Pointer) <DWPointerHost>
+- (DWResizeBorder *)resizeBorderAt:(CGPoint)point output:(NSNumber *)output quiet:(BOOL)quiet;
 - (void)refreshCursor;
 @end
 // Implemented in DesktopView.m; called from Desktop (Hover), (Input), and (Windows)/(Rendering)/(Session).

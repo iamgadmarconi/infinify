@@ -98,7 +98,7 @@
     // Without a held transfer every no-replica outcome below is cancelNativeHoverForWindow:nil. When the cached
     // description is provably the one nativeDescription: would return (same keys), skip the snapshot, native hit tests
     // and validations. Any invalidation (nil snapshot) or other change falls through to the full path.
-    DWScene *latest=self.controllerVisualSnapshot;
+    DWScene *latest=self.controller.visualScene;
     BOOL enabled=!self.native.ended&&!self.sessionInactive&&!self.cleaning&&self.panels.count;
     BOOL current=self.native&&self.nativeViews&&latest&&self.nativeViewSnapshot==latest&&self.nativeViewPresenter==self.native
         &&self.nativeViewFamilyRevision==self.nativeFamilyRevision&&self.nativeViewEnabled==enabled
