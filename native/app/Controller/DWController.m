@@ -497,6 +497,9 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     return [self mutate:command];
 }
 
+- (DWControllerReply *)toggleFullscreenOnOutput:(NSNumber *)output {
+    return [self mutate:@{@"op":@"action",@"action":@"toggle-fullscreen",@"output":output}];
+}
 - (DWControllerReply *)stateOnOutput:(NSNumber *)output {
     NSDictionary *command=@{@"op":@"ipc" ,@"output":output?:NSNull.null,@"request":@"State"};
     return [self mutate:command];
@@ -594,10 +597,10 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     if(bounds)*bounds=CGRectMake(rect.x,rect.y,rect.width,rect.height);
     return YES;
 }
-- (DWSourceBinding *)sourceBindingForWindow:(NSNumber *)window {
+- (DWSource *)sourceBindingForWindow:(NSNumber *)window {
     DriftDesktopSourceBinding b;
     if(!self.handle||!window||!driftwm_desktop_source_binding(self.handle,window.unsignedLongLongValue,&b))return nil;
-    return DWProject(DWSourceBinding.class,@{@"identity":@{@"pid":@(b.pid),@"birth_sec":@(b.birth_sec),@"birth_usec":@(b.birth_usec),@"wid":@(b.wid),@"owner":b.owner?@(b.owner):(id)NSNull.null},@"generation":@(b.generation),@"observation_known":@(b.observation_known!=0),@"observed_rect":R(CGRectMake(b.x,b.y,b.width,b.height))});
+    return DWProject(DWSource.class,@{@"identity":@{@"pid":@(b.pid),@"birth_sec":@(b.birth_sec),@"birth_usec":@(b.birth_usec),@"wid":@(b.wid),@"owner":b.owner?@(b.owner):(id)NSNull.null},@"generation":@(b.generation),@"observation_known":@(b.observation_known!=0),@"observed_rect":R(CGRectMake(b.x,b.y,b.width,b.height))});
 }
 - (NSNumber *)outputAtPoint:(CGPoint)point restrictedToOutputs:(NSArray<NSNumber *> *)outputs {
     if(!self.handle)return nil;

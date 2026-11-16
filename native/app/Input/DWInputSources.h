@@ -11,9 +11,8 @@
 // xkb layout code; else the last component of its identifier), its "index" in the
 // list and the list's "count". nil when the selected source is not in the list.
 NSDictionary *DWCurrentLayout(void);
-// Upstream's SwitchLayout for one {"op":"switch_layout","target":…,"index":…}
-// effect: target "next" or "prev" steps through the list and wraps, and target
+// Upstream's SwitchLayout: target "next" or "prev" steps through the list and wraps, and target
 // "index" selects the 0-based "index". Returns nil when the wanted source is
 // selected, else why nothing changed: an index out of range changes nothing, as
 // upstream.
-NSString *DWSwitchLayout(NSDictionary *effect);
+NSString *DWSwitchLayout(NSString *target,NSNumber *number);

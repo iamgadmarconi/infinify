@@ -9,13 +9,19 @@
 #import "DWInputSources.h"
 @implementation Desktop
 @synthesize pressAdmission=_pressAdmission;
+@synthesize dockGuard=_dockGuard;
+- (void)setDockGuard:(DWDockGuard *)guard {
+    _dockGuard=guard;__weak Desktop *weak=self;
+    if(guard)self.controller.refreshGestureFingers=^{[weak refreshGestureFingers];};
+    else self.controller.refreshGestureFingers=nil;
+}
 - (DWPressAdmission *)pressAdmission {
     if(!_pressAdmission)_pressAdmission=[[DWPressAdmission alloc]initWithDesktop:self scene:[[DWPressSceneAdapter alloc]initWithDesktop:self] native:[DWPressNativeAdapter new]];
     return _pressAdmission;
 }
 - (instancetype)init {
-    if((self=[super init])){_controller=driftwm_desktop_create();_snapshotMirror=[DWSnapshotMirror new];_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_postingTags=[NSMutableSet set];
-        __weak Desktop *weak=self;_panLaunch=[[DWPanLaunch alloc]initWithLaunch:^(NSNumber *output){[weak panEnd:output];}];}
+    if((self=[super init])){_controller=[DWController new];_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_postingTags=[NSMutableSet set];
+        __weak Desktop *weak=self;_controller.failed=^(NSString *reason){weak.statusText=reason;};_panLaunch=[[DWPanLaunch alloc]initWithLaunch:^(NSNumber *output){[weak panEnd:output];}];}
     return self;
 }
 - (void)flashStatus:(NSString *)text {
@@ -32,90 +38,35 @@
 // Shared tail of every bound or scripted command: redraw, fly, persist, and the effects
 // the shell owns: quit, exec, a config reload, a pointer warp, a keyboard layout switch,
 // a window's close button and the launch of a stand-in's application.
-- (void)applyReply:(NSDictionary *)reply {
-    NSDictionary *sized=[self.sizeTransition consumeSize:reply];
-    // The navigation coordinator reads "effect" as a focus request. A reply that lists "effects" keeps its focus request there:
-    // its "effect" is a size transaction's, or null without one, and is kept from that reading. The one reply whose "effect" stays
-    // a focus request beside a size transaction is the attach's shape, the transaction as an entry of "effects": an activation or a
-    // hover that leaves fullscreen may answer so, and its focus request is still the coordinator's.
-    BOOL beside=sized&&reply[@"effect"]!=sized&&DWTyped(reply[@"effect"],NSDictionary.class);
-    if(reply[@"effect"]&&!beside&&(sized||[reply[@"effects"]isKindOfClass:NSArray.class])){NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];reply=rest;}
-    // A gesture reply says itself when frames are needed: a camera coasting after a swipe, or the edge pan under a move, is no flight.
-    BOOL flight=DWTyped(reply[@"navigation"],NSDictionary.class)!=nil||[reply[@"needs_frames"]isEqual:@YES];if(flight&&!self.navigation)self.flying=YES;
-    // The reply's focus request, if any, is the coordinator's to perform on the native window.
+- (void)applyReply:(DWControllerReply *)reply {
+    DWSizeEffect *sized=[self.sizeTransition consumeSize:reply];
+    reply=[reply replyForNavigationAfterConsumingSizeEffect:sized];
+    // A gesture reply says itself when frames are needed; clock-only camera ticks are not flights.
+    BOOL flight=reply.navigation!=nil||[reply.needsFrames isEqual:@YES];if(flight&&!self.navigation)self.flying=YES;
     [self.navigation perform:reply];
     [self render];if(flight)[self ensureFrames];
-    if([reply[@"dirty"]isEqual:@YES])self.sceneDirty=YES;
-    for(id effect in asArray(reply[@"effects"])){NSDictionary *e=DWTyped(effect,NSDictionary.class);NSString *op=DWTyped(e[@"op"],NSString.class);
-        if([op isEqual:@"quit"])[self quit:nil];
-        else if([op isEqual:@"exec"]&&DWTyped(e[@"command"],NSString.class)){[self.navigation noteSystemUIIntent];[self exec:e];}
-        // send-cursor-to-output, an explicit user action: the point is in the coordinates of screen_bounds.
-        // Position only: this shell does not own an application's mouse/cursor association.
-        else if([op isEqual:@"warp_pointer"]){NSDictionary *screen=DWTyped(e[@"screen"],NSDictionary.class);CGPoint to=jsonPoint(screen);if(DWTyped(screen[@"x"],NSNumber.class)&&DWTyped(screen[@"y"],NSNumber.class)&&isfinite(to.x)&&isfinite(to.y)){CGWarpMouseCursorPosition(to);}}
-        // The selection is reported at once; the input-source notification reports it again.
-        else if([op isEqual:@"switch_layout"]){NSString *error=DWSwitchLayout(e);if(error)[self flashStatus:error];[self reportLayout];}
-        // Deferred: a reload replaces the hot keys, and this may be running inside one of their handlers.
-        else if([op isEqual:@"reload_config"]){__weak Desktop *weak=self;dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(d&&!d.cleaning)[d loadConfig:NO];});}
-        else if([op isEqual:@"close_window"])[self closeWindow:e];
-        else if([op isEqual:@"set_minimized"])[self setNativeMinimized:e];
-        else if([op isEqual:@"launch"])[self launch:DWTyped(e[@"bundle_id"],NSString.class)];
-    }
-}
-- (NSDictionary *)call:(NSDictionary *)command { return [self call:command raw:NULL]; }
-// raw receives the controller's own response bytes.
-- (NSDictionary *)call:(NSDictionary *)command raw:(NSData *__autoreleasing *)raw {
-    // These four queries execute on &self before the controller's transaction
-    // clone. Every other request invalidates the cache BEFORE it can change
-    // state. Retain one immutable decoded snapshot, without raw bytes.
-    BOOL snapshot=command.count==1&&[command[@"op"]isEqual:@"snapshot"];
-    if(snapshot&&!raw&&self.controllerSnapshot)return self.controllerSnapshot;
-    NSString *operation=DWTyped(command[@"op"],NSString.class);
-    // focus_policy changes only serde-skipped policy state, so cached snapshot sections remain valid.
-    BOOL query=snapshot||[operation isEqual:@"hit"]||[operation isEqual:@"input"]||[operation isEqual:@"resize_border"]||[operation isEqual:@"gesture_fingers"]||[operation isEqual:@"focus_policy"];
-    BOOL tick=[operation isEqual:@"tick_navigation"];
-    NSDictionary *before=tick?self.controllerSnapshot:nil,*visual=tick?self.controllerVisualSnapshot:nil;
-    if(!query){self.controllerSnapshot=nil;self.controllerVisualSnapshot=nil;}
-    // A new scene replaces what the baseline described; the delta is correct without this, so it only saves a patch that cannot be small.
-    if([operation isEqual:@"load"])[self.snapshotMirror reset];
-    // An internal snapshot is rebuilt from the sections that changed since the last one (a camera frame changes few). One a caller
-    // asked the raw bytes of (public/IPC) takes the request below, unchanged.
-    if(snapshot&&!raw){
-        NSString *failure=nil;NSDictionary *result=[self.snapshotMirror snapshotFrom:self.controller error:&failure];if(!result){self.statusText=failure;return nil;}
-        self.controllerSnapshot=result;if(!self.controllerVisualSnapshot)self.controllerVisualSnapshot=result;return result;
-    }
-    NSData *request=[NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"command":command} options:0 error:nil];
-    char *response=driftwm_desktop_request(self.controller,request.bytes,request.length);if(!response){self.statusText=@"Controller unavailable";return nil;}
-    NSData *data=[NSData dataWithBytes:response length:strlen(response)];driftwm_desktop_response_free(response);if(raw)*raw=data;
-    NSDictionary *reply=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];if(![reply[@"ok"]boolValue]){self.statusText=reply[@"error"]?:@"Controller error";return nil;}
-    NSDictionary *result=DWTyped(reply[@"data"],NSDictionary.class); // every controller reply is an object; a null or other JSON value is no reply
-    if(DWDebugTrace()){
-        NSMutableArray *effects=[asArray(result[@"effects"])mutableCopy]?:[NSMutableArray array];
-        if(DWTyped(result[@"effect"],NSDictionary.class))[effects addObject:result[@"effect"]];
-        for(NSDictionary *effect in effects)if([effect[@"op"]isEqual:@"observe_resize_source"]||[effect[@"op"]isEqual:@"resize_native_window"]){
-            id ipc=command[@"request"];NSString *variant=DWTyped(ipc,NSString.class)?:((NSDictionary *)DWTyped(ipc,NSDictionary.class)).allKeys.firstObject?:@"none";
-            NSString *action=DWTyped(command[@"action"],NSString.class)?:DWTyped(DWTyped(ipc,NSDictionary.class)[@"Action"],NSString.class);
-            if(![@[@"toggle-fullscreen",@"fullscreen",@"fill",@"restore",@"center",@"fit"]containsObject:action?:@""])action=@"other";
-            fprintf(stderr,"debug: native resize origin operation=%s ipc=%s action=%s transaction=%llu effect=%llu window=%llu\n",operation.UTF8String,variant.UTF8String,action.UTF8String,[effect[@"transaction"]unsignedLongLongValue],[effect[@"effect_id"]unsignedLongLongValue],[effect[@"window"]unsignedLongLongValue]);
+    if([reply.dirty isEqual:@YES])self.sceneDirty=YES;
+    for(DWShellEffect *effect in reply.arrayShellEffects){
+        switch(effect.kind){
+        case DWEffectQuit:[self quit:nil];break;
+        case DWEffectExec:if(effect.command){[self.navigation noteSystemUIIntent];[self exec:effect];}break;
+        // Explicit user action. Position only; this shell owns no application mouse association.
+        case DWEffectWarpPointer:{CGPoint point=effect.screen;if(effect.screenHasNumericComponents&&isfinite(point.x)&&isfinite(point.y))CGWarpMouseCursorPosition(point);break;}
+        case DWEffectSwitchLayout:{NSString *error=DWSwitchLayout(effect.layoutTarget,effect.layoutIndex);if(error)[self flashStatus:error];[self reportLayout];break;}
+        case DWEffectReloadConfig:{__weak Desktop *weak=self;dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(d&&!d.cleaning)[d loadConfig:NO];});break;}
+        case DWEffectCloseWindow:[self closeWindow:effect];break;
+        case DWEffectSetMinimized:[self setNativeMinimized:effect];break;
+        case DWEffectLaunch:[self launch:effect.bundleID];break;
+        default:break;
         }
     }
-    // set-trackpad switches every gesture off or on: the finger counts the system's own gestures are held back for follow it. A key, a gesture, a corner or `msg action` may run it.
-    if(self.dockGuard&&!query){NSString *ran=DWTyped(command[@"action"],NSString.class)?:DWTyped(DWTyped(command[@"request"],NSDictionary.class)[@"Action"],NSString.class)?:DWTyped(DWTyped(result[@"fired"],NSDictionary.class)[@"action"],NSString.class);if([ran hasPrefix:@"set-trackpad"])[self refreshGestureFingers];}
-    if(snapshot){self.controllerSnapshot=result;if(!self.controllerVisualSnapshot)self.controllerVisualSnapshot=result;}
-    else if(tick&&[result[@"clock_only"]isEqual:@YES]){
-        // This successful tick changed only clock_ns. Never mutate a retained
-        // dictionary: ordinary Snapshot readers see the current clock, while
-        // rendering/capture keep the same proven-unchanged geometry projection.
-        if(before){NSMutableDictionary *next=[before mutableCopy],*navigation=[DWTyped(before[@"navigation"],NSDictionary.class)mutableCopy];navigation[@"clock_ns"]=command[@"timestamp_ns"];next[@"navigation"]=navigation.copy;self.controllerSnapshot=next.copy;}
-        self.controllerVisualSnapshot=visual;
-    }
-    return result;
 }
 - (BOOL)loadScene:(NSString *)path {
     [self.sceneWriter drain];
     [self cancelNavigation];[self.sizeTransition cancel];if(self.sizeTransition&&![self.sizeTransition canRemove:nil]){self.statusText=@"Resize must settle before loading";return NO;}
     self.statePath=path;
     if(![NSFileManager.defaultManager fileExistsAtPath:path])return YES;
-    if([self call:@{@"op":@"load",@"path":path}])return YES;
+    if([self.controller loadScene:path])return YES;
     self.startupError=[NSString stringWithFormat:@"Saved scene could not be loaded: %@. Original file preserved. Quit and repair it, or restart with --state and a different path.",self.statusText];
     // Every save path, including quit and Return to desktop, is disabled.
     self.statePath=nil;return NO;
@@ -126,14 +77,14 @@
     if(!self.cleaning){
         if(!self.sceneWriter){self.sceneWriter=[DWSceneWriter new];__weak Desktop *weak=self;
             self.sceneWriter.failed=^(NSString *reason){Desktop *desktop=weak;if(!desktop||desktop.cleaning)return;desktop.sceneDirty=YES;desktop.statusText=reason;};}
-        if([self.sceneWriter submit:self.controller path:self.statePath])self.sceneDirty=NO;
+        if([self.controller submitSceneToWriter:self.sceneWriter path:self.statePath])self.sceneDirty=NO;
         else {self.sceneDirty=YES;self.statusText=@"Scene save could not prepare an independent controller copy";}
         return;
     }
     // Shutdown keeps synchronous completion. Drain older snapshots first
     // so they cannot overwrite the final scene after its atomic commit.
     [self.sceneWriter drain];
-    if([self call:@{@"op":@"save",@"path":self.statePath}])self.sceneDirty=NO;
+    if([self.controller saveScene:self.statePath])self.sceneDirty=NO;
 }
 - (void)poll {
     [self.session poll]; // blocked startup/early wake retries before the inactive early return
@@ -183,7 +134,7 @@
     // A stopped display link is ordinary idle, not a reason to reserialize
     // every window and rebuild every layer. Clock-only ticks retain this
     // projection; any other command or native family/owner change replaces it.
-    NSDictionary *presentation=[self presentationSnapshot];
+    DWScene *presentation=[self presentationSnapshot];
     describe=describe||self.sceneDirty||!presentation||self.renderedPresentation!=presentation||![self.renderedStatusText?:@"" isEqual:self.statusText?:@""];
     if(self.sceneDirty)[self saveScene];
     if(timing)stages[5]=CACurrentMediaTime();
@@ -201,5 +152,5 @@
     if(timing){stages[6]=CACurrentMediaTime();if(stages[6]-stages[0]>=.004&&stages[6]-self.lastPollTiming>=1){self.lastPollTiming=stages[6];
         fprintf(stderr,"poll: total_ms=%.3f input_resize_ms=%.3f camera_ms=%.3f focus_ms=%.3f reconcile_track_ms=%.3f demand_save_ms=%.3f render_ms=%.3f reconcile=%d\n",(stages[6]-stages[0])*1000,(stages[1]-stages[0])*1000,(stages[2]-stages[1])*1000,(stages[3]-stages[2])*1000,(stages[4]-stages[3])*1000,(stages[5]-stages[4])*1000,(stages[6]-stages[5])*1000,reconcile);}}
 }
-- (void)dealloc { [self stopMacWallpapers];[_ipc stop];[_manager stop];[_session stop];[_onboarding close];[self stopNavigation];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];[_multitouch stop];[_dockTap stop];[_sceneWriter drain];if(_controller)driftwm_desktop_destroy(_controller); }
+- (void)dealloc { [self stopMacWallpapers];[_ipc stop];[_manager stop];[_session stop];[_onboarding close];[self stopNavigation];[_hotKeys invalidate];[_tapKeys stop];[_configWatcher stop];[_statePush invalidate];[_panLaunch cancel];[_trackpadTimer invalidate];[_multitouch stop];[_dockTap stop];[_sceneWriter drain]; }
 @end

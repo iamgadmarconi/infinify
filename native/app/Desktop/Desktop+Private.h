@@ -15,6 +15,8 @@
 #import "IFBackground.h"
 #import "LiveSource.h"
 #import "DWDesktopSupport.h"
+#import "DWControllerNative.h"
+@class DWTrackpadGestureEvent;
 // DriftWM's pointer policy (DWPointerHover.h): every panel's view hosts one. DWPolicyPress is a view's
 // `gesture` while a press is the policy's: one in pick mode, or one bound to center-nearest.
 static const NSInteger DWPolicyPress=9;
@@ -38,7 +40,6 @@ static const NSInteger DWPolicyPress=9;
 }
 // Implemented in Desktop.m, called from the categories.
 - (NSString *)restingStatus;
-- (NSDictionary *)call:(NSDictionary *)command raw:(NSData *__autoreleasing *)raw;
 @end
 // Production input requires a currently published capture image in the source's
 // exact stream.
@@ -50,15 +51,15 @@ static inline BOOL DWCapturedInputAvailable(LiveSource *source) {
 static inline BOOL sourceGone(LiveSource *source,NSDictionary *info) { return ![birth(source.router.pid)isEqual:source.router.processBirth]||[info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid; }
 // The window of a hit the controller reported, for the binding lookup of a press or scroll over it. A stand-in's hit is
 // built in -hit:output: and names none: upstream's pass_mouse_target_under answers only a client's content.
-static inline NSDictionary *DWFocusedStandIn(NSDictionary *snapshot) {
-    NSNumber *focused=DWTyped(DWTyped(snapshot[@"focus"],NSDictionary.class)[@"intent"],NSNumber.class);
-    if(!focused||DWTyped(DWTyped(snapshot[@"focus"],NSDictionary.class)[@"pending_effect"],NSDictionary.class)||DWTyped(DWTyped(snapshot[@"focus"],NSDictionary.class)[@"cycle"],NSNumber.class))return nil;
-    if(![asArray(DWTyped(snapshot[@"lifecycle"],NSDictionary.class)[@"standins"])containsObject:focused])return nil;
-    for(NSDictionary *window in asArray(snapshot[@"windows"]))if([window[@"window"]isEqual:focused])
-        return [window[@"kind"]isEqual:@"standin"]&&!DWTyped(window[@"source"],NSDictionary.class)?window:nil;
+static inline DWWindow *DWFocusedStandIn(DWScene *scene) {
+    NSNumber *focused=scene.focus.intent;
+    if(!focused||scene.focus.pendingEffect||scene.focus.cycle)return nil;
+    if(![scene.lifecycle.standins containsObject:focused])return nil;
+    for(DWWindow *window in scene.windows)if([window.window isEqual:focused])
+        return [window.kind isEqual:@"standin"]&&!window.source?window:nil;
     return nil;
 }
-static inline NSNumber *liveHit(NSDictionary *hit) { return [hit[@"placeholder"]isEqual:@YES]?nil:DWTyped(hit[@"window"],NSNumber.class); }
+static inline NSNumber *liveHit(DWHit *hit) { return [hit.placeholder isEqual:@YES]?nil:hit.window; }
 static inline BOOL sameInputTarget(NSDictionary *a,NSDictionary *b) {
     if(!a||!b)return NO;
     for(NSString *key in @[@"window",@"output",@"generation",@"identity"])if(![a[key]isEqual:b[key]])return NO;
@@ -96,7 +97,7 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (NSDictionary *)resolveCapturedPointer:(NSDictionary *)target screen:(CGPoint)screen;
 - (BOOL)forwardCapturedPointer:(CGEventRef)event screen:(CGPoint)screen;
 - (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point;
-- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point familyHit:(NSDictionary *)hit;
+- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point familyHit:(DWHit *)hit;
 @end
 // Desktop+NativeTitles.m
 @interface Desktop (NativeTitles)
@@ -120,8 +121,8 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)magnify:(NSEvent *)event;
 - (BOOL)padBusy:(NSEvent *)event;
 - (void)cancelGestures;
-- (void)noteDockGesture:(NSDictionary *)event;
-- (void)gesture:(NSDictionary *)event owner:(NSInteger)owner;
+- (void)noteDockGesture:(DWTrackpadGestureEvent *)event;
+- (void)gesture:(DWTrackpadGestureEvent *)event owner:(NSInteger)owner;
 - (void)armTrackpad;
 @end
 // Desktop+Navigation.m
@@ -135,13 +136,13 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)deferNativeTitleClick:(NSDictionary *)intent;
 - (void)fireNativeTitleClick:(NSTimer *)timer;
 - (void)raiseFocus:(NSNumber *)window;
-- (void)resizeFocus:(NSDictionary *)reply;
+- (void)resizeFocus:(DWControllerReply *)reply;
 - (void)clearFocus;
 - (void)ensureFrames;
 - (BOOL)cameraFrame;
 - (NSNumber *)outputUnderPointer:(CGPoint)p;
 - (void)panEnd:(NSNumber *)output;
-- (NSDictionary *)navigationCall:(NSDictionary *)command;
+
 - (void)refreshFocusAccess;
 - (void)pointerFrame;
 - (void)pointerFrame:(BOOL)moved;
@@ -153,8 +154,8 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)cancelNativeHoverForWindow:(NSNumber *)window;
 - (BOOL)nativeHoverAllowed;
 - (BOOL)nativeOwnershipReady:(LiveSource *)source;
-- (BOOL)nativeHoverSite:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point;
-- (BOOL)queuedNativeHoverPress:(NSEvent *)event source:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point;
+- (BOOL)nativeHoverSite:(LiveSource *)source hit:(DWHit *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point;
+- (BOOL)queuedNativeHoverPress:(NSEvent *)event source:(LiveSource *)source hit:(DWHit *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point;
 - (DWNativeViewTransfer *)requestNativeOwnershipAt:(CGPoint)point view:(DesktopView *)view;
 - (void)advanceNativeTransfers;
 - (void)startNativeTransferTimer;
@@ -164,14 +165,14 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 @interface Desktop (Windows) <DWWindowHost>
 - (void)requestWindowObservation;
 // The controller's current binding of one logical window (the snapshot's windows[].source: identity, generation, observation_known, observed_rect), or nil.
-- (NSDictionary *)sourceBinding:(NSNumber *)window;
+- (DWSource *)sourceBinding:(NSNumber *)window;
 - (void)wantWindowAudit:(BOOL)all pid:(pid_t)pid logical:(NSNumber *)logical;
 - (BOOL)windowObservationPending;
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world;
 - (void)detach:(LiveSource *)source;
 - (void)track:(LiveSource *)source info:(NSDictionary *)info;
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world placed:(BOOL)placed;
-- (void)follow:(NSDictionary *)reply;
+- (void)follow:(DWControllerReply *)reply;
 - (BOOL)grabbed:(LiveSource *)source;
 - (void)drop:(LiveSource *)source;
 - (void)closed:(LiveSource *)source;
@@ -183,14 +184,14 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 @end
 // Desktop+Visibility.m
 @interface Desktop (Visibility)
-- (void)setNativeMinimized:(NSDictionary *)effect;
+- (void)setNativeMinimized:(DWShellEffect *)effect;
 - (void)updateNativeVisibility;
 - (void)requestVisibility:(LiveSource *)source;
 - (void)observeVisibility:(DWWindowObservation *)observation source:(LiveSource *)source;
 - (void)forgetNativeFamily:(LiveSource *)source;
-- (NSDictionary *)visibilityBinding:(LiveSource *)source;
+- (DWSource *)visibilityBinding:(LiveSource *)source;
 - (BOOL)visibilityTicketCurrent:(NSDictionary *)ticket source:(LiveSource *)source;
-- (void)closeWindow:(NSDictionary *)effect;
+- (void)closeWindow:(DWShellEffect *)effect;
 @end
 // Desktop+Chooser.m
 @interface Desktop (Chooser)
@@ -201,7 +202,7 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 @end
 // Desktop+Capture.m
 @interface Desktop (Capture)
-- (void)prepareScreenshot:(NSDictionary *)effect completed:(void (^)(NSString *))completed;
+- (void)prepareScreenshot:(DWShellEffect *)effect completed:(void (^)(NSString *))completed;
 - (void)captureExportWindows:(NSArray<NSNumber *> *)windows index:(NSUInteger)index content:(SCShareableContent *)content request:(DWExportFrame *)request completed:(void (^)(NSString *))completed;
 - (void)captureNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt content:(SCShareableContent *)content completed:(void (^)(NSString *))completed;
 - (void)requestNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt completed:(void (^)(NSString *))completed;
@@ -232,22 +233,22 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held;
 - (dispatch_block_t)standInEnter;
 - (dispatch_block_t)nativeWindowControlKey:(DWNativeWindowControl)action;
-- (void)updateStandInKeyboard:(NSDictionary *)snapshot;
-- (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output;
-- (void)exec:(NSDictionary *)effect;
+- (void)updateStandInKeyboard:(DWScene *)snapshot;
+- (NSString *)actionFeedback:(NSString *)action flight:(DWNavigation *)flight output:(NSNumber *)output;
+- (void)exec:(DWShellEffect *)effect;
 - (void)reportLayout;
 - (NSDictionary *)nativeWindowControlIntent;
 - (void)launch:(NSString *)bundle;
 - (void)holdCycle:(NSString *)action held:(BOOL)held;
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner;
-- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner tap:(NSDictionary *)tap;
+- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner tap:(DWModifiers *)tap;
 @end
 // Desktop+Bindings.m
 @interface Desktop (Bindings)
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
+- (DWBinding *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window;
+- (DWBinding *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
 - (void)watchCorners;
-- (void)armCorners:(NSDictionary *)bindings;
+- (void)armCorners:(DWControllerReply *)bindings;
 - (BOOL)fullscreenOn:(NSNumber *)output;
 - (void)configureExitKey;
 - (void)stopExitKey;
@@ -270,22 +271,22 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 @end
 // Desktop+Rendering.m
 @interface Desktop (Rendering)
-- (NSDictionary *)nativeDescription:(NSDictionary *)snapshot;
-- (NSDictionary *)presentationSnapshot;
-- (NSDictionary *)visualSnapshot;
+- (DWScene *)nativeDescription:(DWScene *)snapshot;
+- (DWScene *)presentationSnapshot;
+- (DWScene *)visualSnapshot;
 - (DWCanvasRenderer *)canvasRenderer;
 - (void)render;
 - (BOOL)animate:(BOOL)draw;
 - (void)startFrames;
 - (BOOL)frameComing:(BOOL)start;
 - (NSArray<NSScreen *> *)canvasScreens;
-- (IFBackgroundProgram *)macWallpaperForOutput:(NSNumber *)output description:(NSDictionary *)description base:(IFBackgroundProgram *)base;
+- (IFBackgroundProgram *)macWallpaperForOutput:(NSNumber *)output description:(DWOutput *)description base:(IFBackgroundProgram *)base;
 - (void)refreshMacWallpapers;
 - (void)watchMacWallpapers;
 - (void)stopMacWallpapers;
 - (void)startFrameStats;
 - (void)frameStats;
-- (void)adoptRender:(NSDictionary *)snapshot;
+- (void)adoptRender:(DWScene *)snapshot;
 - (DesktopView *)panel:(NSRect)frame outputRects:(NSArray *)rects identities:(NSArray *)identities;
 - (void)openPanels;
 - (NSArray<NSScreen *> *)appKitScreens;

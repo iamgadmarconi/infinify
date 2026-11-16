@@ -27,10 +27,9 @@ NSDictionary *DWCurrentLayout(void) {
     NSString *code=language.length?language:[identifier componentsSeparatedByString:@"."].lastObject;
     return @{@"name":name?:identifier?:@"",@"short":code.length?code:name?:@"",@"index":@(index),@"count":@(list.count)};
 }
-NSString *DWSwitchLayout(NSDictionary *effect) {
+NSString *DWSwitchLayout(NSString *target,NSNumber *number) {
     NSCAssert(NSThread.isMainThread,@"Input source access is main-only");
     NSArray *list=sources();NSInteger count=(NSInteger)list.count,current=selected(list),index;
-    NSString *target=DWTyped(effect[@"target"],NSString.class);NSNumber *number=DWTyped(effect[@"index"],NSNumber.class);
     if(!count)return @"switch-layout: no keyboard input source is enabled";
     if([target isEqual:@"index"]&&number){
         index=number.integerValue;

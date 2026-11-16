@@ -106,7 +106,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 @end
 
 @protocol DWWindowController <DWSceneController>
-- (nullable DWSourceBinding *)sourceBindingForWindow:(nullable NSNumber *)window;
+- (nullable DWSource *)sourceBindingForWindow:(nullable NSNumber *)window;
 - (BOOL)observationCurrentForWindow:(NSNumber *)window identity:(DWIdentity *)identity bounds:(CGRect)bounds buffer:(CGSize)buffer;
 - (nullable DWControllerReply *)attach:(DWAttachRequest *)request;
 - (nullable DWControllerReply *)adoptionComplete:(NSArray<DWPresentWindow *> *)present;
@@ -139,6 +139,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 - (nullable DWControllerReply *)action:(NSString *)action output:(nullable NSNumber *)output pointer:(nullable NSValue *)pointer held:(BOOL)held;
 - (nullable DWControllerReply *)tapModifiers:(DWModifierFlags)modifiers output:(nullable NSNumber *)output pointer:(nullable NSValue *)pointer held:(BOOL)held;
 - (nullable DWControllerReply *)hotCorner:(NSString *)corner output:(NSNumber *)output pointer:(nullable NSValue *)pointer held:(BOOL)held;
+- (nullable DWControllerReply *)toggleFullscreenOnOutput:(NSNumber *)output;
 - (nullable DWControllerReply *)stateOnOutput:(nullable NSNumber *)output;
 - (nullable DWControllerReply *)bookmark:(NSString *)name output:(NSNumber *)output;
 - (nullable DWControllerReply *)closeWindow:(NSNumber *)window output:(nullable NSNumber *)output;
@@ -167,7 +168,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 // facts and snapshots. The adapter consumes size effects; reply projection owns
 // focus/size effect selection without changing transport call count.
 @property(nonatomic,copy,nullable) DWControllerReply * _Nullable (^navigationPostprocess)(DWControllerReply * _Nullable reply);
-- (nullable DWSourceBinding *)sourceBindingForWindow:(nullable NSNumber *)window;
+- (nullable DWSource *)sourceBindingForWindow:(nullable NSNumber *)window;
 - (BOOL)observationCurrentForWindow:(NSNumber *)window identity:(DWIdentity *)identity bounds:(CGRect)bounds buffer:(CGSize)buffer;
 - (BOOL)resizeRemovalAllowedForWindow:(nullable NSNumber *)window allowed:(BOOL *)allowed;
 - (NSArray<NSNumber *> *)outputIDs;

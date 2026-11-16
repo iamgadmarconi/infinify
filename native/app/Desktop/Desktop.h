@@ -37,12 +37,12 @@
 #import "DWTrackpadGestures.h"
 #import "DWWindowManager.h"
 #import "DWWindowObserver.h"
-#import "DWSnapshotMirror.h"
-#include "driftwm_desktop.h"
+#import "DWController.h"
+#import "DWController+Focus.h"
 @class DesktopView, LiveSource;
 @interface Desktop : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSWindowDelegate>
 @property DWSizeTransition *sizeTransition;
-@property DriftDesktop *controller;
+@property DWController *controller;
 @property DWCanvasCursor *canvasCursor;
 // Every normal run: DriftWM's sizing actions (grow-window, shrink-window, fit-window, fit-window-snapped, fill-window, IPC
 // resize), a rule's size and fullscreen are size transactions the controller begins and continues by itself.
@@ -84,10 +84,10 @@
 // Normal runs only: where the pointer is has one reading (-outputUnderPointer:), for
 // cursor edge pan's report and for hover alike, taken once a frame while the frame timer
 // runs (-pointerFrame).
-@property NSArray<NSDictionary *> *pointerOutputs; // the latest snapshot's outputs while panels are open, else nil
+@property NSArray<DWOutput *> *pointerOutputs; // the latest snapshot's outputs while panels are open, else nil
 @property BOOL pointerWanted; // that snapshot asks for the pointer: cursor edge pan is on
 @property NSUInteger statusToken;
-- (void)applyReply:(NSDictionary *)reply;
+- (void)applyReply:(DWControllerReply *)reply;
 - (void)flashStatus:(NSString *)text;
 // Keys, pointer gestures and settings come from the DriftWM config.
 @property NSString *configPath; // --config; nil is the controller's default path
@@ -111,7 +111,7 @@
 // the system's Dock-control gestures back for the finger counts a [gestures] binding takes. While the source delivers, the NSTouch paths below feed nothing.
 @property DWMultitouchSource *multitouch;
 @property DWMultitouchFeed *touchFeed;
-@property DWDockGuard *dockGuard;
+@property (nonatomic) DWDockGuard *dockGuard;
 @property DWDockTap *dockTap;
 @property NSTimeInterval multitouchRetry;
 @property (copy) NSString *touchPath; // INFINIFY_DEBUG: which source fed the recogniser last: multitouch, global-tap or view-touches
@@ -151,8 +151,9 @@
 @property DWNativePresenter *native;
 @property DWNativeViews *nativeViews;
 @property DWNativeReplicaFamilies *nativeFamilies;
-@property NSDictionary *overlayFamilySnapshot,*overlayFamilyBase,*overlayFamilyDescriptions;
-@property NSDictionary *nativeViewSnapshot,*nativeOwnerSnapshot;
+@property DWScene *overlayFamilySnapshot,*overlayFamilyBase;
+@property NSDictionary *overlayFamilyDescriptions;
+@property DWScene *nativeViewSnapshot,*nativeOwnerSnapshot;
 
 @property DWNativePresenter *nativeViewPresenter;
 @property NSUInteger nativeFamilyRevision,nativeViewFamilyRevision;
@@ -165,7 +166,7 @@
 @property CFTimeInterval nativeOwnershipDeadline;
 // Physical hover observation is coalesced in the tap; staging happens later.
 @property NSDictionary *nativeHoverObservation;
-@property NSDictionary *nativeHoverPresentation;
+@property DWScene *nativeHoverPresentation;
 @property DWNativeViewTransfer *nativeHoverTransfer;
 @property (weak) DesktopView *nativeHoverView;
 @property BOOL nativeHoverQueued;
@@ -184,8 +185,7 @@
 @property DWNativePointerGrab *pointerGrab;
 @property DWNativeRelativeMotion *relativeMotion;
 @property NSMutableSet<NSNumber *> *postingTags;
-@property NSDictionary *controllerSnapshot,*controllerVisualSnapshot,*renderedPresentation;
-@property DWSnapshotMirror *snapshotMirror; // internal snapshots arrive as changed top-level sections; its baseline outlives controllerSnapshot's invalidation
+@property DWScene *renderedPresentation;
 @property (copy) NSString *renderedStatusText;
 @property DesktopView *nativeScrollView;
 @property DesktopView *nativeMagnifyView;
@@ -230,7 +230,6 @@
 @property BOOL cleaning;
 @property EventHotKeyRef exitHotkey;
 @property EventHandlerRef hotkeyHandler;
-- (NSDictionary *)call:(NSDictionary *)command;
 - (void)poll;
 - (void)saveScene;
 - (BOOL)loadScene:(NSString *)path;
