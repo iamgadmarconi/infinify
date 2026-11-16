@@ -45,3 +45,17 @@ _Avoid_: Authorized, user-initiated, expected
 **Helper lifecycle**:
 The rules that tie a private helper runtime and its credentials to one Dock process and decide, at each start, whether to reuse the helper already loaded there, recover the state a retired one left behind, or load a new one.
 _Avoid_: Launcher logic, injection flow, bootstrap
+
+### Controller
+
+**Controller**:
+The platform-independent part of Infinify that holds the state of the canvas and decides every change to it. The native shell reports what happened, asks questions, and carries out what the controller asks for.
+_Avoid_: Backend, core, engine, reducer
+
+**Scene**:
+The controller's description of the canvas at one moment: the windows, where each one is shown on each display, the focus, and the work still in progress. The shell reads a scene and never changes it.
+_Avoid_: Snapshot dictionary, state, model
+
+**Effect**:
+Something the controller asks the shell to do to a native window or to the system, such as giving a window focus or changing its size. The shell performs it and reports the result back.
+_Avoid_: Side effect, action, command (a command goes from the shell to the controller)
