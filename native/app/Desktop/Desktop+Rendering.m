@@ -24,17 +24,17 @@ static CGRect outputUsableRect(CGRect output) {
     }
     return usable;
 }
-static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *tokens,NSDictionary *cohort,NSDictionary *snapshot) {
+static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *tokens,NSDictionary *cohort,DWScene *snapshot) {
     if(!cohort.count)return tokens;
-    NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(NSDictionary *window in snapshot[@"windows"])if(DWTyped(window[@"source"],NSDictionary.class))bindings[window[@"window"]]=window[@"source"];
+    NSMutableDictionary<NSNumber *,DWSource *> *bindings=[NSMutableDictionary dictionary];for(id entry in snapshot.windows){DWWindow *window=[entry isKindOfClass:DWWindow.class]?entry:nil;if(window.source&&window.window)bindings[window.window]=window.source;}
     NSMutableArray *result=nil;
     for(NSUInteger start=0;start<tokens.count;){
         NSDictionary *first=tokens[start];if([first[@"barrier"]boolValue]){start++;continue;}
         NSUInteger end=start+1;while(end<tokens.count&&![tokens[end][@"barrier"]boolValue]&&[first[@"bucket"]isEqual:tokens[end][@"bucket"]])end++;
         NSMutableSet *roots=[NSMutableSet set],*ranks=[NSMutableSet set];NSMutableDictionary *keys=[NSMutableDictionary dictionary];NSMutableArray *ranked=[NSMutableArray array];NSNumber *previous=nil;BOOL valid=YES;
         for(NSUInteger i=start;i<end;i++){
-            NSDictionary *token=tokens[i],*family=cohort[token[@"window"]],*root=family[@"root"],*binding=bindings[token[@"window"]];NSString *key=DWTyped(token[@"key"],NSString.class);NSNumber *rank=key?family[@"children"][key]:root[@"stack_rank"];
-            if(!root||!rank||![root[@"generation"]isEqual:binding[@"generation"]]||!boundIdentity(root[@"identity"],binding[@"identity"])||[ranks containsObject:rank]){valid=NO;break;}
+            NSDictionary *token=tokens[i],*family=cohort[token[@"window"]],*root=family[@"root"];DWSource *binding=bindings[token[@"window"]];NSString *key=DWTyped(token[@"key"],NSString.class);NSNumber *rank=key?family[@"children"][key]:root[@"stack_rank"];
+            if(!root||!rank||![root[@"generation"]isEqual:binding.generation]||!boundIdentity(root[@"identity"],DWNativeIdentity(binding.identity))||[ranks containsObject:rank]){valid=NO;break;}
             NSNumber *window=token[@"window"];NSMutableSet *children=keys[window];if(!children){children=[NSMutableSet set];keys[window]=children;}
             if(key){if([children containsObject:key]){valid=NO;break;}[children addObject:key];}
             else{if([roots containsObject:window]||(previous&&[previous compare:rank]!=NSOrderedDescending)){valid=NO;break;}[roots addObject:window];previous=rank;}
@@ -107,7 +107,7 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
 }
 // The screens the canvas panels are on: the frame timer follows the fastest, and a window is captured at its rate.
 - (NSArray<NSScreen *> *)canvasScreens { NSMutableArray<NSScreen *> *screens=[NSMutableArray array];for(NSPanel *panel in self.panels)if(panel.screen&&![screens containsObject:panel.screen])[screens addObject:panel.screen];return screens; }
-- (NSDictionary *)nativeDescription:(NSDictionary *)snapshot {
+- (DWScene *)nativeDescription:(DWScene *)snapshot {
     if(!self.native||!snapshot)return nil;
     if(!self.nativeViews)self.nativeViews=[DWNativeViews new];
     BOOL enabled=!self.native.ended&&!self.sessionInactive&&!self.cleaning&&self.panels.count;
@@ -127,9 +127,9 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     // description; it creates no controller hit site or input authority.
     return enabled?[self.sizeTransition nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
 }
-- (NSDictionary *)visualSnapshot { return self.controllerVisualSnapshot?:[self call:@{@"op":@"snapshot"}]; }
-- (NSDictionary *)presentationSnapshot {
-    NSDictionary *snapshot=[self visualSnapshot];
+- (DWScene *)visualSnapshot { return self.controllerVisualSnapshot?:self.controller.scene; }
+- (DWScene *)presentationSnapshot {
+    DWScene *snapshot=[self visualSnapshot];
     if(!self.native){
         NSDictionary *families=self.nativeFamilies.descriptions;
         if(!families.count)return snapshot;
@@ -142,18 +142,18 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
 }
 - (void)render {
     [self.sizeTransition willRender];
-    NSDictionary *snapshot=[self visualSnapshot];
-    NSDictionary *nativeSnapshot=[self nativeDescription:snapshot];
-    NSDictionary *presentation=self.native?(self.nativeViews.presentationSnapshot?:snapshot):[self presentationSnapshot];
+    DWScene *snapshot=[self visualSnapshot];
+    DWScene *nativeSnapshot=[self nativeDescription:snapshot];
+    DWScene *presentation=self.native?(self.nativeViews.presentationSnapshot?:snapshot):[self presentationSnapshot];
     // The outputs the pointer is looked up on, and whether cursor edge pan wants it reported: on while the snapshot's navigation.cursor_pan.needs_pointer says so. See -pointerFrame.
-    self.pointerOutputs=self.panels.count?asArray(snapshot[@"outputs"]):nil;
+    self.pointerOutputs=self.panels.count?(snapshot.outputs?:@[]):nil;
     // Also while sloppy focus owes the pointer's output a look because its view moved under the resting pointer (upstream's pull; navigation.hover_pull).
-    self.pointerWanted=self.pointerOutputs&&([DWTyped(DWTyped(snapshot[@"navigation"],NSDictionary.class)[@"cursor_pan"],NSDictionary.class)[@"needs_pointer"]isEqual:@YES]||[DWTyped(DWTyped(snapshot[@"navigation"],NSDictionary.class)[@"hover_pull"],NSDictionary.class)[@"needs_pointer"]isEqual:@YES]);
+    self.pointerWanted=self.pointerOutputs&&([snapshot.navigation.cursorPan.needsPointer isEqual:@YES]||[snapshot.navigation.hoverPull.needsPointer isEqual:@YES]);
     // pass_keys: every reply the shell applies is drawn from this snapshot, so what the focused window's rule passes is read here and nowhere else:
     // a bound or scripted command's (-applyReply:), a pointer policy press's and a hover's that moved the focus (-pointerApply:, -pointerFocused:),
     // a focus request's answer and a native focus report (the coordinator's `changed`), a size transaction's tail, each frame of a flight.
     // The hot keys act only when it changed: the passed chords stop being hot keys and reach the focused application from macOS itself.
-    NSArray<NSString *> *refused=[self.hotKeys pass:DWFocusedStandIn(snapshot)?@NO:snapshot[@"pass_keys"]];if(refused.count)[self flashStatus:summary(@"Shortcut unavailable",refused)];for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];
+    NSArray<NSString *> *refused=[self.hotKeys pass:DWFocusedStandIn(snapshot)?@NO:((id)snapshot.passesAllKeys?:snapshot.passedKeyCombos)];if(refused.count)[self flashStatus:summary(@"Shortcut unavailable",refused)];for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];
     [self adoptRender:snapshot];self.compositor.nativeMenuBackground=self.native&&!self.windowed&&!self.sessionInactive&&!self.cleaning&&![self nativeUnavailable];
     for(DesktopView *view in self.views)[view render:presentation];
     [self updateStandInKeyboard:snapshot];
@@ -174,9 +174,9 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
 }
 // The public desktop-image API exposes the current still URL and options, not
 // the rendered frame of an Aerial/video wallpaper. No preference is modified.
-- (IFBackgroundProgram *)macWallpaperForOutput:(NSNumber *)output description:(NSDictionary *)description base:(IFBackgroundProgram *)base {
+- (IFBackgroundProgram *)macWallpaperForOutput:(NSNumber *)output description:(DWOutput *)description base:(IFBackgroundProgram *)base {
     (void)output;if(!self.compositor.inheritsMacBackground){if(self.macWallpapers.count){self.wallpaperEpoch++;[self.macWallpapers removeAllObjects];}return base;}if(self.cleaning||self.sessionInactive)return base;
-    CGRect bounds=DWRectFromJSON(description[@"screen_bounds"]);NSScreen *chosen=nil;CGFloat largest=0;
+    CGRect bounds=description.nativeScreenBounds;NSScreen *chosen=nil;CGFloat largest=0;
     for(NSScreen *screen in NSScreen.screens){CGRect overlap=CGRectIntersection(bounds,topRect(screen.frame));CGFloat area=CGRectIsNull(overlap)?0:overlap.size.width*overlap.size.height;if(area>largest){largest=area;chosen=screen;}}
     NSNumber *display=DWTyped(chosen.deviceDescription[@"NSScreenNumber"],NSNumber.class);if(!display)return base;
     CGSize pixels=CGSizeMake(round(chosen.frame.size.width*chosen.backingScaleFactor),round(chosen.frame.size.height*chosen.backingScaleFactor));
@@ -272,19 +272,19 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
 - (DWCanvasRenderer *)canvasRenderer {
     if(self.compositor||self.cleaning)return self.compositor;
     __weak Desktop *weak=self;
-    self.compositor=[[DWCanvasRenderer alloc]initWithSource:^DWCanvasContent(NSNumber *window,NSDictionary *placement){
+    self.compositor=[[DWCanvasRenderer alloc]initWithSource:^DWCanvasContent(NSNumber *window,DWPlacement *placement){
         LiveSource *source=weak.exportSources[window]?:weak.sources[window];DWCanvasContent none={NULL,0,CGRectNull,CGSizeZero,CGSizeZero};
         if(!source||source.detached||!source.pixels||(source.nativeReplica&&source.error))return none;
         // The native size Router caches whenever router.bounds is set: no per-window decode per frame.
         Router *router=source.router;CGSize native=router?router.nativeSize:CGSizeZero;
         (void)placement;return (DWCanvasContent){source.pixels,source.frames,source.contentRect,source.contentPointSize,native};
     }];
-    self.compositor.backgroundForOutput=^IFBackgroundProgram *(NSNumber *output,NSDictionary *description,IFBackgroundProgram *base){return [weak macWallpaperForOutput:output description:description base:base]?:base;};
+    self.compositor.backgroundForOutput=^IFBackgroundProgram *(NSNumber *output,DWOutput *description,IFBackgroundProgram *base){return [weak macWallpaperForOutput:output description:description base:base]?:base;};
     [self watchMacWallpapers];
     self.compositor.frame=^BOOL(BOOL start){return [weak frameComing:start];};
     self.compositor.exportAttachments=^NSArray<DWCanvasAttachment *> *(NSNumber *window){return [weak.exportAttachments[window]copy];};
     self.compositor.exportOrderRoot=^BOOL(NSNumber *window){return weak.exportOrdering[window]!=nil;};
-    self.compositor.exportOrder=^NSArray<NSDictionary *> *(NSArray<NSDictionary *> *tokens,NSDictionary *effect,NSDictionary *snapshot){(void)effect;return DWExportOrderedTokens(tokens,weak.exportOrdering,snapshot);};
+    self.compositor.exportOrder=^NSArray<NSDictionary *> *(NSArray<NSDictionary *> *tokens,DWShellEffect *effect,DWScene *snapshot){(void)effect;return DWExportOrderedTokens(tokens,weak.exportOrdering,snapshot);};
     self.compositor.nativeWindows=self.native!=nil;
     self.compositor.nativeReplica=^BOOL(NSNumber *window,NSNumber *output){return [weak.nativeViews replica:window output:output];};
     self.compositor.liveAttachments=^NSArray<DWCanvasAttachment *> *(NSNumber *window,NSNumber *output){LiveSource *source=weak.sources[window];return !weak.cleaning&&!weak.sessionInactive&&!weak.native.ended&&source.pixels&&!source.error&&!source.detached&&(!weak.native||[weak.nativeViews replica:window output:output])?[weak.nativeFamilies attachments:window]:@[];};
@@ -332,7 +332,7 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
 // What a config load changed in the background, the chrome or the outlines is adopted
 // before any output is described, and a background that fell back says why, as
 // upstream's error bar does. A config load the controller refused keeps the resting status.
-- (void)adoptRender:(NSDictionary *)snapshot {
+- (void)adoptRender:(DWScene *)snapshot {
     if(!self.views.count)return;[[self canvasRenderer]configure:snapshot];
     NSString *note=self.compositor.note,*old=self.backgroundNote;if(note==old||[note isEqual:old])return;self.backgroundNote=note;
     if(note){fprintf(stderr,"%s\n",note.UTF8String);if(!self.configNote)self.statusText=note;}
@@ -369,9 +369,9 @@ static void DWTurnObserved(CFRunLoopObserverRef observer,CFRunLoopActivity activ
     if(!self.native)panel.alphaValue=.999;
     // The trackpad's raw touches, for gestures of three or more fingers.
     view.allowedTouchTypes=NSTouchTypeMaskIndirect;
-    for(NSUInteger i=0;i<rects.count;i++){NSMutableDictionary *registration=[@{@"op":@"register_output",@"stable_id":identities[i],@"screen_bounds":rects[i]}mutableCopy];
-        registration[@"usable_rect_local"]=DWRectJSON(outputUsableRect(DWRectFromJSON(rects[i])));
-        NSNumber *output=[self call:registration][@"output"];if(output)[view.outputs addObject:output];}
+    for(NSUInteger i=0;i<rects.count;i++){CGRect bounds=DWRectFromJSON(rects[i]);
+        DWControllerReply *registration=[self.controller registerOutput:identities[i] screenBounds:bounds usableRect:[NSValue valueWithRect:NSRectFromCGRect(outputUsableRect(bounds))]];
+        NSNumber *output=registration.output;if(output)[view.outputs addObject:output];}
     // Pointer motion over the canvas: hover, sloppy focus, pick mode.
     if(!self.canvasCursor)self.canvasCursor=[DWCanvasCursor new];view.hover=[[DWPointerHover alloc]initWithHost:view];view.hover.forwarding=!self.hoverUndelivered;
     // The view is the canvas alone. The desktop's panels are on every Space, a fullscreen application's included, and stay where
@@ -440,7 +440,7 @@ static BOOL screensHidden(void) {
     }
     // Return to desktop stopped the config watcher and dropped the key table: read the config again.
     if(!self.configWatcher)[self loadConfig:NO];
-    if(!self.trackpad){__weak Desktop *weak=self;self.trackpad=[[DWTrackpadGestures alloc]initWithEmit:^(NSDictionary *event){[weak noteDockGesture:event];[weak gesture:event owner:1];}];}
+    if(!self.trackpad){__weak Desktop *weak=self;self.trackpad=[[DWTrackpadGestures alloc]initWithEmit:^(DWTrackpadGestureEvent *event){[weak noteDockGesture:event];[weak gesture:event owner:1];}];}
     if(self.nativeEndpoints.count&&self.native.ended){self.nativeResumeWanted=YES;self.nativeResumeAfter=0;}
     // The analogue of upstream's nested winit backend: one ordinary window, one output.
     if(self.windowed){NSScreen *screen=NSScreen.mainScreen?:NSScreen.screens.firstObject;NSRect area=screen.visibleFrame;CGFloat width=MIN(self.windowSize.width,area.size.width),height=MIN(self.windowSize.height,area.size.height);
@@ -468,11 +468,11 @@ static BOOL screensHidden(void) {
     if(self.panels.count)self.sessionAwaitingCanvas=NO;
     // Every display that exists is registered now. A screen change and Return to desktop remove them all first, so only here can the controller
     // tell a display that is gone from one that came straight back: a pin whose own display is missing moves to one that is there.
-    if([DWTyped([self call:@{@"op":@"outputs_settled"}][@"dirty"],NSNumber.class)boolValue])self.sceneDirty=YES;
+    if(self.controller.outputsSettled.dirty.boolValue)self.sceneDirty=YES;
     // Windowed mode registers no global hot key: pointer and IPC only.
     // Own-only keys of a canvas that waited without a panel give way to the full set now that one exists.
     if(self.keysRunning)[self stopKeys];
-    NSArray<NSString *> *refused=[self startKeys];self.canvasKeysOffered=YES;if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];
+    NSArray<NSString *> *refused=[self startKeys];self.canvasKeysOffered=YES;if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:self.controller.bindings];
     // The status note names one: every chord macOS refused is named on stderr, as a reload names them.
     for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];
     if(!self.sizeTransition)self.sizeTransition=[[DWSizeTransition alloc]initWithHost:self];[self configureNavigation];
@@ -497,11 +497,11 @@ static BOOL screensHidden(void) {
 // output identity, world placement or saved camera. Dock notices compare equal.
 - (void)refreshOutputUsableAreas {
     if(self.cleaning||!self.views.count)return;
-    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*contexts=DWTyped(DWTyped(snapshot[@"navigation"],NSDictionary.class)[@"contexts"],NSDictionary.class);BOOL changed=NO;
-    for(NSDictionary *output in snapshot[@"outputs"]){NSNumber *identifier=DWTyped(output[@"id"],NSNumber.class);if(!identifier)continue;
-        CGRect usable=outputUsableRect(DWRectFromJSON(output[@"screen_bounds"]));NSDictionary *local=DWRectJSON(usable);
-        if([DWTyped(contexts[identifier.stringValue],NSDictionary.class)[@"usable_rect_local"]isEqual:local])continue;
-        NSDictionary *reply=[self call:@{@"op":@"set_usable_area",@"output":identifier,@"usable_rect_local":local}];if(reply&&!reply[@"error"]){[self.sizeTransition consumeSize:reply];changed=YES;}
+    DWScene *snapshot=self.controller.scene;BOOL changed=NO;
+    for(id entry in snapshot.outputs){DWOutput *output=[entry isKindOfClass:DWOutput.class]?entry:nil;NSNumber *identifier=output.identifier;if(!identifier)continue;
+        CGRect usable=outputUsableRect(output.nativeScreenBounds);
+        if([[snapshot.navigation contextForOutput:identifier]hasUsableRectEqualToRect:usable])continue;
+        DWControllerReply *reply=[self.controller setUsableRect:usable output:identifier];if(reply&&reply.errorPresence==DWValueAbsent){[self.sizeTransition consumeSize:reply];changed=YES;}
     }
     if(changed)[self render];
 }
@@ -531,7 +531,7 @@ static BOOL screensHidden(void) {
     // A pan waiting to launch belongs to an output about to be removed, and so do a hover waiting to be sent and a policy press.
     [self.panLaunch cancel];self.pointerOutputs=nil;self.pointerWanted=NO;
     for(DesktopView *view in self.views)[view.hover stop];
-    for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.sizeTransition consume:reply];}}
+    for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){DWControllerReply *reply=[self.controller removeOutput:output];[self.sizeTransition consume:reply];}}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}
     [self.panels removeAllObjects];[self.views removeAllObjects];
     // The outputs' compositor layers went with the panels; the rebuilt ones get new layers.
