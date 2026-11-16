@@ -42,7 +42,7 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 - (void)cancelFocus { [self clearBackgroundArrival];[self cancelNativeClick];[self advance];self.held=0;if(!self.closed&&self.enabled)self.command(@{@"op":@"cancel_focus_cycle"}); }
 - (void)interrupt { [self cancelBackgroundArrival];if(self.work)[self cancelFocus]; }
 - (void)invalidate { [self cancelFocus];if(!self.closed&&self.enabled)for(NSDictionary *o in self.command(@{@"op":@"snapshot"})[@"outputs"])self.command(@{@"op":@"cancel_navigation",@"output":o[@"id"]}); }
-- (void)shutdown { [self invalidate];if(!self.closed)[self policy:@{@"kind":@"clear_family"}];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil;self.output=nil;self.observationBinding=nil;self.nativeClickReleaseReady=nil;self.arrivalProtection=nil; }
+- (void)shutdown { [self invalidate];if(!self.closed)[self policy:@{@"kind":@"reset_policy"}];[self.lock lock];self.closed=YES;[self.lock unlock];self.command=nil;self.changed=nil;self.settled=nil;self.output=nil;self.observationBinding=nil;self.nativeClickReleaseReady=nil;self.arrivalProtection=nil; }
 - (BOOL)binding:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
     for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:effect[@"window"]]){
         id source=window[@"source"];return [source isKindOfClass:NSDictionary.class]&&[source[@"identity"]isEqual:effect[@"identity"]]&&[source[@"generation"]isEqual:effect[@"generation"]];

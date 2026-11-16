@@ -8,7 +8,9 @@ existing command seam's `focus_policy` command with `timestamp_ns`, `filter`,
 `focus_allowed` and a tagged `fact`. The module reads no clock. `filter` is true
 only for full-desktop managed runs; native drivers and geometry stay outside.
 Transient policy state is skipped by serialization: snapshots and scene files
-have no additional fields.
+have no additional fields. Coordinator shutdown resets all of it, matching the
+former coordinator lifetime even when panel/display rebuilding retains the
+same controller.
 
 The native adapter reports switch held/released, system-UI intent, a clicked
 logical window, launch intent, application launch/activation, window arrival,
@@ -63,7 +65,7 @@ The rule relocation (old coordinator methods below are in
 | Observation epoch precedes focus/camera command; pending effects answered against captured epoch; nil fact reproduces nil-snapshot fall-through (cancel click, advance, `focus_lost`, changed) | coordinator `observe` | `observe_owner_focus`, `observation_receipt`; native six-step dispatch |
 | Restore sends `focus` before epoch advance; only widened window is one in-process receipt call between focus and `perform:`'s advance (formerly assignments); no-effect fall-through retains consumed budget | coordinator restore/protection helpers | `plan_correction`, `observation_receipt`, `perform_reply` |
 | Normal/rule placement, focus-on-open, fullscreen/utility exceptions | `lifecycle.rs` spawn/arrival settlement | `spawn`, `arrival`, `settle_arrival` (adoption search stays in lifecycle) |
-| Owner-approved fix: repeated family observation produces no steps when binding, element and internal logical focus agree and no effect is pending | unreachable native `focus[@"logical"]` check | `observe_owner_focus_from`, `ObservationReceipt::Activated`, `ClearFamily` |
+| Owner-approved fix: repeated family observation produces no steps when binding, element and internal logical focus agree and no effect is pending | unreachable native `focus[@"logical"]` check | `observe_owner_focus_from`, `ObservationReceipt::Activated`, `ResetPolicy` |
 | Activation no-pan uncertainty, clipped reveal, cycle/click rules and configured zoom | `window_actions.rs::activate` | `activate`, `activation_zoom` |
 
 

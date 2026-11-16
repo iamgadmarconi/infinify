@@ -81,7 +81,7 @@ pub(crate) enum FocusFact {
         protect: bool,
     },
     ClearBackground,
-    ClearFamily,
+    ResetPolicy,
     CancelBackground,
     Answer {
         effect_id: u64,
@@ -153,7 +153,7 @@ impl Controller {
                 return Ok(json!({"unsolicited":!authorized,"cancel_work":cancel}));
             }
             FocusFact::ClearBackground => self.clear_background(),
-            FocusFact::ClearFamily => self.focus.policy.family_observation = None,
+            FocusFact::ResetPolicy => self.focus.policy = FocusPolicy::default(),
             FocusFact::CancelBackground => {
                 let cancel = self.cancel_background();
                 return Ok(json!({"cancel_work":cancel}));
