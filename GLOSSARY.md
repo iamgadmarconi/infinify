@@ -59,3 +59,9 @@ _Avoid_: Snapshot dictionary, state, model
 **Effect**:
 Something the controller asks the shell to do to a native window or to the system, such as giving a window focus or changing its size. The shell performs it and reports the result back.
 _Avoid_: Side effect, action, command (a command goes from the shell to the controller)
+
+### Structure
+
+**Native module**:
+A part of the native shell with one purpose and a stated interface: what other parts may use of it, and which other parts it may use itself. Everything else inside it is private to it.
+_Avoid_: Component, package, library, layer
