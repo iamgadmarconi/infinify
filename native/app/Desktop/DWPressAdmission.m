@@ -59,6 +59,18 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
         ||!CGRectEqualToRect(DWRectFromJSON(current[@"native_bounds"]),native))return nil;
     return current;
 }
+// Scheduling evidence is separate from hit-test authority: old maps may only
+// avoid an AX read for known content, never authorize an old chrome hit.
+@interface DWPressChromeSchedule : NSObject
+@property NSDictionary *goodMap;
+@property id generation;
+@property uint64_t revision,session,requested,completed;
+@property BOOL failed,keyBurst;
+@property uint64_t keySerial;
+@end
+@implementation DWPressChromeSchedule
+@end
+
 @interface DWPressAdmission ()
 @property (weak) Desktop *desktop;
 @property (readwrite) DesktopView *gestureView;
@@ -74,6 +86,11 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
 @property NSNumber *nativeButtonHover;
 @property CFTimeInterval nativeButtonMotion;
 @property dispatch_queue_t nativeButtonQueue;
+@property NSMapTable<LiveSource *,DWPressChromeSchedule *> *chromeSchedules;
+@property CGPoint chromePointer;
+@property BOOL chromePointerKnown;
+- (void)readNativeButtons:(LiveSource *)source;
+- (BOOL)settledContent:(LiveSource *)source at:(CGPoint)point;
 - (void)refreshNativeButtons:(LiveSource *)source;
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point;
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output;
@@ -117,6 +134,9 @@ static NSMutableDictionary *mutableMouseOwnership(LiveSource *source) {
 static uint64_t DWClickRevertToken;
 @implementation DWPressAdmission
 - (void)displayTopologyChanged {
+    // Existing display notification: revoke even non-hovered negative evidence.
+    self.chromeSchedules=[NSMapTable weakToStrongObjectsMapTable];
+    [self refreshHoveredChrome];
     for(LiveSource *source in self.desktop.sources.allValues){
         NSMutableDictionary *held=mutableMouseOwnership(source);
         if(held){held[@"topology_changed"]=@YES;[held removeObjectForKey:@"stable_since"];}
@@ -131,6 +151,8 @@ static uint64_t DWClickRevertToken;
 }
 - (BOOL)titleHit:(NSDictionary *)identity report:(NSDictionary *)report at:(CGPoint)point {
     if(!NSThread.isMainThread)return decorationDragMiss(identity,point,"stale_report");
+    for(LiveSource *source in self.desktop.sources.allValues)
+        if([source.identity isEqual:identity]&&[self settledContent:source at:point])return NO;
     NSDictionary *recipient=[self.nativeLookup recipient:point];
     for(NSString *key in @[@"pid",@"wid",@"birth_sec",@"birth_usec"])if(!identity[key]||![identity[key]isEqual:recipient[key]])return decorationDragMiss(identity,point,"recipient_changed");
     
@@ -170,13 +192,108 @@ static uint64_t DWClickRevertToken;
 - (NSNumber *)buttonHover { return self.nativeButtonHover; }
 - (NSDictionary *)fillHandoff { return self.desktop.sizeTransition.fillHandoff; }
 - (instancetype)initWithDesktop:(Desktop *)desktop scene:(id<DWPressSceneLookup>)scene native:(id<DWPressNativeLookup>)native {
-    if((self=[super init])){_desktop=desktop;_scene=scene;_nativeLookup=native;_titleGestures=[NSMapTable weakToStrongObjectsMapTable];}
+    if((self=[super init])){_desktop=desktop;_scene=scene;_nativeLookup=native;_titleGestures=[NSMapTable weakToStrongObjectsMapTable];_chromeSchedules=[NSMapTable weakToStrongObjectsMapTable];}
     return self;
 }
+- (DWPressChromeSchedule *)chromeSchedule:(LiveSource *)source {
+    if(!source)return nil;
+    DWPressChromeSchedule *state=[self.chromeSchedules objectForKey:source];
+    if(!state){state=[DWPressChromeSchedule new];[self.chromeSchedules setObject:state forKey:source];}
+    return state;
+}
+- (id)chromeGeneration:(LiveSource *)source {
+    for(NSDictionary *window in self.desktop.controllerVisualSnapshot[@"windows"])
+        if([window[@"window"]isEqual:source.logical])return window[@"source"][@"generation"];
+    return nil;
+}
+// Cached presentation only. An unknown/ambiguous placement conservatively keeps
+// the entire window hot. No WS, AX, controller command or guessed title height.
+- (BOOL)chromeBand:(LiveSource *)source at:(CGPoint)point {
+    DWPressChromeSchedule *state=[self.chromeSchedules objectForKey:source];
+    NSDictionary *map=state.goodMap;
+    if(!map||state.failed||[map[@"title_incomplete"]boolValue]||![map[@"identity"]isEqual:source.identity]
+        ||state.revision!=source.nativeButtonsRevision||state.session!=self.desktop.nativeSessionEpoch
+        ||![state.generation isEqual:[self chromeGeneration:source]]
+        ||!CGRectEqualToRect(DWRectFromJSON(map[@"native_bounds"]),DWRectFromJSON(source.router.bounds))
+        ||!map[@"title"][@"region"])return YES;
+    CGRect own=DWRectFromJSON(map[@"native_bounds"]);
+    if(CGRectIsEmpty(own))return YES;
+    NSDictionary *placement=nil;
+    for(NSDictionary *candidate in self.desktop.renderedPresentation[@"placements"]){
+        if(![candidate[@"window"]isEqual:source.logical]||[candidate[@"family_only"]boolValue])continue;
+        CGRect rect=DWRectFromJSON(candidate[@"screen_rect"]);
+        if(CGRectContainsPoint(CGRectInset(rect,-8,-8),point)){
+            if(placement)return YES;placement=candidate;
+        }
+    }
+    if(!placement)return YES;
+    CGRect displayed=DWRectFromJSON(placement[@"screen_rect"]);
+    double sx=displayed.size.width/own.size.width,sy=displayed.size.height/own.size.height;
+    if(!isfinite(sx)||!isfinite(sy)||sx<=0||sy<=0)return YES;
+    CGPoint local=CGPointMake((point.x-displayed.origin.x)/sx,(point.y-displayed.origin.y)/sy);
+    // 8 native points, at least 4 display points, around every reported
+    // title/caption/toolbar/button. Exclusions remain hot: they are native controls.
+    double mx=fmax(8,4/sx),my=fmax(8,4/sy);
+    NSDictionary *title=map[@"title"];
+    NSArray *regions=[@[title]arrayByAddingObjectsFromArray:title[@"additional_regions"]?:@[]];
+    for(NSDictionary *region in regions)
+        if(CGRectContainsPoint(CGRectInset(DWRectFromJSON(region[@"region"]),-mx,-my),local))return YES;
+    for(NSDictionary *button in map[@"buttons"])
+        if(CGRectContainsPoint(CGRectInset(DWRectFromJSON(button),-mx,-my),local))return YES;
+    // Superset of resize_border: its outside band is 8 canvas points, its
+    // inside edge is 5 native points / at least 3 display points (quarter cap).
+    // Using >=8 display points outside is conservative at supported zoom <=1.
+    double bx=fmax(mx,8/sx),by=fmax(my,8/sy);
+    CGRect outer=CGRectInset(displayed,-8,-8),inner=CGRectInset(displayed,bx*sx,by*sy);
+    return CGRectContainsPoint(outer,point)&&!CGRectContainsPoint(inner,point);
+}
+- (BOOL)settledContent:(LiveSource *)source at:(CGPoint)point {
+    DWPressChromeSchedule *state=[self.chromeSchedules objectForKey:source];
+    return source&&!source.detached&&state.goodMap&&state.goodMap==source.nativeButtons
+        &&!state.failed&&!state.keyBurst&&!source.nativeButtonsReading
+        &&state.requested==state.completed&&![self chromeBand:source at:point];
+}
+- (LiveSource *)hoveredChromeSource {
+    NSPoint at=NSEvent.mouseLocation;CGPoint point=CGPointMake(at.x,screenTop()-at.y);
+    self.chromePointer=point;self.chromePointerKnown=YES;
+    CGWindowID wid=[self.nativeLookup windowAt:point];NSNumber *root=[self.desktop.native rootWindowFor:wid];
+    LiveSource *hovered=nil;
+    for(LiveSource *source in self.desktop.sources.allValues)
+        if(!source.detached&&source.router.wid==root.unsignedIntValue){hovered=source;break;}
+    if(!hovered)for(DesktopView *view in self.desktop.views)if((CGWindowID)view.window.windowNumber==wid){
+        NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;
+        LiveSource *source=self.desktop.sources[hit[@"window"]];
+        if(source&&!source.detached&&!hit[@"native_member"])hovered=source;break;
+    }
+    self.nativeButtonHover=hovered.logical;return hovered;
+}
+- (void)refreshHoveredChrome {
+    if(self.desktop.cleaning||self.desktop.sessionInactive)return;
+    [self refreshNativeButtons:[self hoveredChromeSource]];
+}
+- (void)pollNativeButtons {
+    // Draining an event request is independent of the band. Idle periodic work
+    // is only for hovered chrome (including a missing/failed/incomplete map).
+    for(LiveSource *source in self.chromeSchedules.keyEnumerator){
+        DWPressChromeSchedule *state=[self.chromeSchedules objectForKey:source];
+        if(state.requested!=state.completed)[self readNativeButtons:source];
+    }
+    LiveSource *hovered=self.desktop.sources[self.nativeButtonHover];
+    if(hovered&&self.chromePointerKnown&&[self chromeBand:hovered at:self.chromePointer])
+        [self readNativeButtons:hovered];
+}
 - (void)refreshNativeButtons:(LiveSource *)source {
+    if(!source)return;
+    [self chromeSchedule:source].requested++;
+    [self readNativeButtons:source];
+}
+- (void)readNativeButtons:(LiveSource *)source {
     CFTimeInterval now=[self.nativeLookup mediaTime];
     if(self.desktop.cleaning||self.desktop.sessionInactive||self.desktop.native.ended||!source||source.detached||source.nativeVisibilityHeld||source.nativeButtonsReading||source.nativeButtonsNext>now||![self.nativeLookup trusted]||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid])return;
     source.nativeButtonsReading=YES;source.nativeButtonsNext=now+.2;
+    DWPressChromeSchedule *state=[self chromeSchedule:source];
+    uint64_t requested=state.requested;
+    id generation=[self chromeGeneration:source];
     if(!self.nativeButtonQueue)self.nativeButtonQueue=dispatch_queue_create("org.infinify.native-decorations",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0));
     // Routine, unchanged window observations must not starve an AX chrome read.
     // Only source/chrome changes or a different native session invalidate it.
@@ -191,6 +308,9 @@ static uint64_t DWClickRevertToken;
             }
             source.nativeButtons=DWNativeButtonsAfterRefresh(report,current,identity,[self.nativeLookup mediaTime],nativeCurrent,native);
             source.nativeButtonsMoveCandidate=nil;
+            state.completed=requested;
+            state.failed=!report||[report[@"title_incomplete"]boolValue]||source.nativeButtons!=report;
+            if(!state.failed){state.goodMap=report;state.revision=revision;state.session=session;state.generation=generation;}
             if(DWDebugTrace()){
                 NSString *reason=DWTyped(source.nativeButtons[@"title_reason"],NSString.class)?:report?@"stale_report":@"report_unavailable";
                 if(![source.nativeTitleDebugReason isEqual:reason]){
@@ -204,6 +324,7 @@ static uint64_t DWClickRevertToken;
     }});
 }
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point {
+    if([self settledContent:source at:point])return NO;
     if(![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth]||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid])return NO;
     if(self.desktop.native.familiesNeeded){uint32_t parent=0;if(![self.nativeLookup parent:source.identity result:&parent]||parent)return NO;}
     NSDictionary *info=[self.nativeLookup windowInfo:source.router.wid];CGRect displayed=CGRectZero,own=CGRectZero;
@@ -392,7 +513,7 @@ static uint64_t DWClickRevertToken;
     [self.desktop.navigation cancelNativeClick];
     [self.desktop cancelNativeHoverForWindow:nil];
     self.nativeDecorationPress=nil;
-    self.nativeButtonHover=nil;
+    self.nativeButtonHover=nil;self.chromePointerKnown=NO;
     DesktopView *view=self.gestureView;self.gestureView=nil;
     if(view.gesture){view.clearsFocus=NO;view.lastDragPan=0;[view released:view.lastPoint at:NSProcessInfo.processInfo.systemUptime];}
     [self titleState:view].intent=nil;
@@ -568,8 +689,13 @@ static uint64_t DWClickRevertToken;
             if(source&&!hit[@"native_member"]&&!source.detached&&(!self.desktop.native||[self.desktop.nativeViews replica:source.logical output:output])){hovered=source.logical;hoveredSource=source;}break;
         }
         BOOL sameHover=(hovered==self.nativeButtonHover)||(hovered&&[hovered isEqual:self.nativeButtonHover]);
+        self.chromePointer=point;self.chromePointerKnown=YES;
         if(sameHover&&now-self.nativeButtonMotion<.1)return NO;
+        BOOL rested=!sameHover||now-self.nativeButtonMotion>=.2;
+        self.chromePointer=point;self.chromePointerKnown=YES;
         self.nativeButtonMotion=now;self.nativeButtonHover=hovered;
+        // The first packet after rest must not wait on the last poll's throttle.
+        if(hoveredSource&&rested)hoveredSource.nativeButtonsNext=0;
         if(hoveredSource)[self refreshNativeButtons:hoveredSource];
         return NO;
     }

@@ -150,12 +150,7 @@
     }
     BOOL timing=self.scope&&getenv("INFINIFY_DEBUG")&&atoi(getenv("INFINIFY_DEBUG"))==1;
     CFTimeInterval stages[7]={0};if(timing)stages[0]=CACurrentMediaTime();
-    // Keep the focused window's chrome available for the first press after
-    // the pointer was parked elsewhere. Hover still primes other windows.
-    NSDictionary *focus=DWTyped(self.controllerVisualSnapshot[@"focus"],NSDictionary.class);
-    NSNumber *focused=DWTyped(focus[@"intent"],NSNumber.class);
-    if(self.native&&focused)[self refreshNativeButtons:self.sources[focused]];
-    if(self.pressAdmission.buttonHover&&(!self.native||![self.pressAdmission.buttonHover isEqual:focused]))[self refreshNativeButtons:self.sources[self.pressAdmission.buttonHover]];
+    [self.pressAdmission pollNativeButtons];
     if(self.sizeTransition&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.sizeTransition reap];}
     [self endLostInput];
     [self watchCorners];
