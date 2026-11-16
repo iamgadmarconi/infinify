@@ -24,13 +24,48 @@ ported file's header says "See docs/crates/core/PORT.md"; this is that file, kep
 
 All upstream code is upstream's text. It was changed only where it could not
 compile without the Wayland stack, where Infinify never uses it (removed, see
-[Removed](#removed-left-out)), and in one place by choice: the config file lives
-in a directory named `infinify`. Every difference is listed under
+[Removed](#removed-left-out)), and by choice for the config directory (`infinify`) and the product magnetic
+snap rule described below. Every difference is listed under
 [Deviations](#deviations).
 
 One behaviour is a reimplementation instead of upstream's code: turning a key
 name such as `Return` into a keysym (upstream calls libxkbcommon, a C library).
 It has [its own section](#keysym-name-lookup).
+
+## Product magnetic snap (2026-11-16)
+
+`layout::snap` is the single owner of pure stop discovery and interactive
+latching for canvas gestures and the desktop keyboard walk. This introduces no
+native dependency, seam or adapter. Canvas depends on core; core does not depend
+on canvas or desktop.
+
+The owner approved retiring these unused upstream items from
+`src/layout/snap.rs` at `df3de27b26c7998e8a460cffd8a4925cbed3a322`:
+`SnapParams` (including `stop_query`), `AxisSnap`, `SnapState`, `try_candidate`,
+`find_snap_candidate`, `EdgeSnapParams`, `find_edge_snap`, `update_axis`,
+`snap_resize_edges`, and `update_edge`. Their upstream source file hash remains
+recorded above and in the file header. No production caller used this interactive
+implementation. The retained `SnapRect`, stop types, `stops`, `origin_shift`,
+`nearest_beyond`, `next_origin`, `edge_lines`, `next_grow_line`,
+`next_shrink_line`, `perp_distance`, and `ON_STOP` keep upstream text unchanged.
+
+The replacement `AxisState` in the new, non-ported
+`src/layout/snap/magnetic.rs` is the existing canvas latch, originally adapted
+from `352333a8fa1b22171492d4b71a54102045c9a19d::src/layout/snap.rs::update_axis`,
+including product fix `71246bf`. A broken stop stays in cooldown until the natural
+coordinate has left its threshold band **and** the stop is no longer the
+candidate; otherwise motion away can jump backwards to that stop. A different
+candidate can engage on the breaking update. This is deliberately not the retired
+upstream latch's behavior; moving the current product implementation changes no
+live gesture rule.
+
+The inline upstream `#[cfg(test)]` module is left byte-for-byte intact for the
+later test phase, even where it references retired items. Likewise untouched:
+`crates/core/tests/snap_test.rs`, `crates/canvas/tests/snap_parity.rs`, and
+`crates/desktop/tests/resize_upstream/`. They must be replaced with direct
+behavioral coverage of stop selection, drag/resize latching, resistance, and
+cooldown rather than parity against a second interactive implementation. No test
+or native runtime verification was performed by this refactor.
 
 ## Update to v0.21.0
 
@@ -49,6 +84,7 @@ src/lib.rs                    crate root (new)
 src/canvas.rs                 ported
 src/config/*.rs               ported (six files)
 src/layout/*.rs               ported (five files)
+src/layout/snap/magnetic.rs   new: product magnetic geometry and latch
 
 Smithay's MIT licence text (verbatim, Smithay 0.7.0) is `SMITHAY-LICENSE.txt` at the repository root.
 The crate directory holds only `Cargo.toml`, `src/` and `tests/`.
@@ -73,7 +109,7 @@ This crate keeps upstream's module names at the crate root so upstream's
 |---|---|---|---|
 | `canvas` | `src/canvas.rs` | library | whole file |
 | `config` | `src/config/` | library | whole module, less the items under [Removed](#removed-left-out) |
-| `layout` | `src/layout/` | library | whole module, less `Side::opposite` |
+| `layout` | `src/layout/` | library | whole module, less `Side::opposite` and the retired interactive snap functions below |
 | `input::gestures` | `src/input/gestures.rs` | binary | `direction_from_vector` only |
 | `platform` | none | n/a | new: stand-ins |
 
@@ -103,10 +139,10 @@ header; what remains is the entry under [Deviations](#deviations).
 | `src/config/toml.rs` | `6e67a2e41ba1c39a7a71fea7b340b32bfafc0ca1994af248ebdaaf39df2d024b` | changed, see Deviations |
 | `src/config/defaults.rs` | `c2569a8d2db92dc3326238698c18b3c461dfc39835c4ae98d6b512856002dcd4` | one import path |
 | `src/layout/mod.rs` | `30e14c74317edb70c7d93e8a0c5e873f2a31ef518bef29eef5deb931d3d99030` | identical |
-| `src/layout/snap.rs` | `66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae` | seed path, see Deviations |
+| `src/layout/snap.rs` | `66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae` | seed path; interactive items retired and product submodule declared, see Deviations |
 | `src/layout/cluster.rs` | `4190c07d8f09cc70fdee19e1745297713f1ff8e06ab2db4337c0e316ea351a1a` | `Side::opposite` removed |
 | `src/layout/auto_placement.rs` | `d99fa9d5ca4a5e9d84e6ef6d6672e6ea531186f40187d88082b63285e8999806` | identical |
-| `src/layout/fill.rs` | `5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3` | seed path, see Deviations |
+| `src/layout/fill.rs` | `5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3` | seed path; interactive items retired and product submodule declared, see Deviations |
 | `src/input/gestures.rs` | `6a07e9e9a620b45bd5a52aa59136887775d609d00ad94b9c53d93c89ac3323d3` | an extract, see Deviations |
 | `crates/core/tests/canvas_navigation_test.rs` | `231937c6c83cb17c24ac419f575cdd4de3474c60d87d27c1cf405a1198c0becf` | crate paths |
 | `crates/core/tests/canvas_transforms_test.rs` | `6c8ec536dda510c849e8472bf4f5bdc88f371b402a810ebe3a142c58d2c6bb0f` | crate paths, two `#[rustfmt::skip]` |
@@ -146,7 +182,9 @@ Read but not copied:
 
 New files with no upstream original (each says so in its own header):
 `src/lib.rs`, `src/input/mod.rs`, `src/platform.rs`,
-`src/platform/input/keyboard/keysyms.rs` (generated), `crates/core/tests/platform_keysym_test.rs`,
+`src/platform/input/keyboard/keysyms.rs` (generated),
+`src/layout/snap/magnetic.rs` (product magnetic geometry and state),
+`crates/core/tests/platform_keysym_test.rs`,
 `crates/core/tests/config_path_test.rs`, `Cargo.toml`,
 `SMITHAY-LICENSE.txt` (at the repository root), this file.
 
@@ -183,6 +221,17 @@ this is the complete list.
 
 Items of upstream files that are not here, and why. Nothing else in the public
 or private API of a ported file was removed.
+
+Magnetic snap consolidation, 2026-11-16 (upstream
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`):
+
+| Item | Upstream location | Why |
+|---|---|---|
+| `SnapParams`, `SnapParams::stop_query`, `find_snap_candidate` | `src/layout/snap.rs` | unused interactive origin search; product discovery uses the same retained stops, preserving canvas arithmetic |
+| `EdgeSnapParams`, `find_edge_snap` | `src/layout/snap.rs` | unused interactive resize search; product discovery uses the same retained stops |
+| `AxisSnap`, `SnapState`, `update_axis`, `update_edge` | `src/layout/snap.rs` | duplicate interactive latch; product `AxisState` retains the fixed cooldown rule, described above |
+| `try_candidate` | `src/layout/snap.rs` | private ranking helper used only by retired searches |
+| `snap_resize_edges` | `src/layout/snap.rs` | unused Smithay-style chrome/edge-mask resize calculation; canvas owns gesture geometry |
 
 From the first ports:
 

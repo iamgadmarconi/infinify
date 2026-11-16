@@ -5,6 +5,7 @@
 // src/grabs/resize_grab.rs. No Smithay/native grab or configure protocol is ported.
 use crate::cluster_resize::{ResizeMember, classify, resolve};
 use crate::layout::{candidates, closest, edge_candidates};
+use driftwm_core::layout::snap::AxisState;
 use crate::{Error, Point, Rect, Scene, SnapOptions, WindowId};
 
 /// A side or corner to resize. Opposite edges stay fixed.
@@ -39,64 +40,6 @@ impl ResizeEdges {
     }
     pub(crate) fn bottom(self) -> bool {
         matches!(self, Self::Bottom | Self::BottomLeft | Self::BottomRight)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct AxisSnap {
-    snapped: f64,
-    engaged: f64,
-}
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-struct AxisState {
-    snap: Option<AxisSnap>,
-    cooldown: Option<f64>,
-}
-impl AxisState {
-    fn update(
-        &mut self,
-        natural: f64,
-        candidate: Option<f64>,
-        threshold: f64,
-        resistance: f64,
-    ) -> f64 {
-        if let Some(snap) = self.snap {
-            let (retreat, overshoot) = if snap.snapped > snap.engaged {
-                (snap.engaged - natural, natural - snap.snapped)
-            } else {
-                (natural - snap.engaged, snap.snapped - natural)
-            };
-            if retreat >= resistance || overshoot >= resistance {
-                self.cooldown = Some(snap.snapped);
-                self.snap = None;
-                if let Some(snapped) = candidate
-                    && snapped != snap.snapped
-                {
-                    self.snap = Some(AxisSnap {
-                        snapped,
-                        engaged: natural,
-                    });
-                    return snapped;
-                }
-                return natural;
-            }
-            return snap.snapped;
-        }
-        if self.cooldown.is_some_and(|position| {
-            (natural - position).abs() > threshold && candidate != Some(position)
-        }) {
-            self.cooldown = None;
-        }
-        if self.cooldown.is_none()
-            && let Some(snapped) = candidate
-        {
-            self.snap = Some(AxisSnap {
-                snapped,
-                engaged: natural,
-            });
-            return snapped;
-        }
-        natural
     }
 }
 
@@ -246,7 +189,7 @@ impl Scene {
         let mut next = gesture.clone();
         let mut actual = delta;
         // Eligibility uses the visible held perpendicular position, as upstream.
-        actual.y = next.y.snap.map_or(delta.y, |snap| snap.snapped);
+        actual.y = next.y.snapped().unwrap_or(delta.y);
         let candidate_x = self
             .drag_candidate(&next, actual, true)
             .map(|c| delta.x + c);
@@ -409,12 +352,12 @@ impl Scene {
 
         // X uses the held Y edge, then Y uses the just-resolved X range.
         let mut visual = rect;
-        if let Some(snap) = next.y.snap {
+        if let Some(snapped) = next.y.snapped() {
             if next.edges.top() {
-                visual.origin.y = snap.snapped;
-                visual.size.height = initial.bottom() - snap.snapped;
+                visual.origin.y = snapped;
+                visual.size.height = initial.bottom() - snapped;
             } else if next.edges.bottom() {
-                visual.size.height = snap.snapped - initial.origin.y;
+                visual.size.height = snapped - initial.origin.y;
             }
         }
         if next.edges.left() || next.edges.right() {
