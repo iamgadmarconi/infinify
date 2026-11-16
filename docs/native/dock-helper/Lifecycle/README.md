@@ -12,6 +12,10 @@ The existing `DWDockReload*` file/endpoint entry points now have one implementat
 
 The launcher caller uses `DWHelperLauncherMain` through the app's `native-desktop launcher MODE` dispatch; existing external command forms still enter `launch.sh`. The wrapper passes only mode and inherited reload descriptor 3. The compiled implementation derives bundle/artifact paths from its own executable and recomputes the payload digest. `DWHelperLauncher -runMode:` accepts a `DWHelperLauncherEnvironment` adapter for filesystem mapping, state location, process/code identity, clock/randomness, subprocesses and final handoffs; a later temporary-directory/fake-Dock adapter can exercise decisions without the real helper.
 
+A direct, undocumented `native-desktop launcher MODE` call can bypass the wrapper: the compiled launcher re-derives the executable's bundle and artifact paths, checks bundle components and regular files, manifest schema/source metadata and Info identity, and hashes the payload against its manifest entry, but does not repeat the other four manifest artifact path/digest/executable comparisons or the five pre-execution signature verifications; the loader and daemon still independently enforce privileged admission.
+
+The wrapper preflight's executable text and order stay identical apart from its header comment and removal of the unused `native_valid_boot_uuid` and `native_loaded_payload` function definitions; after it, only the `launch-setup` mode mapping and compiled `exec` handoff are new.
+
 ## Integrity preflight (unchanged executable text and order)
 
 Each check below **stays in launch.sh**, before app code executes; line numbers refer to this checkout's bundled wrapper source. The unused boot-UUID and loaded-payload function definitions moved out of shell.
