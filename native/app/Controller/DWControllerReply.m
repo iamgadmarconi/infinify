@@ -138,4 +138,14 @@
     DWEffect *effect=[self cachedEffectFromDictionary:self.rawDictionary[@"effect"]];
     return [effect isKindOfClass:DWSizeEffect.class]?(DWSizeEffect *)effect:nil;
 }
+- (DWControllerReply *)replyAfterNavigationConsumedSizeEffect:(DWSizeEffect *)sized {
+    return sized&&self.rawDictionary[@"effect"]==sized.rawDictionary?[self replyWithoutEffect]:self;
+}
++ (DWControllerReply *)pointerFocusReply:(DWControllerReply *)reply {
+    NSDictionary *raw=DWDictionary(reply.rawDictionary[@"effect"]);DWControllerReply *focus=DWProject(self,raw?@{@"effect":raw}:@{});
+    if(raw){DWEffect *effect=[reply cachedEffectFromDictionary:raw];focus->_effectValues=[NSMutableArray arrayWithObject:effect];}
+    return focus;
+}
+- (DWValuePresence)errorPresence { return DWPresence(self.rawDictionary[@"error"],NSString.class); }
+- (NSNumber *)deferred { return DWNumber(self.rawDictionary[@"deferred"]); }
 @end

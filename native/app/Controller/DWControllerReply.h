@@ -121,5 +121,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *transaction;
 @property(nonatomic,readonly,nullable) DWFocusEffect *primaryFocusEffect;
 @property(nonatomic,readonly,nullable) DWSizeEffect *topLevelSizeEffect;
+- (DWControllerReply *)replyAfterNavigationConsumedSizeEffect:(nullable DWSizeEffect *)sized;
++ (DWControllerReply *)pointerFocusReply:(nullable DWControllerReply *)reply;
+@property(nonatomic,readonly) DWValuePresence errorPresence;
+@property(nonatomic,readonly,nullable) NSNumber *deferred;
 @end
 NS_ASSUME_NONNULL_END

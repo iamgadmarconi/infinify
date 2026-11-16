@@ -36,5 +36,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) CGRect nativePresentationRect;
 @property(nonatomic,readonly) double nativePresentationClipArea;
 @property(nonatomic,readonly,nullable) NSNumber *alpha;
+// Native adapter compatibility: direct doubleValue, distinct from strict numeric shape readers.
+@property(nonatomic,readonly) CGRect nativeScreenRect;
+// Native adapter compatibility: direct doubleValue, distinct from strict numeric shape readers.
+@property(nonatomic,readonly) CGRect nativeClipRect;
+@property(nonatomic,readonly) double nativePresentationAlpha;
+@property(nonatomic,readonly) double nativePresentationOpacity;
 @end
 NS_ASSUME_NONNULL_END

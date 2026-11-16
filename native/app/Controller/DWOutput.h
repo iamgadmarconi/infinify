@@ -25,5 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) BOOL screenBoundsHasOriginAndSize;
 // Pointer-only legacy coercion; use after screenBoundsHasOriginAndSize.
 @property(nonatomic,readonly) CGRect nativePointerScreenBounds;
+// Native adapter compatibility: direct doubleValue, distinct from strict numeric shape readers.
+@property(nonatomic,readonly) CGRect nativeScreenBounds;
 @end
 NS_ASSUME_NONNULL_END

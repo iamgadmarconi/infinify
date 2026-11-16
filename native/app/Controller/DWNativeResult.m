@@ -32,4 +32,6 @@
 - (DWNativeResult *)withMutationAttempted:(BOOL)attempted {
     NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"mutation_attempted"]=@(attempted);return DWProject(self.class,[d copy]);
 }
+- (CGRect)nativeActualAX { return DWNativeCoercingRect(self.rawDictionary[@"actual_ax"]); }
+- (CGRect)nativeActualCG { return DWNativeCoercingRect(self.rawDictionary[@"actual_cg"]); }
 @end

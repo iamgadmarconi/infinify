@@ -47,4 +47,8 @@
     return [size[@"width"]doubleValue]*[size[@"height"]doubleValue];
 }
 - (NSNumber *)alpha { return DWNumber(self.rawDictionary[@"alpha"]); }
+- (CGRect)nativeScreenRect { return DWNativeCoercingRect(self.rawDictionary[@"screen_rect"]); }
+- (CGRect)nativeClipRect { return DWNativeCoercingRect(self.rawDictionary[@"clip_rect"]); }
+- (double)nativePresentationAlpha { id value=self.rawDictionary[@"alpha"];return value?[value doubleValue]:1; }
+- (double)nativePresentationOpacity { id value=self.rawDictionary[@"opacity"];return value?[value doubleValue]:1; }
 @end

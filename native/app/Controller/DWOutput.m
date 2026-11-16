@@ -43,4 +43,5 @@
     NSDictionary *bounds=self.rawDictionary[@"screen_bounds"],*origin=bounds[@"origin"],*size=bounds[@"size"];
     return CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
 }
+- (CGRect)nativeScreenBounds { return DWNativeCoercingRect(self.rawDictionary[@"screen_bounds"]); }
 @end

@@ -26,5 +26,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)resultWithNativeResize:(DWResizeResult)result;
 + (instancetype)unansweredForSizeEffect:(DWSizeEffect *)effect;
 - (DWNativeResult *)withMutationAttempted:(BOOL)attempted;
+// Native adapter compatibility: direct doubleValue, distinct from strict numeric shape readers.
+@property(nonatomic,readonly) CGRect nativeActualAX;
+// Native adapter compatibility: direct doubleValue, distinct from strict numeric shape readers.
+@property(nonatomic,readonly) CGRect nativeActualCG;
 @end
 NS_ASSUME_NONNULL_END

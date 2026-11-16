@@ -27,5 +27,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) CGRect contentRectOrNull;
 @property(nonatomic,readonly) CGRect originalRectOrNull;
 @property(nonatomic,readonly) CGRect observedRectOrNull;
+// Native adapter compatibility: direct doubleValue, distinct from strict numeric shape readers.
+@property(nonatomic,readonly) CGRect nativeObservedRect;
 @end
 NS_ASSUME_NONNULL_END

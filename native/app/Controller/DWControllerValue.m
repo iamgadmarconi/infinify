@@ -79,3 +79,8 @@ BOOL DWSceneGeometryIsNumeric(id value,NSUInteger shape) {
     if(shape==1)return DWNumber(d[@"width"])&&DWNumber(d[@"height"]);
     return DWSceneGeometryIsNumeric(d[@"origin"],0)&&DWSceneGeometryIsNumeric(d[@"size"],1);
 }
+
+CGRect DWNativeCoercingRect(id r) {
+    return CGRectMake([r[@"origin"][@"x"]doubleValue],[r[@"origin"][@"y"]doubleValue],
+        [r[@"size"][@"width"]doubleValue],[r[@"size"][@"height"]doubleValue]);
+}

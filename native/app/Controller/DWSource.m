@@ -26,4 +26,5 @@
 - (CGRect)contentRectOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"content_rect"],2)?self.contentRect:CGRectNull; }
 - (CGRect)originalRectOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"original_rect"],2)?self.originalRect:CGRectNull; }
 - (CGRect)observedRectOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"observed_rect"],2)?self.observedRect:CGRectNull; }
+- (CGRect)nativeObservedRect { return DWNativeCoercingRect(self.rawDictionary[@"observed_rect"]); }
 @end

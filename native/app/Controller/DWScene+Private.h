@@ -29,6 +29,7 @@ FOUNDATION_EXPORT NSString * _Nullable DWString(id _Nullable value);
 FOUNDATION_EXPORT NSDictionary * _Nullable DWDictionary(id _Nullable value);
 FOUNDATION_EXPORT NSArray * _Nullable DWArray(id _Nullable value);
 FOUNDATION_EXPORT CGRect DWSceneRect(id _Nullable value);
+FOUNDATION_EXPORT CGRect DWNativeCoercingRect(id _Nullable value);
 FOUNDATION_EXPORT CGPoint DWScenePoint(id _Nullable value);
 FOUNDATION_EXPORT CGSize DWSceneSize(id _Nullable value);
 FOUNDATION_EXPORT NSDictionary *DWSceneRectDictionary(CGRect value);
