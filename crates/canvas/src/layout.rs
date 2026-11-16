@@ -2,7 +2,8 @@
 // Adapted from https://github.com/malbiruk/driftwm src/layout/{snap,cluster}.rs
 // at 352333a8fa1b22171492d4b71a54102045c9a19d.
 // Retains strict perpendicular overlap and on-demand connected components.
-// Movement and snapping use the gesture lifecycle in gestures.rs.
+// Magnetic stop discovery and latching live in driftwm_core::layout::snap;
+// gestures.rs owns frozen membership and gesture geometry.
 use crate::{Error, Rect, Scene, WindowId};
 use std::collections::BTreeSet;
 
@@ -74,83 +75,4 @@ pub(crate) fn adjacent(a: Rect, b: Rect, options: SnapOptions) -> bool {
         || (x_overlap
             && ((a.bottom() + options.gap - b.origin.y).abs() <= options.adjacency_tolerance
                 || (b.bottom() + options.gap - a.origin.y).abs() <= options.adjacency_tolerance))
-}
-/// Candidate correction and upstream ranking distance (not correction magnitude).
-pub(crate) fn candidates(
-    a: Rect,
-    b: Rect,
-    options: SnapOptions,
-    horizontal: bool,
-    same_edge: bool,
-    center: bool,
-) -> [Option<(f64, f64)>; 5] {
-    let (low, high, perp_low, perp_high) = axis_edges(a, horizontal);
-    let (other_low, other_high, other_perp_low, other_perp_high) = axis_edges(b, horizontal);
-    let overlap = perp_high > other_perp_low && other_perp_high > perp_low;
-    let aligned = !overlap
-        && (other_perp_low - perp_high)
-            .max(perp_low - other_perp_high)
-            .max(0.0)
-            < options.gap + options.threshold;
-    [
-        overlap.then_some((other_low - options.gap - high, (high - other_low).abs())),
-        overlap.then_some((other_high + options.gap - low, (low - other_high).abs())),
-        (same_edge && aligned).then_some((other_low - low, (low - other_low).abs())),
-        (same_edge && aligned).then_some((other_high - high, (high - other_high).abs())),
-        (center && aligned).then_some((
-            (other_low + other_high - low - high) / 2.0,
-            ((low + high - other_low - other_high) / 2.0).abs(),
-        )),
-    ]
-}
-
-pub(crate) fn axis_edges(rect: Rect, horizontal: bool) -> (f64, f64, f64, f64) {
-    if horizontal {
-        (rect.origin.x, rect.right(), rect.origin.y, rect.bottom())
-    } else {
-        (rect.origin.y, rect.bottom(), rect.origin.x, rect.right())
-    }
-}
-
-pub(crate) fn edge_candidates(
-    a: Rect,
-    b: Rect,
-    options: SnapOptions,
-    horizontal: bool,
-    high_edge: bool,
-    same_edge: bool,
-) -> [Option<(f64, f64)>; 2] {
-    let (low, high, perp_low, perp_high) = axis_edges(a, horizontal);
-    let (other_low, other_high, other_perp_low, other_perp_high) = axis_edges(b, horizontal);
-    let overlap = perp_high > other_perp_low && other_perp_high > perp_low;
-    let aligned = same_edge
-        && !overlap
-        && (other_perp_low - perp_high)
-            .max(perp_low - other_perp_high)
-            .max(0.0)
-            < options.gap + options.threshold;
-    if high_edge {
-        [
-            overlap.then_some((other_low - options.gap, (high - other_low).abs())),
-            aligned.then_some((other_high, (high - other_high).abs())),
-        ]
-    } else {
-        [
-            overlap.then_some((other_high + options.gap, (low - other_high).abs())),
-            aligned.then_some((other_low, (low - other_low).abs())),
-        ]
-    }
-}
-
-pub(crate) fn closest(candidates: impl Iterator<Item = (f64, f64)>, threshold: f64) -> Option<f64> {
-    // Keep the first target on ties, matching upstream's strict comparison.
-    candidates
-        .fold(None, |best: Option<(f64, f64)>, candidate| {
-            if candidate.1 < threshold && best.is_none_or(|old| candidate.1 < old.1) {
-                Some(candidate)
-            } else {
-                best
-            }
-        })
-        .map(|(position, _)| position)
 }

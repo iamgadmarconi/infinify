@@ -6,7 +6,9 @@
 // (usable_canvas_bounds). The walk itself is not adapted: the stops, the
 // nearest origin past a window and the grow and shrink lines are driftwm-core's
 // `layout::snap::{StopQuery, next_origin, next_grow_line, next_shrink_line}`,
-// upstream's own code with its own tests. What changes is where the numbers
+// retained verbatim from upstream. Live canvas gestures now use that same
+// module's stops and product magnetic latch (see docs/crates/core/PORT.md).
+// What changes is where the numbers
 // come from: a window's frame is the whole-pixel native frame (it has no title
 // bar strip and no border to add, as in sizes.rs), "configured size" is
 // sizes.rs's `configured_size`, and the camera that follows a move is the

@@ -24,11 +24,11 @@ ported file's header says "See docs/crates/core/PORT.md"; this is that file, kep
 
 All upstream code is upstream's text. It was changed only where it could not
 compile without the Wayland stack, where Infinify never uses it (removed, see
-[Removed](#removed-left-out)), and by choice for the config directory (`infinify`) and the product magnetic
-snap rule described below. Every difference is listed under
+[Removed](#removed-left-out)), and by choice for the config directory
+(`infinify`) and the product magnetic snap rule described below. Every difference is listed under
 [Deviations](#deviations).
 
-One behaviour is a reimplementation instead of upstream's code: turning a key
+Another behaviour is a reimplementation instead of upstream's code: turning a key
 name such as `Return` into a keysym (upstream calls libxkbcommon, a C library).
 It has [its own section](#keysym-name-lookup).
 
@@ -52,7 +52,12 @@ implementation. The retained `SnapRect`, stop types, `stops`, `origin_shift`,
 The replacement `AxisState` in the new, non-ported
 `src/layout/snap/magnetic.rs` is the existing canvas latch, originally adapted
 from `352333a8fa1b22171492d4b71a54102045c9a19d::src/layout/snap.rs::update_axis`,
-including product fix `71246bf`. A broken stop stays in cooldown until the natural
+including product fix `71246bf`. The non-ported discovery functions use the
+retained upstream `stops` for both drag and resize eligibility; they preserve
+canvas's correction/distance expression order (especially midpoint arithmetic),
+strict thresholds and first-candidate ties. `snap.rs` adds only the declaration
+and re-export of that submodule, not interleaved product implementation.
+A broken stop stays in cooldown until the natural
 coordinate has left its threshold band **and** the stop is no longer the
 candidate; otherwise motion away can jump backwards to that stop. A different
 candidate can engage on the breaking update. This is deliberately not the retired
@@ -142,7 +147,7 @@ header; what remains is the entry under [Deviations](#deviations).
 | `src/layout/snap.rs` | `66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae` | seed path; interactive items retired and product submodule declared, see Deviations |
 | `src/layout/cluster.rs` | `4190c07d8f09cc70fdee19e1745297713f1ff8e06ab2db4337c0e316ea351a1a` | `Side::opposite` removed |
 | `src/layout/auto_placement.rs` | `d99fa9d5ca4a5e9d84e6ef6d6672e6ea531186f40187d88082b63285e8999806` | identical |
-| `src/layout/fill.rs` | `5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3` | seed path; interactive items retired and product submodule declared, see Deviations |
+| `src/layout/fill.rs` | `5f210f68f61c21606f8786b8751c8b36a232357d4ebdcda6e470868a4f1a16b3` | seed path, see Deviations |
 | `src/input/gestures.rs` | `6a07e9e9a620b45bd5a52aa59136887775d609d00ad94b9c53d93c89ac3323d3` | an extract, see Deviations |
 | `crates/core/tests/canvas_navigation_test.rs` | `231937c6c83cb17c24ac419f575cdd4de3474c60d87d27c1cf405a1198c0becf` | crate paths |
 | `crates/core/tests/canvas_transforms_test.rs` | `6c8ec536dda510c849e8472bf4f5bdc88f371b402a810ebe3a142c58d2c6bb0f` | crate paths, two `#[rustfmt::skip]` |
@@ -204,7 +209,9 @@ this is the complete list.
 | `src/config/parse_helpers.rs` | one `smithay::` import reads `crate::platform::` |
 | `src/config/defaults.rs` | one `smithay::` import reads `crate::platform::` |
 | `src/config/toml.rs` | new `pub const CONFIG_DIR_NAME: &str = "infinify";`, and `config_path` joins `format!("{CONFIG_DIR_NAME}/config.toml")` where upstream joins `"driftwm/config.toml"`; `set_config_path`, `CONFIG_PATH_OVERRIDE` and its branch in `config_path` removed |
-| `src/layout/{mod,snap,auto_placement,fill}.rs` | none |
+| `src/layout/{mod,auto_placement,fill}.rs` | none |
+| `src/layout/snap.rs` | unused interactive search/latch/resize items removed (see Removed); `mod magnetic` and its re-export added; retained upstream geometry unchanged |
+| `src/layout/snap/magnetic.rs` | NEW FILE, not ported: product latch and interactive search over the retained upstream stops |
 | `src/layout/cluster.rs` | `impl Side { fn opposite }` removed |
 | `src/layout/fill.rs`, `src/layout/snap.rs` | the `proptest!` block opens with a `#![proptest_config]` whose `failure_persistence` is `SourceParallel("tests/proptest-regressions")`, so the saved seeds are read from `tests/proptest-regressions/layout/` instead of `proptest-regressions/layout/` at the crate root; the cases, strategies and default case count are unchanged |
 | `src/input/gestures.rs` | an extract: `direction_from_vector` only (upstream lines 86-113, body unmodified), `pub(crate)` widened to `pub`; imports reduced to `crate::platform::utils::{Logical, Point}` and `crate::config::Direction`; lines 1-85 removed (see Removed) |

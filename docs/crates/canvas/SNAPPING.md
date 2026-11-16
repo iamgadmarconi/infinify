@@ -2,17 +2,34 @@
 
 ## Source and oracle
 
-The snapping geometry of `Scene` (`src/{layout,gestures,cluster_resize}.rs`) is
-adapted from DriftWM's `src/layout/{snap,cluster}.rs`
-(<https://github.com/malbiruk/driftwm>, GPL-3.0-or-later) at commit
-`352333a8fa1b22171492d4b71a54102045c9a19d`; the file headers say so. Its
-executable oracle is `driftwm-core`'s `layout::{snap, cluster}`
-(`crates/core/src/layout/{snap,cluster}.rs`), upstream's own code at DriftWM
-v0.21.0, commit `df3de27b26c7998e8a460cffd8a4925cbed3a322`: the differential
-traces of `snap_parity` compare the public `Scene` drag, resize and cluster
-results with it (`cargo test -p driftwm-canvas --test snap_parity`). The other
-statements of this file describe `Scene`; they were not re-derived from
-v0.21.0. The `[snap]` configuration defaults of v0.20 (`corners` on,
+`driftwm_core::layout::snap` is the single magnetic snap module used by
+`Scene` gestures and the desktop keyboard walk. It owns stop discovery,
+candidate ranking, latching and break cooldown. Frozen gesture membership and
+cluster geometry remain in canvas `src/{layout,gestures,cluster_resize}.rs`.
+The module takes and returns pure world geometry/state; no seam or adapter is
+needed. Canvas has a production dependency on platform-neutral core, never on
+desktop or native code.
+
+Retained upstream stop/keyboard geometry comes from DriftWM
+(<https://github.com/malbiruk/driftwm>, GPL-3.0-or-later) v0.21.0,
+`df3de27b26c7998e8a460cffd8a4925cbed3a322`. Product latch and discovery live in
+the new, non-ported `crates/core/src/layout/snap/magnetic.rs`; they were adapted
+from `352333a8fa1b22171492d4b71a54102045c9a19d` and include product cooldown
+fix `71246bf`. `docs/crates/core/PORT.md` lists every retired upstream item.
+
+`snap_parity` is no longer an executable oracle: it names the retired duplicate
+interactive latch and already contradicted the fixed cooldown rule. It, core's
+upstream snap tests (including the inline module), and desktop's
+`resize_upstream/` are untouched and deliberately left for the later test phase.
+Replace latch parity with behavior through `Scene::begin_drag` / `drag_to` and
+`Scene::begin_resize` / `resize_to`: once broken away from a stop, motion away
+must never jump back; cooldown must survive while the same stop is still the
+candidate; release resistance, threshold strictness, first-target ties, edge
+families, and frozen cluster membership must retain their contracts. Keep
+independent behavioral coverage of the shared stop and keyboard queries.
+No tests were run or changed during consolidation.
+
+The `[snap]` configuration defaults of v0.20 (`corners` on,
 `outer_gap` 12) are the controller's configuration, not `SnapOptions`' or
 `DragGesture::with_alignment`'s, whose defaults stay as below.
 
@@ -49,7 +66,8 @@ overlap and a perpendicular gap strictly less than `gap + distance`.
 has no center resize candidate family. X resolves before Y, using a held Y latch
 for the first perpendicular range and the resolved X range for the second.
 Release occurs at `>= break_force` on retreat from engagement or overshoot past
-the snap target. Cooldown clears only beyond the threshold, and break force zero
+the snap target. Cooldown clears only beyond the threshold **and** when that stop is no longer
+the candidate; another candidate may engage on the breaking update. Break force zero
 is accepted as upstream does.
 
 Resize snapping excludes the primary and statically shifted cluster members.
@@ -65,7 +83,7 @@ rectangle is the canvas request, not an observation of native acceptance.
 
 - Canvas geometry and deltas remain `f64`. Upstream's move grab truncates its final
   positions to `i32`; its resize grab truncates pointer deltas, and its resize snap
-  routine truncates resulting sizes. Differential resize traces compare integer
+  routine truncates resulting sizes. The retired differential resize traces compared integer
   inputs and zero added chrome. Fractional canvas behavior preserves the existing
   API and is not claimed to match upstream pixel rounding.
 - The existing fractional cluster resolver retains its arithmetic tolerance and

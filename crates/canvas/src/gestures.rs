@@ -4,9 +4,8 @@
 // src/layout/snap.rs::update_axis, src/state/cluster_snapshot.rs, and
 // src/grabs/resize_grab.rs. No Smithay/native grab or configure protocol is ported.
 use crate::cluster_resize::{ResizeMember, classify, resolve};
-use crate::layout::{candidates, closest, edge_candidates};
-use driftwm_core::layout::snap::AxisState;
 use crate::{Error, Point, Rect, Scene, SnapOptions, WindowId};
+use driftwm_core::layout::snap::{self, AxisState, SnapRect, StopQuery};
 
 /// A side or corner to resize. Opposite edges stay fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,7 +413,9 @@ impl Scene {
         horizontal: bool,
         high: bool,
     ) -> Option<f64> {
-        closest(
+        let query = stop_query(rect, gesture.options, horizontal, gesture.same_edge, false);
+        snap::resize_candidate(
+            snap_rect(rect),
             self.windows()
                 .iter()
                 .filter(|w| {
@@ -425,18 +426,10 @@ impl Scene {
                             .iter()
                             .any(|m| m.id == w.id && m.is_shifted())
                 })
-                .flat_map(|w| {
-                    edge_candidates(
-                        rect,
-                        w.world_rect,
-                        gesture.options,
-                        horizontal,
-                        high,
-                        gesture.same_edge,
-                    )
-                })
-                .flatten(),
+                .map(|w| snap_rect(w.world_rect)),
+            &query,
             gesture.options.threshold,
+            high,
         )
     }
 
@@ -462,21 +455,20 @@ impl Scene {
 
     fn drag_candidate(&self, gesture: &DragGesture, delta: Point, horizontal: bool) -> Option<f64> {
         let rect = gesture.primary.translated(delta);
-        closest(
+        let query = stop_query(
+            rect,
+            gesture.options,
+            horizontal,
+            gesture.same_edge,
+            gesture.center,
+        );
+        snap::drag_candidate(
+            snap_rect(rect),
             self.windows()
                 .iter()
                 .filter(|w| self.snaps(w.id) && !gesture.initial.iter().any(|(id, _)| *id == w.id))
-                .flat_map(|w| {
-                    candidates(
-                        rect,
-                        w.world_rect,
-                        gesture.options,
-                        horizontal,
-                        gesture.same_edge,
-                        gesture.center,
-                    )
-                })
-                .flatten(),
+                .map(|w| snap_rect(w.world_rect)),
+            &query,
             gesture.options.threshold,
         )
     }
@@ -508,5 +500,39 @@ impl Scene {
                 .world_rect = rect;
         }
         Ok(())
+    }
+}
+
+// Representation-only conversion: retain the canvas's original sums.
+fn snap_rect(rect: Rect) -> SnapRect {
+    SnapRect {
+        x_low: rect.origin.x,
+        x_high: rect.right(),
+        y_low: rect.origin.y,
+        y_high: rect.bottom(),
+    }
+}
+
+fn stop_query(
+    rect: Rect,
+    options: SnapOptions,
+    horizontal: bool,
+    same_edge: bool,
+    edge_center: bool,
+) -> StopQuery {
+    let (perp_low, perp_high) = if horizontal {
+        (rect.origin.y, rect.bottom())
+    } else {
+        (rect.origin.x, rect.right())
+    };
+    StopQuery {
+        horizontal,
+        perp_low,
+        perp_high,
+        gap: options.gap,
+        align_band: options.gap + options.threshold,
+        same_edge,
+        edge_center,
+        side_docks: false,
     }
 }

@@ -7,7 +7,8 @@
 //   sha-256:    66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae (upstream file)
 // Changes from upstream: this header; removed unused interactive search,
 // latch and resize items (listed in PORT.md); declared/re-exported the new,
-// non-ported product magnetic submodule. Retained upstream text is unmodified.
+// non-ported product magnetic submodule. Retained geometry is unmodified;
+// the existing inline-test seed-path adjustment is retained.
 // See docs/crates/core/PORT.md for the full change log.
 
 /// Bounding rectangle of a window in canvas coordinates, used for edge snap detection.
@@ -42,7 +43,7 @@ impl SnapRect {
 }
 
 mod magnetic;
-pub use magnetic::AxisState;
+pub use magnetic::{AxisState, drag_candidate, resize_candidate};
 
 /// Which line of the primary a stop places: its low edge (left or top), its
 /// high edge (right or bottom), or its midpoint.
