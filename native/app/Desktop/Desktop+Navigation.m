@@ -48,212 +48,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     for(DesktopView *view in desktop.views)if(CGRectContainsPoint(view.globalBounds,point))return event;
     [desktop.navigation interrupt];return event;
 }
-// The AX reply and later WindowServer family audit are separate observations.
-// AppKit may settle another native point between them. Use the audited root's
-// own frame for presentation; never change the controller's accepted AX size.
-// The presenter still validates the complete report, including every identity,
-// duplicate, parent and bounds field before granting readiness.
-static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary *identity,CGRect fallback) {
-    if(![family[@"identity"]isEqual:identity]||![family[@"root"]isEqual:identity[@"wid"]]
-        ||![family[@"members"]isKindOfClass:NSArray.class])return fallback;
-    for(id value in family[@"members"]){
-        if(![value isKindOfClass:NSDictionary.class])continue;
-        NSDictionary *member=value;
-        if([member[@"identity"]isEqual:identity]&&[member[@"parent"]isEqual:@0])
-            return DWRectFromJSON(member[@"native_bounds"]);
-    }
-    return fallback;
-}
 @implementation Desktop (Navigation)
-// All initial interactive effects pass through coordinator admission, including
-// DesktopView's direct resize.request path and gesture requests (not consumeSize).
-- (void)prepareInteractiveResize:(NSDictionary *)effect ready:(void (^)(BOOL))ready {
-    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
-    if(!self.native){ready(YES);return;}
-    if(self.nativeResizePresentation.active){
-        [self.nativeResizePresentation prepareEffect:effect ready:ready];return;
-    }
-    if(![DWNativeResizePresentation requiresBridgeForTransaction:transaction]){ready(YES);return;}
-    if([self.nativeResizeLiveTransaction isEqual:effect[@"transaction"]]){ready(YES);return;}
-    if(self.nativeFillHandoff||self.cleaning||self.sessionInactive||self.native.ended){ready(NO);return;}
-    NSNumber *window=effect[@"window"],*output=[self.nativeViews desiredOwnerForWindow:window];
-    NSDictionary *view=nil;for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){view=row;break;}
-    if(!view){ready(NO);return;}
-    DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;
-    NSDictionary *effectIdentity=DWTyped(effect[@"identity"],NSDictionary.class);
-    NSMutableDictionary *nativeIdentity=[NSMutableDictionary dictionary];
-    for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"])if(effectIdentity[key])nativeIdentity[key]=effectIdentity[key];
-    // Attached families (e.g. Chrome with Find bar or status bubble) and runs
-    // without Screen Recording keep the live resize path instead of stalling.
-    if(!CGPreflightScreenCaptureAccess()||(nativeIdentity.count==4&&[presenter hasAttachedChildrenForWindow:nativeIdentity])){
-        self.nativeResizeLiveTransaction=effect[@"transaction"];ready(YES);return;
-    }
-    self.nativeResizeLiveTransaction=nil;
-    DWNativeResizePresentation *owner=[[DWNativeResizePresentation alloc]initWithPresenter:(id)presenter capture:DWNativeResizePresentation.snapshotCapture];
-    self.nativeResizePresentation=owner;__weak Desktop *weak=self;__weak DWNativeResizePresentation *weakOwner=owner;__weak DWNativePresenter *weakPresenter=presenter;
-    presenter.transitionFrameAcknowledged=^{Desktop *d=weak;DWNativeResizePresentation *p=weakOwner;DWNativePresenter *pr=weakPresenter;
-        if(!d||d.cleaning||d.sessionInactive||d.native!=pr||d.nativeFillHandoff||d.nativeResizePresentation!=p||!p.active)return;
-        [p update];if(!d.cleaning){[d render];[pr submit];}};
-    owner.state=^DWNativeResizePresentationState{
-        Desktop *d=weak;DWNativeResizePresentation *p=weakOwner;NSDictionary *e=p.effect;
-        if(!d||!e)return (DWNativeResizePresentationState){0};
-        NSDictionary *now=[d call:@{@"op":@"snapshot"}],*t=DWTyped(now[@"native_resize"],NSDictionary.class),*binding=nil,*outputNow=nil,*placement=nil;
-        LiveSource *source=d.sources[window];
-        for(NSDictionary *row in now[@"windows"])if([row[@"window"]isEqual:window]){binding=DWTyped(row[@"source"],NSDictionary.class);break;}
-        for(NSDictionary *row in now[@"outputs"])if([row[@"id"]isEqual:output]){outputNow=row;break;}
-        for(NSDictionary *row in [d presentationSnapshot][@"placements"])if([row[@"window"]isEqual:window]&&[row[@"output"]isEqual:output]){placement=row;break;}
-        BOOL valid=!d.cleaning&&!d.sessionInactive&&d.native==presenter&&!presenter.ended&&d.nativeSessionEpoch==session
-            &&source&&!source.detached&&!source.nativeVisibilityWanted&&!source.nativeMinimized&&!source.nativeMouseOwnership
-            &&boundIdentity(source.identity,e[@"identity"])&&boundIdentity(binding[@"identity"],e[@"identity"])
-            &&[binding[@"generation"]isEqual:e[@"generation"]]
-            &&[[d.nativeViews desiredOwnerForWindow:window]isEqual:output]&&placement
-            &&[view[@"camera"]isEqual:outputNow[@"camera"]]&&[view[@"zoom"]isEqual:outputNow[@"zoom"]]
-            &&[view[@"screen_bounds"]isEqual:outputNow[@"screen_bounds"]];
-        BOOL sameTransaction=[t[@"transaction"]isEqual:e[@"transaction"]];
-        BOOL terminal=!sameTransaction||([t[@"pending_effect"]isEqual:NSNull.null]&&![t[@"uncertain_mutation"]boolValue]
-            &&([t[@"phase"]isEqual:@"complete"]||[t[@"phase"]isEqual:@"failed"]));
-        BOOL recoverable=!d.cleaning&&!d.sessionInactive&&d.native==presenter&&!presenter.ended&&d.nativeSessionEpoch==session
-            &&source&&!source.detached&&boundIdentity(source.identity,e[@"identity"]);
-        NSNumber *currentOutput=[d.nativeViews desiredOwnerForWindow:window];
-        BOOL restored=recoverable&&[presenter acknowledgedPlacementForWindow:window identity:source.identity generation:binding[@"generation"] output:currentOutput]!=nil;
-        return (DWNativeResizePresentationState){.valid=valid,.finished=terminal,.restored=restored,.recoverable=recoverable,.drained=terminal&&![d.resize hasNativeWorkForTransaction:e[@"transaction"]],
-            .screenRect=DWRectFromJSON(placement[@"screen_rect"]),.alpha=placement[@"alpha"]?[placement[@"alpha"]doubleValue]:1};
-    };
-    owner.retired=^{Desktop *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.nativeFillHandoff&&d.native==pr)pr.transitionFrameAcknowledged=nil;[d.resize retryAdmission];};
-    owner.render=^{Desktop *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.cleaning){[d render];if(d.native==pr)[pr submit];}};
-    owner.failed=^(NSString *reason){Desktop *d=weak;if(!d)return;
-        NSDictionary *t=DWTyped([d call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
-        if([t[@"transaction"]isEqual:weakOwner.effect[@"transaction"]])[d.resize cancel];
-        d.statusText=reason;fprintf(stderr,"%s\n",reason.UTF8String);[d render];};
-    [owner prepareEffect:effect ready:ready];
-}
-- (void)configureResize {
-    if(self.resize)return;
-    __weak Desktop *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.resize",DISPATCH_QUEUE_SERIAL);
-    DWNativeResizeDriver *driver=[DWNativeResizeDriver new];self.nativeResizeDriver=driver;
-    driver.nativeFill=self.nativeDesktopMode&&self.native!=nil;
-    driver.canPerform=^BOOL(NSDictionary *effect){
-        Desktop *d=weak;LiveSource *source=d.sources[effect[@"window"]];
-        if(!d||d.cleaning||d.sessionInactive||[d nativeUnavailable])return NO;
-        if(!source||source.detached||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return NO;
-        if([effect[@"op"]isEqual:@"resize_native_window"]&&(source.nativeVisibilityWanted||source.nativeVisibilityWriting||source.nativeMinimized))return NO;
-        // A worker may start after a newer handoff replaced its prepared read.
-        // Only the controller's still-pending effect can enter native code.
-        NSDictionary *transaction=DWTyped([d call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
-        if([DWNativeResizePresentation requiresBridgeForTransaction:transaction]
-            &&![d.nativeResizeLiveTransaction isEqual:effect[@"transaction"]]
-            &&![d.nativeResizePresentation allowsEffect:effect])return NO;
-        return [transaction[@"pending_effect"]isEqual:effect];
-    };
-    driver.fillReady=^DWNativeFillReadiness(NSDictionary *effect){
-        Desktop *d=weak;NSDictionary *held=d.nativeFillHandoff;
-        if(!held||d.nativeFillResuming||d.cleaning||d.sessionInactive||d.native.ended
-            ||![held[@"transaction"]isEqual:effect[@"transaction"]]||![held[@"generation"]isEqual:effect[@"generation"]]
-            ||!boundIdentity(held[@"identity"],effect[@"identity"]))return DWNativeFillPending;
-        if(![d nativeFillCurrent:held snapshot:[d call:@{@"op":@"snapshot"}]])return DWNativeFillPending;
-        if([held[@"bridge_failed"]boolValue])return DWNativeFillUnsupportedGeometry;
-        if(d.nativeFillRoot)return [d.native isTransitionHidden:d.nativeFillRoot]?DWNativeFillReadyForSnapshotFill:DWNativeFillPending;
-        if(![d.native isWindowWithheld:held[@"identity"]])return DWNativeFillPending;
-        // Fresh native/displayed geometry separates an aligned source, a
-        // translation-only rebase, and unsupported scaling. Missing evidence
-        // remains pending rather than authorizing an ordinary resize.
-        NSDictionary *who=held[@"identity"];LiveSource *source=d.sources[held[@"window"]];
-        if(!source||source.detached||!boundIdentity(source.identity,who))return DWNativeFillPending;
-        DWFocusIdentity target={.pid=[who[@"pid"]intValue],.window=[who[@"wid"]unsignedIntValue],.seconds=[who[@"birth_sec"]unsignedLongLongValue],.microseconds=[who[@"birth_usec"]unsignedLongLongValue]};
-        CGRect native,displayed,after;
-        if(!dw_focus_owner(target,&native))return DWNativeFillPending;
-        NSDictionary *row=windowInfo(target.window);
-        if([row[(id)kCGWindowOwnerPID]intValue]!=target.pid||!row[(id)kCGWindowBounds]
-            ||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)
-            ||!isfinite(displayed.origin.x)||!isfinite(displayed.origin.y)||!isfinite(displayed.size.width)||!isfinite(displayed.size.height)
-            ||displayed.size.width<=0||displayed.size.height<=0||!dw_focus_owner(target,&after)||!CGRectEqualToRect(native,after))return DWNativeFillPending;
-        BOOL aligned=fabs(native.origin.x-displayed.origin.x)<=1&&fabs(native.origin.y-displayed.origin.y)<=1
-            &&fabs(native.size.width-displayed.size.width)<=1&&fabs(native.size.height-displayed.size.height)<=1;
-        NSMutableDictionary *fresh=[held mutableCopy];fresh[@"native_baseline"]=DWRectJSON(native);fresh[@"displayed_baseline"]=DWRectJSON(displayed);d.nativeFillHandoff=fresh.copy;
-        if(DWDebugTrace())fprintf(stderr,"debug: native fill geometry window=#%s native=%g,%g %gx%g displayed=%g,%g %gx%g supported=%d\n",[held[@"window"]description].UTF8String,native.origin.x,native.origin.y,native.size.width,native.size.height,displayed.origin.x,displayed.origin.y,displayed.size.width,displayed.size.height,aligned);
-        BOOL sameExtent=fabs(native.size.width-displayed.size.width)<=1&&fabs(native.size.height-displayed.size.height)<=1;
-        return aligned?DWNativeFillReady:(sameExtent&&[d.native canRebaseWindow:who]?DWNativeFillNeedsRebase:DWNativeFillUnsupportedGeometry);
-    };
-    driver.restoreReady=^DWNativeFillReadiness(NSDictionary *effect){Desktop *d=weak;NSDictionary *held=d.nativeFillHandoff;
-        if([d.nativeFillRefusedTransactions containsObject:effect[@"transaction"]]||[d.nativeRestoreDeferred[@"effect"][@"transaction"]isEqual:effect[@"transaction"]])return DWNativeFillPending;
-        if(!held)return DWNativeFillUnsupportedGeometry;
-        if(d.nativeFillResuming||d.cleaning||d.sessionInactive||d.native.ended
-            ||![held[@"transaction"]isEqual:effect[@"transaction"]]||![held[@"generation"]isEqual:effect[@"generation"]]
-            ||!boundIdentity(held[@"identity"],effect[@"identity"]))return DWNativeFillPending;
-        if(![d nativeFillCurrent:held snapshot:[d call:@{@"op":@"snapshot"}]])return DWNativeFillPending;
-        if([held[@"bridge_failed"]boolValue]||!d.nativeFillRoot)return DWNativeFillUnsupportedGeometry;
-        // Keep the root hidden while qualified Restore clears AppKit's Fill
-        // state, then corrects the exact saved frame after native settlement.
-        // A frame setter alone leaves Fill active across display changes.
-        return [d.native isTransitionHidden:d.nativeFillRoot]?DWNativeFillReady:DWNativeFillPending;
-    };
-    driver.screenUpdates=^CGError(BOOL enabled){return DWNativeScreenUpdates(enabled);};
-    driver.fillRebase=^DWNativeFillRebase *(NSDictionary *effect){
-        Desktop *d=weak;NSDictionary *held=d.nativeFillHandoff,*who=held[@"identity"];
-        BOOL (^valid)(void)=^BOOL{Desktop *current=weak;NSDictionary *now=current.nativeFillHandoff;LiveSource *source=current.sources[effect[@"window"]];
-            return current&&!current.cleaning&&!current.sessionInactive&&!current.nativeFillResuming&&!current.native.ended
-                &&[now[@"transaction"]isEqual:effect[@"transaction"]]&&[now[@"generation"]isEqual:effect[@"generation"]]
-                &&boundIdentity(now[@"identity"],effect[@"identity"])&&source&&!source.detached&&boundIdentity(source.identity,who)
-                &&[current nativeFillCurrent:now snapshot:[current call:@{@"op":@"snapshot"}]];};
-        BOOL current=valid(),canRebase=current&&[d.native canRebaseWindow:who];
-        if(!current||!canRebase||!held[@"native_baseline"]||!held[@"displayed_baseline"]){
-            if(DWDebugTrace())fprintf(stderr,"debug: native fill rebase refused window=#%s current=%d can_rebase=%d baselines=%d\n",[effect[@"window"]description].UTF8String,current,canRebase,held[@"native_baseline"]!=nil&&held[@"displayed_baseline"]!=nil);
-            return nil;
-        }
-        // Re-audit the known root-only scope before taking an update hold.
-        NSString *familyWhy=nil;NSDictionary *family=DWNativeWindowFamily(who,&familyWhy);
-        if([family[@"members"]count]!=1){
-            if(DWDebugTrace())fprintf(stderr,"debug: native fill rebase refused window=#%s family_members=%lu reason=%s\n",[effect[@"window"]description].UTF8String,(unsigned long)[family[@"members"]count],familyWhy.UTF8String?:"family_not_root_only");
-            return nil;
-        }
-        DWNativeFillRebase *plan=[DWNativeFillRebase new];plan.native=DWRectFromJSON(held[@"native_baseline"]);plan.displayed=DWRectFromJSON(held[@"displayed_baseline"]);
-        plan.publish=^BOOL(CGRect observed,BOOL (^authorized)(void)){Desktop *current=weak;if(!valid())return NO;
-            NSDictionary *freshFamily=DWNativeWindowFamily(who,NULL);if([freshFamily[@"members"]count]!=1||!authorized())return NO;
-            if(![current.native rebaseWindow:who bounds:observed])return NO;
-            current.sources[effect[@"window"]].router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
-            [current render];return YES;};
-        plan.ready=^BOOL{Desktop *current=weak;if(!valid())return NO;[current render];
-            if(![current.native isWindowRebased:who])return NO;
-            DWFocusIdentity target={.pid=[who[@"pid"]intValue],.window=[who[@"wid"]unsignedIntValue],.seconds=[who[@"birth_sec"]unsignedLongLongValue],.microseconds=[who[@"birth_usec"]unsignedLongLongValue]};
-            CGRect native,displayed,after;NSDictionary *row=windowInfo(target.window);
-            return dw_focus_owner(target,&native)&&[row[(id)kCGWindowOwnerPID]intValue]==target.pid&&row[(id)kCGWindowBounds]
-                &&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)
-                &&dw_focus_owner(target,&after)&&CGRectEqualToRect(native,after)
-                &&fabs(native.origin.x-displayed.origin.x)<=1&&fabs(native.origin.y-displayed.origin.y)<=1
-                &&fabs(native.size.width-displayed.size.width)<=1&&fabs(native.size.height-displayed.size.height)<=1;};
-        plan.cancel=^{Desktop *current=weak;if(valid()){[current.native cancelRebaseWindow:who];[current render];}};
-        return plan;
-    };
-    // On the worker queue. The process named is the effect's, which the controller built from a source -attach: bound.
-    if(DWDebugTrace())driver.didPerform=^(NSDictionary *e,NSDictionary *r){NSDictionary *i=e[@"identity"],*asked=DWTyped(e[@"requested"],NSDictionary.class),*actual=r[@"actual_ax"][@"size"];
-        fprintf(stderr,"debug: native %s pid=%d wid=%u requested=%gx%g outcome=%s observed=%d actual=%gx%g moved=%d ax_error=%d attempted=%d transaction=%llu effect=%llu\n",((NSString *)DWTyped(r[@"method"],NSString.class)).UTF8String?:"size read",[i[@"pid"]intValue],[i[@"wid"]unsignedIntValue],[asked[@"width"]doubleValue],[asked[@"height"]doubleValue],[r[@"outcome"]description].UTF8String,[r[@"observed"]boolValue],[actual[@"width"]doubleValue],[actual[@"height"]doubleValue],[r[@"moved"]boolValue],[r[@"ax_error"]intValue],[r[@"mutation_attempted"]boolValue],[e[@"transaction"]unsignedLongLongValue],[e[@"effect_id"]unsignedLongLongValue]);};
-    self.resize=[[DWResizeCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak resizeCall:c];} driver:driver worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
-    self.resize.enabled=YES;
-    self.resize.beforeAdmission=^BOOL(NSDictionary *effect){Desktop *d=weak;DWNativeResizePresentation *owner=d.nativeResizePresentation;
-        return !owner.active||[owner.effect[@"transaction"]isEqual:effect[@"transaction"]];};
-    self.resize.prepare=^(NSDictionary *effect,void (^ready)(BOOL)){[weak prepareInteractiveResize:effect ready:ready];};
-    // Removal checks run at idle on every observation: a scalar read of the live transaction, not a snapshot. A failed query answers NO and canRemove: asks the command path.
-    self.resize.removalAllowed=^BOOL(NSNumber *window,BOOL *allowed){Desktop *d=weak;uint8_t ok=0;if(!d.controller||!driftwm_desktop_resize_removal_allowed(d.controller,window==nil,window.unsignedLongLongValue,&ok))return NO;*allowed=ok!=0;return YES;};
-
-    // Native readback (docs/crates/desktop/NATIVE_RESIZE.md): the size a window took is read back from it. Interactive
-    // top/left native drags independently hold a snapshot until final placement ACK. App-owned Fill separately holds placement/input until
-    // its native animation and a fresh helper ACK settle. An effect unanswered after three seconds is reported as timed out, which ends its
-    // transaction. When a transaction has ended, the window is looked at as the poll looks at it: its bounds, its stream's size
-    // and the controller's observation follow the size it has, or it is found closed. Then the scene is saved, once.
-    self.resize.timeout=3;
-    // A resize grab whose pointer rests owes no effect and is no orphan: its press, or its swipe, ends it (-released:at:, gesture_end),
-    // and a press or swipe whose end is lost is ended by -endLostInput.
-    self.resize.deferred=^BOOL(NSDictionary *effect){Desktop *d=weak;NSDictionary *deferred=d.nativeRestoreDeferred;
-        return [deferred[@"effect"]isEqual:effect]&&[d nativeRestoreDeferredCurrent:deferred snapshot:[d call:@{@"op":@"snapshot"}]];};
-    self.resize.held=^BOOL(NSNumber *transaction){Desktop *d=weak;for(DesktopView *view in d.views)if(view.gesture==4&&[view.resizeTransaction isEqual:transaction])return YES;return d.gestureOwner&&d.gestureResize;};
-    self.resize.changed=^{Desktop *d=weak;if(d.cleaning)return;if(d.resize.failure)d.statusText=d.resize.failure;
-        NSDictionary *transaction=DWTyped([d call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
-        if(transaction&&[d.resize canRemove:nil]&&!d.resize.obligations&&![d.resizeSavedTransaction isEqual:transaction[@"transaction"]]){d.resizeSavedTransaction=transaction[@"transaction"];
-            if(DWDebugTrace())fprintf(stderr,"debug: size transaction %s of #%s ended phase=%s\n",[transaction[@"transaction"]description].UTF8String,[transaction[@"window"]description].UTF8String,((NSString *)DWTyped(transaction[@"phase"],NSString.class)).UTF8String?:"?");
-            LiveSource *source=d.sources[transaction[@"window"]];if(source&&!source.detached)[d track:source];[d saveScene];}
-        [d updateNativeFill];[d render];};
-    [self resizeCapability];
-}
 // native_resize_capability: DriftWM's sizing actions, the IPC resize write, a rule's size and fullscreen reach a native window through
 // the resize coordinator, which every normal run has. main() says so before the config is read, since the binding table marks the
 // actions that run here and a chord whose action does not is never registered; the coordinator's creation says so again, after the
@@ -262,62 +57,12 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     NSString *status=self.statusText;
     if(![self call:@{@"op":@"native_resize_capability",@"enabled":@YES}]){fprintf(stderr,"native_resize_capability: %s\n",self.statusText.UTF8String);self.statusText=status;}
 }
-// Is the resize transaction on record one a sizing action began, and certain? That one is the controller's: an action or an IPC
-// request that arrives while it runs reaches the controller, which continues, coalesces or refuses it as upstream does for a
-// window that still owes a configure. A resize the pointer began holds the canvas until it settles, as does every uncertain one.
-- (BOOL)sizing {
-    if(!self.resize||!self.sizeTransaction)return NO;
-    NSDictionary *transaction=DWTyped([self call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
-    return [transaction[@"transaction"]isEqual:self.sizeTransaction]&&![transaction[@"uncertain_mutation"]boolValue];
-}
-// The resize coordinator's commands. The native result of a sizing action's transaction is answered with that action's
-// continuation: upstream's placement, camera and restore point for the size the window took, or why it took none. The reply
-// then gets the tail of an action's reply, on a later turn of the main queue, once the coordinator has consumed its next effect.
-// A result that ends its transaction, a pointer resize's included, can be answered with the first effect of another one: the size
-// transaction of the next window whose rule's size is still owed (docs/crates/desktop/RULES.md), which may be waiting behind a fullscreen's enter or
-// exit as behind any other. The coordinator performs it as it performs every effect a result reply carries; here the transaction
-// it names becomes the one -sizing knows as the controller's own, like the one an attach reply begins, so that a press or an
-// action does not cancel it and a msg request is not turned away for it. The effect that answers one of the controller's own
-// results inside the same transaction is the controller's too, and needs nothing: a fullscreen that is left before the window has
-// taken the output's size asks for the old size on the transaction it already has (docs/crates/desktop/FULLSCREEN.md), which -sizing still names.
-- (NSDictionary *)resizeCall:(NSDictionary *)command {
-    NSDictionary *reply=[self call:command];
-    if(!reply||![command[@"op"]isEqual:@"native_resize_result"])return reply;
-    NSDictionary *result=DWTyped(command[@"result"],NSDictionary.class);
-    if(self.native&&[result[@"observed"]boolValue]){
-        // Tracking skips a held resize grab. Refresh its native transform basis
-        // at this accepted completion, before consume: can render or queue another
-        // effect. The router and presenter have separate caches; always bind the
-        // accepted observation, once per readback, even if the router is current.
-        for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"]){
-            NSDictionary *source=DWTyped(window[@"source"],NSDictionary.class);LiveSource *live=self.sources[window[@"window"]];
-            if(!live||live.detached||!boundIdentity(live.identity,command[@"identity"])||!boundIdentity(live.identity,source[@"identity"])||![source[@"generation"]isEqual:command[@"generation"]]||![source[@"observation_known"]boolValue])continue;
-            CGRect observed=DWRectFromJSON(source[@"observed_rect"]),prior=CGRectZero;
-            if(!CGRectEqualToRect(observed,DWRectFromJSON(result[@"actual_ax"])))break;
-            if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)live.router.bounds,&prior)||!CGRectEqualToRect(prior,observed))live.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
-            CGRect native=DWRectFromJSON(result[@"actual_cg"]);
-            if(self.native.familiesNeeded){
-                NSDictionary *family=DWNativeWindowFamily(live.identity,NULL)?:@{};
-                native=DWResizePresentationNativeBounds(family,live.identity,native);
-                [self.native bound:live.identity bounds:native family:family];
-            }else [self.native bound:live.identity bounds:native];
-            break;
-        }
-    }
-    [self.nativeResizePresentation update];
-    BOOL own=self.sizeTransaction&&[command[@"transaction"]isEqual:self.sizeTransaction];
-    NSNumber *next=DWTyped(sizeEffect(reply)[@"transaction"],NSNumber.class);if(next&&![next isEqual:command[@"transaction"]])self.sizeTransaction=next;
-    if(!own)return reply;
-    NSMutableDictionary *tail=[reply mutableCopy];[tail removeObjectForKey:@"effect"];__weak Desktop *weak=self;
-    dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;if(!d||d.cleaning)return;NSString *failure=DWTyped(tail[@"failure"],NSString.class);if(failure)[d flashStatus:[@"Window not resized: " stringByAppendingString:failure]];[d applyReply:tail];});
-    return reply;
-}
 // The navigation coordinator's commands. An activation the user made natively may leave fullscreen, as upstream exits before it
 // activates another window of that output: the size transaction that takes the window back comes with the focus request and is
 // the resize coordinator's to perform, like any other. The coordinator reads "effect" as a focus request, so a size
 // transaction's is taken out of what it is handed, as in -applyReply:; no reply of its commands carried one before fullscreen.
 - (NSDictionary *)navigationCall:(NSDictionary *)command {
-    NSDictionary *reply=[self call:command],*sized=[self consumeSize:reply];if(!sized||reply[@"effect"]!=sized)return reply;
+    NSDictionary *reply=[self call:command],*sized=[self.sizeTransition consumeSize:reply];if(!sized||reply[@"effect"]!=sized)return reply;
     NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];return rest;
 }
 // Every normal run: the coordinator ticks camera flights, performs the controller's focus
@@ -473,15 +218,6 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 // A reply that began a native size transaction carries its effect: a sizing action's, an IPC resize's, a fullscreen's, or the attach
 // of a window whose rule names a size. It is the resize coordinator's to perform, which every run has.
 // The transaction the effect names is the one -sizing knows as the controller's own. Returns the effect, or nil.
-- (NSDictionary *)consumeSize:(NSDictionary *)reply {
-    NSDictionary *sized=sizeEffect(reply);
-    if(sized){
-        if(self.nativeRestoreDeferred&&![self.nativeRestoreDeferred[@"effect"]isEqual:sized])[self retireDeferredNativeRestore];
-        self.sizeTransaction=DWTyped(sized[@"transaction"],NSNumber.class);
-        if(![self deferNativeRestore:sized]){[self prepareNativeFill:sized];[self.resize consume:@{@"effect":sized}];}
-    }
-    return sized;
-}
 // Adapted from malbiruk/driftwm (https://github.com/malbiruk/driftwm) 352333a8fa1b22171492d4b71a54102045c9a19d, src/input/pointer.rs
 // (on_pointer_button's click-to-focus fallback: raise_and_focus, then the press is forwarded)
 // and src/state/navigation.rs (arm_click_navigate, resolve_click_navigate, fire_click_navigate).
@@ -509,7 +245,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     if(!timer||timer!=self.nativeTitleClickTimer)return;
     NSDictionary *click=self.nativeTitleClick;[self cancelNativeTitleClick];
     LiveSource *source=self.sources[click[@"window"]];
-    if(!click||!source||source.detached||self.cleaning||self.sessionInactive||[self nativeUnavailable]||self.nativeFillHandoff
+    if(!click||!source||source.detached||self.cleaning||self.sessionInactive||[self nativeUnavailable]||self.sizeTransition.fillHandoff
         ||[click[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch||!boundIdentity(source.identity,click[@"identity"])
         ||![birth(source.router.pid)isEqual:source.router.processBirth]
         ||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:click[@"output"]])return;

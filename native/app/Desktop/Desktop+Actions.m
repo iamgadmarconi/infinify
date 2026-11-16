@@ -78,7 +78,7 @@
 - (dispatch_block_t)standInEnter {
     if(self.cleaning||self.sessionInactive||[self nativeUnavailable]||!NSApp.active
         ||!self.standinKeyboardPanel.isKeyWindow||NSApp.keyWindow!=self.standinKeyboardPanel
-        ||![self.panels containsObject:self.standinKeyboardPanel]||NSEvent.pressedMouseButtons||self.gestureOwner||self.magnifying||self.trackpad.engaged||self.nativeFillHandoff)return nil;
+        ||![self.panels containsObject:self.standinKeyboardPanel]||NSEvent.pressedMouseButtons||self.gestureOwner||self.magnifying||self.trackpad.engaged||self.sizeTransition.fillHandoff)return nil;
     for(DesktopView *view in self.views)if(view.gesture||view.pressedSource)return nil;
     for(LiveSource *source in self.sources.allValues)if(source.nativeMouseOwnership)return nil;
     NSDictionary *standin=DWFocusedStandIn([self call:@{@"op":@"snapshot"}]);
@@ -112,10 +112,10 @@
     return ^{Desktop *d=weak;if(!d||![[d nativeWindowControlIntent]isEqual:intent])return;
         LiveSource *source=d.sources[intent[@"window"]];
         NSDictionary *focus=DWTyped([d call:@{@"op":@"snapshot"}][@"focus"],NSDictionary.class);
-        if(DWTyped(focus[@"pending_effect"],NSDictionary.class)||d.nativeFillHandoff||source.nativeMouseOwnership||d.nativeOwnershipTransfer||d.nativeHoverTransfer
+        if(DWTyped(focus[@"pending_effect"],NSDictionary.class)||d.sizeTransition.fillHandoff||source.nativeMouseOwnership||d.nativeOwnershipTransfer||d.nativeHoverTransfer
             ||d.nativeGestureView||d.nativeScrollView||d.nativeMagnifyView||d.pointerGrab.active||d.gestureOwner||d.magnifying
             ||d.trackpad.engaged||d.globalGestureContact||d.globalTrackpad.ownsTouches||d.globalTrackpad.hasNativeMousePress
-            ||NSEvent.pressedMouseButtons||[[d.resize busyWindow]isEqual:source.logical])return;
+            ||NSEvent.pressedMouseButtons||[[d.sizeTransition busyWindow]isEqual:source.logical])return;
         for(DesktopView *view in d.views)if(view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab)return;
         NSString *name=nil;
         switch(action){
@@ -177,7 +177,7 @@
     // Upstream's go-to-bookmark is silent on an unset name, so the bookmark table is asked first.
     NSString *name=[action hasPrefix:@"go-to-bookmark "]?[action substringFromIndex:15]:nil;
     // The question is an ipc reply like any other: a size transaction the controller began with it, the size a fullscreen exit still owed its window, is performed.
-    NSDictionary *known=name?[self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}]:nil;[self consumeSize:known];
+    NSDictionary *known=name?[self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}]:nil;[self.sizeTransition consumeSize:known];
     BOOL unset=name&&!DWTyped(known[@"reply"],NSDictionary.class)[@"Ok"];
     NSMutableDictionary *command=[(tap?@{@"op":@"tap",@"modifiers":tap,@"output":output}:corner?@{@"op":@"hot_corner",@"output":output,@"corner":corner}:@{@"op":@"action",@"output":output,@"action":action})mutableCopy];
     command[@"pointer"]=pointJSON(point);command[@"held"]=held?@YES:@NO;

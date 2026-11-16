@@ -26,7 +26,7 @@
 // the shell owns: quit, exec, a config reload, a pointer warp, a keyboard layout switch,
 // a window's close button and the launch of a stand-in's application.
 - (void)applyReply:(NSDictionary *)reply {
-    NSDictionary *sized=[self consumeSize:reply];
+    NSDictionary *sized=[self.sizeTransition consumeSize:reply];
     // The navigation coordinator reads "effect" as a focus request. A reply that lists "effects" keeps its focus request there:
     // its "effect" is a size transaction's, or null without one, and is kept from that reading. The one reply whose "effect" stays
     // a focus request beside a size transaction is the attach's shape, the transaction as an entry of "effects": an activation or a
@@ -104,7 +104,7 @@
 }
 - (BOOL)loadScene:(NSString *)path {
     [self.sceneWriter drain];
-    [self cancelNavigation];[self.resize cancel];if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize must settle before loading";return NO;}
+    [self cancelNavigation];[self.sizeTransition cancel];if(self.sizeTransition&&![self.sizeTransition canRemove:nil]){self.statusText=@"Resize must settle before loading";return NO;}
     self.statePath=path;
     if(![NSFileManager.defaultManager fileExistsAtPath:path])return YES;
     if([self call:@{@"op":@"load",@"path":path}])return YES;
@@ -130,14 +130,14 @@
 - (void)poll {
     [self.session poll]; // blocked startup/early wake retries before the inactive early return
     [self updateNativeMouseOwners];
-    [self updateNativeFill];
+    [self.sizeTransition updateNativeFill];
     [self updateNativeVisibility];
     if(self.cleaning||self.sessionInactive)return;
     [self resumeNative];
     if([self nativeUnavailable]){
         // Registered receipts/watchdogs run on main independently of this poll.
         // Keep orphan settlement too, without allowing new input or camera work.
-        if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.resize reap];}
+        if(self.sizeTransition&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.sizeTransition reap];}
         return;
     }
     BOOL timing=self.scope&&getenv("INFINIFY_DEBUG")&&atoi(getenv("INFINIFY_DEBUG"))==1;
@@ -148,7 +148,7 @@
     NSNumber *focused=DWTyped(focus[@"intent"],NSNumber.class);
     if(self.native&&focused)[self refreshNativeButtons:self.sources[focused]];
     if(self.nativeButtonHover&&(!self.native||![self.nativeButtonHover isEqual:focused]))[self refreshNativeButtons:self.sources[self.nativeButtonHover]];
-    if(self.resize&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.resize reap];}
+    if(self.sizeTransition&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.sizeTransition reap];}
     [self endLostInput];
     [self watchCorners];
     if(timing)stages[1]=CACurrentMediaTime();

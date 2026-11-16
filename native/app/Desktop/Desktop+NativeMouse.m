@@ -72,13 +72,13 @@ static uint64_t DWClickRevertToken;
     [self.navigation cancelNativeClick];
     [self cancelNativeTitleClick];
     if(!event||buttons.count!=1||![buttons containsIndex:0]||CGEventGetType(event)!=kCGEventLeftMouseDown
-        ||self.cleaning||self.sessionInactive||!self.native||self.native.ended||self.nativeFillHandoff)return;
+        ||self.cleaning||self.sessionInactive||!self.native||self.native.ended||self.sizeTransition.fillHandoff)return;
     CGWindowID wid=(CGWindowID)CGEventGetIntegerValueField(event,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
     if(!wid)wid=(CGWindowID)CGEventGetIntegerValueField(event,kCGMouseEventWindowUnderMousePointer);
     source=[self nativeSource:wid at:CGEventGetLocation(event)];
     // INFINIFY_DEBUG: a native press no managed window owns is left entirely to the application and WindowServer, so say why.
     if(!source){if(DWDebugTrace())fprintf(stderr,"debug: native press unowned wid=%u reason=no_source root=%d\n",wid,[self.native rootWindowFor:wid].intValue);return;}
-    if([[self.resize busyWindow]isEqual:source.logical]||[self grabbed:source]
+    if([[self.sizeTransition busyWindow]isEqual:source.logical]||[self grabbed:source]
         ||self.nativeOwnershipTransfer||self.nativeHoverTransfer||[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]){
         if(DWDebugTrace())fprintf(stderr,"debug: native press unowned window=#%s reason=busy_or_admission\n",source.logical.description.UTF8String);return;}
     NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*record=nil,*view=nil,*planned=nil;NSNumber *output=[self.nativeViews desiredOwnerForWindow:source.logical];
@@ -137,7 +137,7 @@ static uint64_t DWClickRevertToken;
         if(DWDebugTrace()&&held&&![held[@"takeover_refused"]isEqual:@(reason)]){held[@"takeover_refused"]=@(reason);fprintf(stderr,"debug: native takeover declined window=#%s reason=%s\n",source.logical.description.UTF8String,reason);}
         return NO;};
     if(!held)return NO;
-    if([held[@"taken"]boolValue]||![held[@"root"]boolValue]||!self.nativeInput||self.cleaning||self.sessionInactive||!self.native||self.native.ended||self.nativeFillHandoff
+    if([held[@"taken"]boolValue]||![held[@"root"]boolValue]||!self.nativeInput||self.cleaning||self.sessionInactive||!self.native||self.native.ended||self.sizeTransition.fillHandoff
         ||source.detached||!boundIdentity(source.identity,held[@"identity"])||[held[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch)return no("state");
     CGPoint start=jsonPoint(held[@"click_start"]);
     CGRect first=DWRectFromJSON(held[@"initial_native"]),drawn=held[@"planned_screen"]?DWRectFromJSON(held[@"planned_screen"]):DWRectFromJSON(held[@"initial_screen"]),native;
@@ -149,7 +149,7 @@ static uint64_t DWClickRevertToken;
     for(DesktopView *candidate in self.views)if([[candidate outputAt:start]isEqual:output]){view=candidate;break;}
     if(early)held[@"early_tried"]=@YES;
     if(!view||view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab||self.nativeGestureView||self.nativeOwnershipTransfer||self.nativeHoverTransfer
-        ||[[self.resize busyWindow]isEqual:source.logical]||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return no("view_state");
+        ||[[self.sizeTransition busyWindow]isEqual:source.logical]||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return no("view_state");
     NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*record=nil,*pose=nil;
     for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:source.logical]){record=row;break;}
     for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){pose=row;break;}
@@ -226,7 +226,7 @@ static uint64_t DWClickRevertToken;
         if(physical){[held removeObjectForKey:@"released"];[held removeObjectForKey:@"stable_since"];continue;}
         if(!held[@"released"]){if(now-[held[@"last_packet"]doubleValue]<.05)continue;held[@"released"]=@(now);if(self.nativeMouseOwner==source)self.nativeMouseOwner=nil;}
         if(source.detached||!boundIdentity(source.identity,held[@"identity"])||![birth(source.router.pid)isEqual:source.router.processBirth]){[self finishNativeMouseOwner:source reason:@"identity changed"];continue;}
-        if([[self.resize busyWindow]isEqual:source.logical])continue;
+        if([[self.sizeTransition busyWindow]isEqual:source.logical])continue;
         CGRect native,after,screen;NSDictionary *row=windowInfo(source.router.wid);
         if(!row||![row[(id)kCGWindowIsOnscreen]boolValue]){
             source.nativeMouseAdopting=YES;@try{[self track:source info:row];}@finally{source.nativeMouseAdopting=NO;}

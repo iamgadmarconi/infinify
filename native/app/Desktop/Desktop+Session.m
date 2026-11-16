@@ -12,7 +12,7 @@
 }
 // A size transaction of the controller's own is left to run: the quit action ends a fullscreen first, and its reply carries the
 // transaction that hands the window its size back. -cleanup performs it to its end, then shuts the coordinator down as before.
-- (void)quit:(id)sender { (void)sender;if(![self sizing])[self.resize shutdown];[self stopNavigation];DWStopSignal=1; }
+- (void)quit:(id)sender { (void)sender;if(![self.sizeTransition sizing])[self.sizeTransition shutdown];[self stopNavigation];DWStopSignal=1; }
 // The saved world and its cameras need no capture: placeholders, navigation and
 // view actions work before any source is chosen or any privacy grant exists.
 // A normal run's takeover of Stage Manager and window tiling (DWSystemTakeover.m): its own stderr line says what changed. Idempotent.
@@ -35,16 +35,16 @@
 // state and drain the existing helper. Outputs and world geometry stay in place.
 - (BOOL)nativeUnavailable { return self.native&&(self.native.ended||self.nativeResumeWanted||self.nativeRestoring||self.nativeResumeInFlight); }
 - (void)suspendPresentationLeavingSession:(BOOL)leaving {
-    self.nativeResizePresentation.retired=nil; // teardown must not admit a waiting next transaction
-    [self.nativeResizePresentation cancel];
-    [self clearNativeFillPresentation];
+    [self.sizeTransition cancelPresentationForSessionDeparture]; // teardown must not admit a waiting next transaction
+    [self.sizeTransition cancelPresentation];
+    [self.sizeTransition clearNativeFillPresentation];
     self.compositor.nativeMenuBackground=NO;
     self.nativeMouseOwner=nil;
     for(LiveSource *source in self.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.observationEpoch;}
     [self cancelCapturedInputForWindow:nil];
     [self cancelGestures];[self cancelNativeInput];[self.panLaunch cancel];
     for(DesktopView *view in self.views){view.scrollPan=nil;view.scrollPanTime=0;view.lastScrollPan=0;if(view.gesture){view.clearsFocus=NO;view.lastDragPan=0;[view released:view.lastPoint at:NSProcessInfo.processInfo.systemUptime];}}
-    if(![self sizing])[self.resize cancel];
+    if(![self.sizeTransition sizing])[self.sizeTransition cancel];
     [self.navigation invalidate];self.navigation.enabled=NO;
     [self.frameDriver invalidate];self.frameDriver=nil;self.frameFlying=NO;self.flying=NO;self.pointerWanted=NO;
     // Held input is cancelled first; departure is inactive before any native
@@ -170,19 +170,19 @@
 // ipc request carries a size still owed. A resize the pointer began is cancelled first; the controller's own finishes. Bounded: an
 // unanswered or uncertain resize is left to the shutdown that follows, and the scene then saves the size the window has.
 - (void)endFullscreens {
-    if(!self.resize)return;
-    if(![self sizing])[self.resize cancel];
+    if(!self.sizeTransition)return;
+    if(![self.sizeTransition sizing])[self.sizeTransition cancel];
     CFTimeInterval deadline=CACurrentMediaTime()+3;
     for(int step=0;step<16;step++){
-        while((self.resize.obligations||![self.resize canRemove:nil])&&CACurrentMediaTime()<deadline){self.statusText=@"Quit pending: waiting for native resize result";[self render];DWDesktopPump(.01);}
-        if(self.resize.obligations||![self.resize canRemove:nil])return;
+        while((self.sizeTransition.obligations||![self.sizeTransition canRemove:nil])&&CACurrentMediaTime()<deadline){self.statusText=@"Quit pending: waiting for native resize result";[self render];DWDesktopPump(.01);}
+        if(self.sizeTransition.obligations||![self.sizeTransition canRemove:nil])return;
         NSArray *outputs=asArray([self call:@{@"op":@"snapshot"}][@"outputs"]);NSNumber *held=nil;
         for(id o in outputs)if(DWTyped(DWTyped(o,NSDictionary.class)[@"fullscreen"],NSDictionary.class)){held=DWTyped(DWTyped(o,NSDictionary.class)[@"id"],NSNumber.class);break;}
         NSNumber *output=held?:DWTyped(DWTyped(outputs.firstObject,NSDictionary.class)[@"id"],NSNumber.class);if(!output)return;
         NSString *status=self.statusText;
         NSDictionary *reply=[self call:held?@{@"op":@"action",@"output":held,@"action":@"toggle-fullscreen"}:@{@"op":@"ipc",@"output":output,@"request":@"State"}];
         if(!reply){self.statusText=status;return;}
-        if(![self consumeSize:reply]&&!held)return;
+        if(![self.sizeTransition consumeSize:reply]&&!held)return;
     }
 }
 - (void)cleanup {
@@ -191,7 +191,7 @@
     self.compositor.nativeMenuBackground=NO;
     [self stopMacWallpapers];
     [self cancelCapturedInputForWindow:nil];
-    self.cleaning=YES;[self.nativeResizePresentation cancel];[self clearNativeFillPresentation];[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
+    self.cleaning=YES;[self.sizeTransition cancelPresentation];[self.sizeTransition clearNativeFillPresentation];[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
     self.nativeMouseOwner=nil;
     for(LiveSource *source in self.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.observationEpoch;}
     [self.nativeFamilies reset];self.nativeFamilies=nil;self.nativeViewSnapshot=nil;self.nativeOwnerSnapshot=nil;self.nativeViewPresenter=nil;self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
@@ -216,11 +216,11 @@
     // Nor a tracking area or a pending hover: cleanup keeps handling events while it waits for streams.
     for(DesktopView *view in self.views)[view.hover stop];
     [self endFullscreens];
-    [self.resize shutdown];[self stopNavigation];
+    [self.sizeTransition shutdown];[self stopNavigation];
     // Effects are answered within the watchdog's three seconds; shutdown still has a five-second bound.
     CFTimeInterval drained=CACurrentMediaTime()+5;
-    while(self.resize.obligations&&CACurrentMediaTime()<drained){self.statusText=@"Quit pending: waiting for native resize result";[self render];DWDesktopPump(.01);}
-    if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize uncertainty remains unresolved at shutdown";fprintf(stderr,"%s\n",self.statusText.UTF8String);}
+    while(self.sizeTransition.obligations&&CACurrentMediaTime()<drained){self.statusText=@"Quit pending: waiting for native resize result";[self render];DWDesktopPump(.01);}
+    if(self.sizeTransition&&![self.sizeTransition canRemove:nil]){self.statusText=@"Resize uncertainty remains unresolved at shutdown";fprintf(stderr,"%s\n",self.statusText.UTF8String);}
     [self saveScene];
     for(DesktopView *view in self.views)[view releasePressed];
     NSArray *closing=self.sources.allValues;
@@ -234,12 +234,12 @@
     CFTimeInterval stopDeadline=CACurrentMediaTime()+2;
     while(self.pendingStops.count&&CACurrentMediaTime()<stopDeadline){self.statusText=@"Shutdown pending: waiting for capture streams";DWDesktopPump(.01);}
     if(self.pendingStops.count){self.captureStopsTimedOut=self.pendingStops.count;fprintf(stderr,"Infinify: %lu capture stops did not complete within 2 s; detached callbacks are ignored during process exit\n",(unsigned long)self.captureStopsTimedOut);[self.pendingStops removeAllObjects];}
-    for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}
+    for(DesktopView *view in self.views)for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.sizeTransition consume:reply];}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}[self.panels removeAllObjects];[self.views removeAllObjects];
     // Every compositor layer, kept pixel buffer and background program goes with the panels.
     [self.compositor reset];self.compositor=nil;self.backgroundNote=nil;
     [self stopKeys];self.canvasKeysOffered=NO;
-    if(!self.sources.count)self.resize=nil;
+    if(!self.sources.count)self.sizeTransition=nil;
     [self putBackWindowSettings];
 }
 @end

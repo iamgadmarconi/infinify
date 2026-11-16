@@ -111,7 +111,7 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     if(!self.native||!snapshot)return nil;
     if(!self.nativeViews)self.nativeViews=[DWNativeViews new];
     BOOL enabled=!self.native.ended&&!self.sessionInactive&&!self.cleaning&&self.panels.count;
-    if(self.nativeViewSnapshot==snapshot&&self.nativeViewPresenter==self.native&&self.nativeViewFamilyRevision==self.nativeFamilyRevision&&self.nativeViewEnabled==enabled&&self.nativeViewTransferRevision==self.nativeViews.transferRevision&&self.nativeViews.presentationSnapshot)return enabled?[self nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
+    if(self.nativeViewSnapshot==snapshot&&self.nativeViewPresenter==self.native&&self.nativeViewFamilyRevision==self.nativeFamilyRevision&&self.nativeViewEnabled==enabled&&self.nativeViewTransferRevision==self.nativeViews.transferRevision&&self.nativeViews.presentationSnapshot)return enabled?[self.sizeTransition nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
     NSMutableDictionary *bound=[NSMutableDictionary dictionary],*families=[NSMutableDictionary dictionary];
     if(enabled)for(LiveSource *source in self.sources.allValues)if(!source.detached){bound[source.logical]=source.identity;if(source.nativeFamily)families[source.logical]=source.nativeFamily;}
     self.nativeOwnerSnapshot=[self.nativeViews describe:snapshot bound:bound families:families];
@@ -125,7 +125,7 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     // Preserve the already visible native background until the picture covers
     // its final extent. Recheck this uncached, presenter-only coverage on every
     // description; it creates no controller hit site or input authority.
-    return enabled?[self nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
+    return enabled?[self.sizeTransition nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
 }
 - (NSDictionary *)visualSnapshot { return self.controllerVisualSnapshot?:[self call:@{@"op":@"snapshot"}]; }
 - (NSDictionary *)presentationSnapshot {
@@ -141,8 +141,8 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     [self nativeDescription:snapshot];return self.nativeViews.presentationSnapshot?:snapshot;
 }
 - (void)render {
-    [self.nativeResizePresentation update];
-    [self updateNativeFill];
+    [self.sizeTransition updatePresentation];
+    [self.sizeTransition updateNativeFill];
     NSDictionary *snapshot=[self visualSnapshot];
     NSDictionary *nativeSnapshot=[self nativeDescription:snapshot];
     NSDictionary *presentation=self.native?(self.nativeViews.presentationSnapshot?:snapshot):[self presentationSnapshot];
@@ -476,7 +476,7 @@ static BOOL screensHidden(void) {
     NSArray<NSString *> *refused=[self startKeys];self.canvasKeysOffered=YES;if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];
     // The status note names one: every chord macOS refused is named on stderr, as a reload names them.
     for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];
-    [self configureResize];[self configureNavigation];
+    if(!self.sizeTransition)self.sizeTransition=[[DWSizeTransition alloc]initWithDesktop:self];[self configureNavigation];
     // Capture overlays retain their Screen Recording gate. Authenticated native
     // presentation discovers metadata without asking for pictures or permission.
     // It says why; a more specific problem already in the resting status keeps its place there.
@@ -502,7 +502,7 @@ static BOOL screensHidden(void) {
     for(NSDictionary *output in snapshot[@"outputs"]){NSNumber *identifier=DWTyped(output[@"id"],NSNumber.class);if(!identifier)continue;
         CGRect usable=outputUsableRect(DWRectFromJSON(output[@"screen_bounds"]));NSDictionary *local=DWRectJSON(usable);
         if([DWTyped(contexts[identifier.stringValue],NSDictionary.class)[@"usable_rect_local"]isEqual:local])continue;
-        NSDictionary *reply=[self call:@{@"op":@"set_usable_area",@"output":identifier,@"usable_rect_local":local}];if(reply&&!reply[@"error"]){[self consumeSize:reply];changed=YES;}
+        NSDictionary *reply=[self call:@{@"op":@"set_usable_area",@"output":identifier,@"usable_rect_local":local}];if(reply&&!reply[@"error"]){[self.sizeTransition consumeSize:reply];changed=YES;}
     }
     if(changed)[self render];
 }
@@ -533,7 +533,7 @@ static BOOL screensHidden(void) {
     // A pan waiting to launch belongs to an output about to be removed, and so do a hover waiting to be sent and a policy press.
     [self.panLaunch cancel];self.pointerOutputs=nil;self.pointerWanted=NO;
     for(DesktopView *view in self.views)[view.hover stop];
-    for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.resize consume:reply];}}
+    for(DesktopView *view in self.views){[view releasePressed];for(NSNumber *output in view.outputs){NSDictionary *reply=[self call:@{@"op":@"remove_output",@"output":output}];[self.sizeTransition consume:reply];}}
     for(NSPanel *panel in self.panels){[panel orderOut:nil];[panel close];}
     [self.panels removeAllObjects];[self.views removeAllObjects];
     // The outputs' compositor layers went with the panels; the rebuilt ones get new layers.

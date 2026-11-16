@@ -34,9 +34,9 @@
     source.nativeVisibilityStable=nil;source.nativeVisibilityRestore=nil;
     source.observationToken=++self.observationEpoch;[source invalidateNativeButtons];
     [self cancelNativeHoverForWindow:source.logical];[self cancelCapturedInputForWindow:source.logical];
-    [self interruptFillForVisibility:source];
-    if([[self.resize busyWindow]isEqual:source.logical])[self.resize cancel];
-    if(self.native&&!self.nativeFillHandoff&&![[self.resize busyWindow]isEqual:source.logical]
+    [self.sizeTransition interruptFillForVisibility:source];
+    if([[self.sizeTransition busyWindow]isEqual:source.logical])[self.sizeTransition cancel];
+    if(self.native&&!self.sizeTransition.fillHandoff&&![[self.sizeTransition busyWindow]isEqual:source.logical]
         &&[self.native withholdWindow:source.identity])source.nativeVisibilityHeld=YES;
     self.nativeViewSnapshot=nil;self.discoveryWanted=YES;[self wantWindowAudit:NO pid:0 logical:source.logical];[self render];[self requestWindowObservation];
 }
@@ -67,7 +67,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
             }
             // A Fill exit owns the same withhold/resume mechanism. Finish it,
             // including its helper ACK, before handing this window to AppKit.
-            if(self.nativeFillHandoff||![self.resize canRemove:source.logical]||source.nativeMouseOwnership)continue;
+            if(self.sizeTransition.fillHandoff||![self.sizeTransition canRemove:source.logical]||source.nativeMouseOwnership)continue;
             if(![self.native withholdWindow:source.identity])continue;
             source.nativeVisibilityHeld=YES;
             if(![self.native isWindowWithheld:source.identity]){[self render];continue;}
@@ -76,7 +76,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
             __weak Desktop *weak=self;__weak LiveSource *live=source;
             BOOL (^valid)(void)=^BOOL{Desktop *d=weak;LiveSource *s=live;
                 return d&&s&&s.nativeVisibilityEffect==effect&&[d visibilityTicketCurrent:effect source:s]
-                    &&[effect[@"revision"]unsignedLongLongValue]==s.nativeVisibilityRevision&&CACurrentMediaTime()<[effect[@"deadline"]doubleValue]&&!d.nativeFillHandoff&&[d.resize canRemove:s.logical]
+                    &&[effect[@"revision"]unsignedLongLongValue]==s.nativeVisibilityRevision&&CACurrentMediaTime()<[effect[@"deadline"]doubleValue]&&!d.sizeTransition.fillHandoff&&[d.sizeTransition canRemove:s.logical]
                     &&[d.native isWindowWithheld:s.identity];};
             NSDictionary *identity=source.identity;
             DWFocusIdentity selected={.pid=[identity[@"pid"]intValue],.window=[identity[@"wid"]unsignedIntValue],.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
@@ -95,12 +95,12 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
         }
         NSDictionary *restore=source.nativeVisibilityRestore;if(!restore)continue;
         if(![self visibilityTicketCurrent:restore source:source]||[restore[@"revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision){source.nativeVisibilityRestore=nil;continue;}
-        if(self.nativeFillHandoff||source.nativeVisibilityWanted||source.nativeVisibilityWriting)continue;
+        if(self.sizeTransition.fillHandoff||source.nativeVisibilityWanted||source.nativeVisibilityWriting)continue;
         NSNumber *output=[self.nativeViews desiredOwnerForWindow:source.logical];
         DWNativeAppliedPlacement *receipt=output?[self.native acknowledgedPlacementForWindow:source.logical identity:source.identity generation:restore[@"generation"] output:output]:nil;
         BOOL ready=output?(receipt&&[self.native isAcknowledgedPlacementCurrent:receipt]):[self.native isParkingAcknowledgedForWindow:source.logical identity:source.identity generation:restore[@"generation"]];
         if(!ready)continue;
-        if(![self.resize canRemove:source.logical])continue;
+        if(![self.sizeTransition canRemove:source.logical])continue;
         NSDictionary *binding=[self visibilityBinding:source];
         if([binding[@"visibility"]isEqual:@"restoring"]){
             NSDictionary *reply=[self call:@{@"op":@"source_visible",@"window":source.logical,@"identity":source.identity,@"generation":restore[@"generation"],@"visibility_revision":restore[@"visibility_revision"]}];
@@ -120,7 +120,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
     NSDictionary *request=observation.request;
     if(!request[@"visibility_revision"]||[request[@"visibility_revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision||!source.nativeVisibilityWanted)return;
     source.nativeVisibilityRetryAt=CACurrentMediaTime()+.1;
-    if(!observation.minimized||self.nativeFillHandoff||![self.resize canRemove:source.logical]||source.nativeVisibilityWriting)return;
+    if(!observation.minimized||self.sizeTransition.fillHandoff||![self.sizeTransition canRemove:source.logical]||source.nativeVisibilityWriting)return;
     BOOL minimized=observation.minimized.boolValue;
     NSDictionary *binding=[self visibilityBinding:source];if(!binding)return;
     if(!minimized){

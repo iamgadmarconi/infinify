@@ -73,16 +73,16 @@
     BOOL fillScrollEnd=((fillScroll.phase|fillScroll.momentumPhase)&NSEventPhaseCancelled)||(fillScroll.momentumPhase&NSEventPhaseEnded);
     if(fillScrollPhased&&fillScrollBegin)self.nativeFillBlockedScroll=NO;
     if(fillScrollPhased&&self.nativeFillBlockedScroll){if(fillScrollEnd)self.nativeFillBlockedScroll=NO;return YES;}
-    if(self.nativeFillHandoff&&(fillDown||type==kCGEventScrollWheel)){
+    if(self.sizeTransition.fillHandoff&&(fillDown||type==kCGEventScrollWheel)){
         CGWindowID recipient=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
         if(!recipient)recipient=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer);
         NSNumber *root=[self.native rootWindowFor:recipient];
-        BOOL held=[root isEqual:self.nativeFillHandoff[@"identity"][@"wid"]];
+        BOOL held=[root isEqual:self.sizeTransition.fillHandoff[@"identity"][@"wid"]];
         // Retained background windows are visual coverage only. Their current
         // fullscreen scene has no input site, so consume the complete pair.
-        for(NSDictionary *placement in self.nativeFillHandoff[@"background"][@"placements"]){
+        for(NSDictionary *placement in self.sizeTransition.fillHandoff[@"background"][@"placements"]){
             LiveSource *live=self.sources[placement[@"window"]];
-            if(live&&!live.detached&&[placement[@"output"]isEqual:self.nativeFillHandoff[@"output"]]
+            if(live&&!live.detached&&[placement[@"output"]isEqual:self.sizeTransition.fillHandoff[@"output"]]
                 &&boundIdentity(placement[@"source"][@"identity"],live.identity)&&[root isEqual:live.identity[@"wid"]])held=YES;
         }
         for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==recipient)held=YES;

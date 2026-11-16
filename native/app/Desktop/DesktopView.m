@@ -205,7 +205,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 }
 - (BOOL)forwardCaptured:(CGEventRef)e at:(CGPoint)p output:(NSNumber *)output expected:(NSDictionary *)expected {
     BOOL native=self.desktop.native!=nil;
-    if(self.desktop.nativeFillHandoff)return NO;
+    if(self.desktop.sizeTransition.fillHandoff)return NO;
     if(self.desktop.native.ended||self.desktop.sessionInactive||self.desktop.cleaning)return NO;
     if(!e||!output)return NO;
     if(DWNativeTabletEvent(e)){
@@ -270,7 +270,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 // raised and focused, and the refusal is shown in the controller's words.
 - (void)beginResize:(NSNumber *)window edges:(NSString *)edges snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output {
     NSMutableDictionary *command=[@{@"op":@"begin_native_resize",@"window":window,@"output":output,@"start_screen":pointJSON(p),@"group":snapped?@YES:@NO}mutableCopy];if(edges)command[@"edges"]=edges;
-    NSString *status=self.desktop.statusText;NSDictionary *reply=[self.desktop.resize request:command];
+    NSString *status=self.desktop.statusText;NSDictionary *reply=[self.desktop.sizeTransition request:command];
     if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;[self.desktop resizeFocus:reply];
         if(DWDebugTrace()){NSDictionary *t=DWTyped([self.desktop call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);fprintf(stderr,"debug: resize grab transaction=%s window=#%s edges=%s group=%d ratio=%d\n",[t[@"transaction"]description].UTF8String,window.description.UTF8String,((NSString *)DWTyped(t[@"edges"],NSString.class)).UTF8String?:"?",[DWTyped(t[@"group"],NSNumber.class)boolValue],DWTyped(t[@"ratio"],NSNumber.class)!=nil);}
         return;}
@@ -307,7 +307,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 // for the held modifiers in the window or canvas context, else the native window
 // under the pointer. An unbound press on empty canvas means nothing to upstream either.
 - (void)press:(NSEvent *)e button:(NSInteger)button hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output {
-    if(self.desktop.nativeFillHandoff)return;
+    if(self.desktop.sizeTransition.fillHandoff)return;
     NSArray<NSString *> *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];LiveSource *source=hit?self.desktop.sources[hit[@"window"]]:nil;self.lastScrollPan=0;self.clearsFocus=NO;
     // One lookup says all of it: the binding, or nil for none, for one the window under the pointer claims by its pass_mouse rule, and
     // over a pick target for a button whose modifiers are not held. A pick target claims nothing; a pinned window is never one, and keeps
@@ -417,7 +417,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         if(self.resizeTransaction){
             if(CGPointEqualToPoint(p,self.lastPoint))return;
             NSString *status=self.desktop.statusText;
-            if([self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}]){
+            if([self.desktop.sizeTransition request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}]){
                 // Success is consumed synchronously: resize.changed has already
                 // described the current scene and arranged its frame flush.
                 self.lastPoint=p;return;
@@ -479,8 +479,8 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         // The release may be farther than the last drag event. Keep its final
         // pointer position before draining the request, through the same grab.
         // A stationary click or unmoved release must never trigger a snap proposal.
-        if(!CGPointEqualToPoint(p,self.lastPoint))[self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
-        if(![self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}])self.desktop.statusText=status;}
+        if(!CGPointEqualToPoint(p,self.lastPoint))[self.desktop.sizeTransition request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
+        if(![self.desktop.sizeTransition request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}])self.desktop.statusText=status;}
     self.resizeTransaction=nil;if(self.heldPress)self.heldReleased=YES;else [self releasePressed];
     // Upstream resolve_click_navigate follows delivery. A click still waiting for
     // native focus cannot move the camera before its original recipient is checked.

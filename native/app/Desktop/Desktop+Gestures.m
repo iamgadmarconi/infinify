@@ -38,7 +38,7 @@
     if(self.multitouch.delivering&&self.globalGestureContact)return YES;
     NSString *why=nil;
     if(![self globalGesturesEnabled])why=@"global gestures are off (canvas closed, session away or no panels)";
-    else if(self.nativeFillHandoff)why=@"a native fill hand-off is in progress";
+    else if(self.sizeTransition.fillHandoff)why=@"a native fill hand-off is in progress";
     else if(fingers<3)why=@"fewer than three fingers";
     // A native mouse press already owns its drag session, even when its pointer
     // crosses a canvas panel. Extra fingers cannot begin a new camera contact
@@ -176,7 +176,7 @@
     if(begin&&owner==2){NSString *state=DWTyped(DWTyped(reply[@"gesture"],NSDictionary.class)[@"state"],NSString.class);self.nativePinchAccepted=state&&![state isEqual:@"unbound"];}
     // A refusal is said once and ends the gesture on both sides. That end is a gesture reply too: a size transaction it carries is performed.
     if(!reply){
-        NSString *error=self.statusText;if(!begin&&!end)[self consumeSize:[self call:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]}]];
+        NSString *error=self.statusText;if(!begin&&!end)[self.sizeTransition consumeSize:[self call:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]}]];
         self.gestureOwner=0;[self flashStatus:error];[self render];return;
     }
     // A pan that ends cancelled while still moving lost its touches: macOS took them, a button was pressed, the panels went away. (A finger lifting ahead of the others waits out the recogniser's count debounce, too long to launch.) The canvas stops there instead of coasting on as upstream's cancelled swipe does.
@@ -221,7 +221,7 @@
 // AppKit's two-finger pinch as libinput's: the scale is absolute from the gesture's
 // start, the running product of each event's 1 + magnification. No rotation, no delta.
 - (void)magnify:(NSEvent *)e {
-    if(self.nativeFillHandoff)return;
+    if(self.sizeTransition.fillHandoff)return;
     if(self.globalTrackpad.running&&!self.globalGestureDelivery)return;
     [self.compositor finishGeometryTransitions];
     if(self.compositor.hasGeometryTransitions)return;

@@ -63,7 +63,7 @@
     Desktop *desktop=self.desktop;
     // Fill owns interaction until the same native root is revealed. There is
     // no canvas cursor to admit against its intermediate snapshot geometry.
-    if(desktop.nativeFillHandoff){[desktop.canvasCursor releaseOwner:self];return;}
+    if(desktop.sizeTransition.fillHandoff){[desktop.canvasCursor releaseOwner:self];return;}
     NSPoint location=NSEvent.mouseLocation;CGPoint point=CGPointMake(location.x,screenTop()-location.y);
     NSNumber *output=[self outputAt:point];
     if(desktop.native){
@@ -86,7 +86,7 @@
 // This policy never guesses the cursor requested by a captured application.
 - (void)pointerCursor:(CGPoint)p output:(NSNumber *)output reply:(NSDictionary *)reply {
     Desktop *d=self.desktop;
-    if(d.nativeFillHandoff||d.cleaning||d.sessionInactive||!output||![self.outputs containsObject:output]||!self.window.visible||self.window.ignoresMouseEvents||!CGRectContainsPoint(self.globalBounds,p)){
+    if(d.sizeTransition.fillHandoff||d.cleaning||d.sessionInactive||!output||![self.outputs containsObject:output]||!self.window.visible||self.window.ignoresMouseEvents||!CGRectContainsPoint(self.globalBounds,p)){
         [d.canvasCursor releaseOwner:self];return;
     }
     DesktopView *grab=nil;

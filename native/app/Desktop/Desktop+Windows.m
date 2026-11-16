@@ -77,7 +77,7 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     // A window rule's size: the controller began its size transaction with the attach, and the coordinator performs it as it
     // performs a sizing action's. Its result reaches the controller on a later turn of the main queue, after this method.
     // Until it has settled the compositor is given no picture of the window, so its open animation waits with it (-render: there).
-    if(placed)[self consumeSize:reply];
+    if(placed)[self.sizeTransition consumeSize:reply];
     // A managed run captures on demand: -captureDemand starts the stream once the window has a placement.
     if(!self.manager&&![self startCapture:source size:source.buffer interval:[self captureInterval]]&&!source.captureRecovering){[self detach:source];return NO;}
     if(!privateAvailable)self.statusText=@"Live view only: private per-window input is unavailable on this OS.";
@@ -103,12 +103,12 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 }
 // Native readback: is a size transaction of this window live with no effect owed? Only a resize grab is, between two sizes it asks: the
 // controller takes no close, removal or observation of the window meanwhile, exactly as while a result is owed.
-- (BOOL)grabbed:(LiveSource *)source { return self.resize&&![[self.resize busyWindow]isEqual:source.logical]&&![self.resize canRemove:source.logical]; }
+- (BOOL)grabbed:(LiveSource *)source { return self.sizeTransition&&![[self.sizeTransition busyWindow]isEqual:source.logical]&&![self.sizeTransition canRemove:source.logical]; }
 - (void)detach:(LiveSource *)source {
     [self cancelNavigation];
     // Only this window's transaction is cancelled: its last read is then all that is waited for.
     // A resize grab of this window at rest owes no result and is cancelled the same way: one read follows, and ends it.
-    if(source.detached)return;if([[self.resize busyWindow]isEqual:source.logical]||[self grabbed:source])[self.resize cancel];
+    if(source.detached)return;if([[self.sizeTransition busyWindow]isEqual:source.logical]||[self grabbed:source])[self.sizeTransition cancel];
     [self cancelCapturedInputForWindow:source.logical];
     for(DesktopView *view in self.views)if(view.pressedSource==source)[view releasePressed];
     if(![self call:@{@"op":@"remove_source",@"window":source.logical,@"identity":source.identity,@"keep_placeholder":@YES}])return;
@@ -316,12 +316,12 @@ static void observeStats(NSUInteger sources,BOOL all) {
         // A size request of this window is still owed its result. The controller takes no close, removal or observation of the window until
         // it has one (bounded: the adapter's deadline, then the coordinator's watchdog), and the end of the transaction looks at the window
         // again (-configureResize). Its bounds are not read meanwhile either: the look that follows the transaction reports them.
-        BOOL busy=[[self.resize busyWindow]isEqual:source.logical];
+        BOOL busy=[[self.sizeTransition busyWindow]isEqual:source.logical];
         if(gone&&busy)return;
         // A resize grab of this window whose pointer rests: no result is owed that would find the window gone, so the grab is cancelled
         // here. The one read that follows fails, the transaction ends, and its end looks at the window again and finds it closed. While
         // the window is there its frame is the transaction's to read, not this look's.
-        if([self grabbed:source]){if(gone)[self.resize cancel];return;}
+        if([self grabbed:source]){if(gone)[self.sizeTransition cancel];return;}
         if(gone&&(self.manager||[self marked:source])){[self closed:source];return;}
         if((source.error&&!source.captureRecovering&&!source.nativeReplica)||gone){self.statusText=source.error?:@"A source closed. Its world placeholder is retained for explicit rebind.";[self detach:source];return;}
         if(source.nativeMinimized&&!source.nativeVisibilityWanted&&[w[(id)kCGWindowIsOnscreen]boolValue]){

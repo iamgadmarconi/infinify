@@ -135,9 +135,9 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
             [self cancelNativeTitleClick];self.nativeFillBlockedButtons|=1;return YES;
         }
     }
-    for(NSDictionary *placement in self.nativeFillHandoff[@"background"][@"placements"]){
+    for(NSDictionary *placement in self.sizeTransition.fillHandoff[@"background"][@"placements"]){
         LiveSource *background=self.sources[placement[@"window"]];NSDictionary *identity=background.identity;
-        if(background&&!background.detached&&[placement[@"output"]isEqual:self.nativeFillHandoff[@"output"]]
+        if(background&&!background.detached&&[placement[@"output"]isEqual:self.sizeTransition.fillHandoff[@"output"]]
             &&boundIdentity(placement[@"source"][@"identity"],identity)&&[root isEqual:identity[@"wid"]]
             &&[recipient[@"pid"]isEqual:identity[@"pid"]]&&[recipient[@"birth_sec"]isEqual:identity[@"birth_sec"]]
             &&[recipient[@"birth_usec"]isEqual:identity[@"birth_usec"]]&&DWInScope(self.scope,background.router.pid)){
@@ -199,7 +199,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     if(!frame)refusal="physical_frame";
     else if(!binding[@"generation"]||!boundIdentity(source.identity,binding[@"identity"]))refusal="binding";
     else if(![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:output]||[self.nativeViews replica:source.logical output:output])refusal="native_owner";
-    else if(self.nativeFillHandoff||source.nativeMouseOwnership||self.nativeOwnershipTransfer||self.nativeHoverTransfer||[[self.resize busyWindow]isEqual:source.logical])refusal="geometry_owned";
+    else if(self.sizeTransition.fillHandoff||source.nativeMouseOwnership||self.nativeOwnershipTransfer||self.nativeHoverTransfer||[[self.sizeTransition busyWindow]isEqual:source.logical])refusal="geometry_owned";
     else if([hit[@"widget"]boolValue])refusal="widget";
     if(refusal&&chromeless){DWNativeTitleRefused(YES,refusal,source.logical,wid,point,nil);return NO;}
     [self cancelNativeTitleClick];[self.navigation cancelNativeClick];

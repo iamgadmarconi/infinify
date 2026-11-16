@@ -130,9 +130,6 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 @end
 // Desktop+Navigation.m
 @interface Desktop (Navigation)
-- (void)configureResize;
-- (BOOL)sizing;
-- (NSDictionary *)consumeSize:(NSDictionary *)reply;
 - (void)cancelNavigation;
 - (void)configureNavigation;
 - (void)stopNavigation;
@@ -148,24 +145,10 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (BOOL)cameraFrame;
 - (NSNumber *)outputUnderPointer:(CGPoint)p;
 - (void)panEnd:(NSNumber *)output;
-- (NSDictionary *)resizeCall:(NSDictionary *)command;
 - (NSDictionary *)navigationCall:(NSDictionary *)command;
 - (void)refreshFocusAccess;
 - (void)pointerFrame;
 - (void)pointerFrame:(BOOL)moved;
-@end
-// Desktop+Fill.m
-@interface Desktop (Fill)
-- (void)prepareNativeFill:(NSDictionary *)effect;
-- (BOOL)deferNativeRestore:(NSDictionary *)effect;
-- (BOOL)nativeRestoreDeferredCurrent:(NSDictionary *)deferred snapshot:(NSDictionary *)snapshot;
-- (void)retireDeferredNativeRestore;
-- (void)updateDeferredNativeRestore;
-- (void)clearNativeFillPresentation;
-- (BOOL)nativeFillCurrent:(NSDictionary *)held snapshot:(NSDictionary *)snapshot;
-- (void)updateNativeFill;
-- (void)interruptFillForVisibility:(LiveSource *)source;
-- (NSDictionary *)nativeFillBackground:(NSDictionary *)snapshot;
 @end
 // Desktop+Hover.m
 @interface Desktop (Hover)

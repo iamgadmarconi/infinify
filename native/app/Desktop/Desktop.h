@@ -24,7 +24,7 @@
 #import "DWNativeResizeDriver.h"
 #import "DWNativeTabletRouter.h"
 #import "DWNativeTransition.h"
-#import "DWNativeResizePresentation.h"
+#import "DWSizeTransition.h"
 #import "DWNativeViews.h"
 #import "DWOnboarding.h"
 #import "DWNavigationCoordinator.h"
@@ -40,15 +40,11 @@
 #include "driftwm_desktop.h"
 @class DesktopView, LiveSource;
 @interface Desktop : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSWindowDelegate>
+@property DWSizeTransition *sizeTransition;
 @property DriftDesktop *controller;
 @property DWCanvasCursor *canvasCursor;
-@property DWResizeCoordinator *resize;
-@property DWNativeResizePresentation *nativeResizePresentation;
-@property NSNumber *nativeResizeLiveTransaction;
-@property NSNumber *resizeSavedTransaction;
 // Every normal run: DriftWM's sizing actions (grow-window, shrink-window, fit-window, fit-window-snapped, fill-window, IPC
 // resize), a rule's size and fullscreen are size transactions the controller begins and continues by itself.
-@property NSNumber *sizeTransaction; // the transaction a sizing action's effect last named
 @property DWNavigationCoordinator *navigation;
 @property DWFrameDriver *frameDriver; // the frame timer: a display link, alive only while frames are wanted (-startFrames), and where the canvas is flushed
 @property NSDictionary *panelScreens; // physical descriptors at the last panel/output creation
@@ -155,17 +151,6 @@
 @property DWNativeReplicaFamilies *nativeFamilies;
 @property NSDictionary *overlayFamilySnapshot,*overlayFamilyBase,*overlayFamilyDescriptions;
 @property NSDictionary *nativeViewSnapshot,*nativeOwnerSnapshot;
-@property NSDictionary *nativeFillHandoff,*nativeRestoreDeferred;
-@property NSArray *nativeFillBackgroundTrace;
-@property NSMutableDictionary<NSNumber *,NSDictionary *> *nativeFillHistory;
-@property NSMutableSet<NSNumber *> *nativeFillRefusedTransactions;
-@property DWNativeResizeDriver *nativeResizeDriver;
-@property DWNativeHiddenRoot *nativeFillRoot;
-@property DWNativeTransitionCapture *nativeFillCapture;
-@property DWNativeTransition *nativeFillPicture;
-@property BOOL nativeFillHiding,nativeFillAnimating,nativeFillAnimated,nativeFillRevealing;
-@property CFTimeInterval nativeFillPresentationDeadline;
-@property BOOL nativeFillResuming;
 @property uint64_t nativeFillBlockedButtons;
 @property BOOL nativeFillBlockedScroll;
 @property (weak) LiveSource *nativeMouseOwner;

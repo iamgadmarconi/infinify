@@ -10,7 +10,7 @@
 // Hover observes real mouse motion without taking it. Native reads, family
 // discovery, rendering and placement requests all happen after the tap returns.
 - (BOOL)nativeHoverAllowed {
-    if(!self.native||self.nativeFillHandoff||self.native.ended||self.cleaning||self.sessionInactive
+    if(!self.native||self.sizeTransition.fillHandoff||self.native.ended||self.cleaning||self.sessionInactive
         ||NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress||self.globalTrackpad.ownsTouches
         ||self.nativeGestureView||self.pointerGrab.active||self.gestureOwner||self.trackpad.engaged
         ||self.globalGestureContact||self.magnifying||self.flying||self.frameFlying||self.compositor.hasGeometryTransitions)return NO;

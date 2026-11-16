@@ -36,7 +36,7 @@ static NSTextField *label(NSString *text, NSRect rect) {
     NSInteger kept=chosen?[self.rebind indexOfItemWithRepresentedObject:chosen]:-1;if(kept>=0)[self.rebind selectItemAtIndex:kept];
 }
 - (void)showChooser:(id)sender {
-    if(self.resize&&![self.resize canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;}
+    if(self.sizeTransition&&![self.sizeTransition canRemove:nil]){self.statusText=@"Resize is pending or unresolved; source retained";[self render];return;}
     [self cancelNavigation];
     (void)sender;
     if(!self.chooser){self.chooser=[[(FixtureWindow.class) alloc]initWithContentRect:NSMakeRect(200,180,720,470) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];self.chooser.title=@"Infinify — choose native windows";self.chooser.level=NSFloatingWindowLevel+1;self.chooser.releasedWhenClosed=NO;self.chooser.delegate=self;
