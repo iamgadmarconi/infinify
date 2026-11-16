@@ -37,4 +37,5 @@
 - (CGRect)worldLocalCropOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"world_local_crop"],2)?self.worldLocalCrop:CGRectNull; }
 - (CGRect)bufferCropOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"buffer_crop"],2)?self.bufferCrop:CGRectNull; }
 - (BOOL)isCurrentOutputPlacement { return self.window&&self.output&&self.isCurrentDrawnPlacement; }
+- (BOOL)isPinned { id pin=self.rawDictionary[@"pinned"];return DWNumber(pin).boolValue||DWDictionary(pin)!=nil; }
 @end

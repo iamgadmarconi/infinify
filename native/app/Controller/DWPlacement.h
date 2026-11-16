@@ -31,5 +31,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) CGRect worldLocalCropOrNull;
 @property(nonatomic,readonly) CGRect bufferCropOrNull;
 @property(nonatomic,readonly) BOOL isCurrentOutputPlacement;
+@property(nonatomic,readonly) BOOL isPinned;
 @end
 NS_ASSUME_NONNULL_END
