@@ -300,6 +300,8 @@ upstream's and stay: a config holding one loads and reports a warning.
 
 - `config::CONFIG_DIR_NAME` (above).
 - `platform`, the stand-in module (next section).
+- `layout::snap::magnetic`, the new non-ported product implementation, re-exported
+  as `AxisState`, `drag_candidate` and `resize_candidate` from `layout::snap`.
 - `platform::input::keyboard::keysyms` holds a `KEY_*` constant for all 2,576
   names in its table. Upstream's `keysyms` module (xkbcommon 0.9.0) has 2,402 of
   them, each with the same value here. The other 174 are names newer libxkbcommon
@@ -340,10 +342,13 @@ rustfmt configuration of a workspace this crate may join.
 
 ### clippy
 
-`cargo clippy --all-targets -- -D warnings` passes. No `#[allow]` was added.
+`cargo clippy --lib -- -D warnings` passes. The retired interactive snap
+references in tests intentionally prevent all-target checks until the later test
+phase. No `#[allow]` was added.
 Allows present in the crate: upstream's own `#[allow(clippy::type_complexity)]`
 in `layout::cluster`, `#[allow(clippy::too_many_arguments)]` in
-`layout::auto_placement` and `layout::snap`, and `#![allow(non_upper_case_globals)]`
+`layout::auto_placement` (the snap resize function carrying another allow was
+retired), and `#![allow(non_upper_case_globals)]`
 on the generated `keysyms` module (as upstream's xkbcommon module has).
 `[lints.clippy] significant_drop_in_scrutinee = "warn"` is carried over from
 upstream's `Cargo.toml` and applies to the whole crate.
