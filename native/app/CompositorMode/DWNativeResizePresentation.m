@@ -135,7 +135,7 @@ static CGRect DWResizePictureRect(CGRect rect) {
 }
 - (void)cancel {
     ++_epoch;DWJob cancel=_cancelCapture;_cancelCapture=nil;
-    DWSizeEffect *effect=_effect,*identity=_identity;_effect=nil;_identity=nil;_root=nil;
+    DWSizeEffect *effect=_effect;NSDictionary *identity=_identity;_effect=nil;_identity=nil;_root=nil;
     id<DWNativeResizePicture> picture=_picture;_picture=nil;
     _hiding=NO;_hidden=NO;_revealing=NO;_recovering=NO;_deadline=0;
     // Retire before cancellation invokes any capture or coordinator completion.

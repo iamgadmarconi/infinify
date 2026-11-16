@@ -175,7 +175,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         NSNumber *currentOutput=[d.desktop.nativeViews desiredOwnerForWindow:window];
         BOOL restored=recoverable&&[presenter acknowledgedPlacementForWindow:window identity:source.identity generation:binding.generation output:currentOutput]!=nil;
         return (DWNativeResizePresentationState){.valid=valid,.finished=terminal,.restored=restored,.recoverable=recoverable,.drained=terminal&&![d.resize hasNativeWorkForTransaction:e.transaction],
-            .screenRect=placement.screenRect,.alpha=placement.alpha?placement.alpha.doubleValue:1};
+            .screenRect=placement.nativeScreenRect,.alpha=placement.nativePresentationAlpha};
     };
     owner.retired=^{DWSizeTransition *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.fillHandoff&&d.desktop.native==pr)[d observeAcknowledgementsFrom:nil];[d.resize retryAdmission];};
     owner.render=^{DWSizeTransition *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.desktop.cleaning){[d.desktop render];if(d.desktop.native==pr)[pr submit];}};
@@ -283,7 +283,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     };
     // On the worker queue. The process named is the effect's, which the controller built from a source -attach: bound.
     if(DWDebugTrace())driver.didPerform=^(DWSizeEffect *e,DWNativeResult *r,NSString *method,BOOL moved){
-        DWIdentity *i=e.identity;CGSize asked=e.nativeRequestedSize,actual=r.actualAX.size;
+        DWIdentity *i=e.identity;CGSize asked=e.nativeRequestedSize,actual=r.nativeActualAX.size;
         fprintf(stderr,"debug: native %s pid=%d wid=%u requested=%gx%g outcome=%s observed=%d actual=%gx%g moved=%d ax_error=%d attempted=%d transaction=%llu effect=%llu\\n",method.UTF8String?:"size read",i.pid.intValue,i.wid.unsignedIntValue,asked.width,asked.height,r.outcome.description.UTF8String,r.observed.boolValue,actual.width,actual.height,moved,r.axError.intValue,r.mutationAttempted.boolValue,e.transaction.unsignedLongLongValue,e.effectID.unsignedLongLongValue);
     };
     self.resize=[[DWResizeCoordinator alloc]initWithController:self.desktop.sizeController driver:driver worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
@@ -340,10 +340,10 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         for(DWWindow *window in [self.desktop sizeTransitionSnapshot].windows){
             DWSource *source=window.source;LiveSource *live=[self.desktop sizeTransitionSource:window.window];
             if(!live||live.detached||!DWSizeBoundIdentity(live.identity,effect.identity)||!DWSizeBoundIdentity(live.identity,source.identity)||![source.generation isEqual:effect.generation]||!source.observationKnown.boolValue)continue;
-            CGRect observed=source.observedRect,prior=CGRectZero;
-            if(!CGRectEqualToRect(observed,result.actualAX))break;
+            CGRect observed=source.nativeObservedRect,prior=CGRectZero;
+            if(!CGRectEqualToRect(observed,result.nativeActualAX))break;
             if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)live.router.bounds,&prior)||!CGRectEqualToRect(prior,observed))live.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
-            CGRect native=result.actualCG;
+            CGRect native=result.nativeActualCG;
             if(self.desktop.native.familiesNeeded){
                 NSDictionary *family=[self.desktop sizeTransitionFamily:live.identity why:nil]?:@{};
                 native=DWResizePresentationNativeBounds(family,live.identity,native);
@@ -431,9 +431,9 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     DWSizeEffect *effect=deferred[@"effect"];DWPlacement *placement=nil;
     for(DWPlacement *item in [self.desktop presentationSnapshot].placements)if([item.window isEqual:effect.window]&&[item.output isEqual:deferred[@"output"]]){placement=item;break;}
     DWNativeAppliedPlacement *receipt=[self.desktop.native acknowledgedPlacementForWindow:effect.window  identity:deferred[@"identity"] generation:effect.generation output:deferred[@"output"]];
-    if(!placement||!receipt||!CGRectEqualToRect(receipt.requestedScreenRect,placement.screenRect)
-        ||!CGRectEqualToRect(receipt.requestedClipRect,placement.clipRect)
-        ||!CGRectEqualToRect(receipt.requestedViewport,((DWOutput *)deferred[@"view"]).screenBounds)||![self.desktop.native isAcknowledgedPlacementCurrent:receipt])return;
+    if(!placement||!receipt||!CGRectEqualToRect(receipt.requestedScreenRect,placement.nativeScreenRect)
+        ||!CGRectEqualToRect(receipt.requestedClipRect,placement.nativeClipRect)
+        ||!CGRectEqualToRect(receipt.requestedViewport,((DWOutput *)deferred[@"view"]).nativeScreenBounds)||![self.desktop.native isAcknowledgedPlacementCurrent:receipt])return;
     // presentationSnapshot may reconcile ownership. Recheck the saved action
     // after that reconciliation, before acquiring any native placement hold.
     if(![self nativeRestoreDeferredCurrent:deferred snapshot:[self.desktop sizeTransitionSnapshot]]){[self retireDeferredNativeRestore];return;}
@@ -556,20 +556,20 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     }
     DWPlacement *finalPlacement=nil;
     if(finished)for(DWPlacement *item in [self.desktop presentationSnapshot].placements)if([item.window isEqual:held[@"window"]]&&[item.output isEqual:held[@"output"]]){finalPlacement=item;break;}
-    BOOL targetCurrent=!held[@"target"]||(finalPlacement&&CGRectEqualToRect(finalPlacement.screenRect,DWRectFromJSON(held[@"target"])));
+    BOOL targetCurrent=!held[@"target"]||(finalPlacement&&CGRectEqualToRect(finalPlacement.nativeScreenRect,DWRectFromJSON(held[@"target"])));
     BOOL bridge=finished&&!gone&&targetCurrent&&!self.nativeFillResuming&&self.nativeFillRoot&&self.nativeFillPicture&&self.nativeFillHiding;
     if(bridge){
         if(!self.nativeFillPresentationDeadline)self.nativeFillPresentationDeadline=CACurrentMediaTime()+2.5;
         if(![self.desktop.native isTransitionRevealed:self.nativeFillRoot]&&CACurrentMediaTime()<self.nativeFillPresentationDeadline){
             if(!self.nativeFillAnimating&&[self.desktop.native isTransitionHidden:self.nativeFillRoot]){
-                DWPlacement *placement=finalPlacement;CGRect clip=placement.clipRect;
+                DWPlacement *placement=finalPlacement;CGRect clip=placement.nativeClipRect;
                 if(placement&&clip.size.width>0&&clip.size.height>0){
-                    CGRect target=placement.screenRect;
+                    CGRect target=placement.nativeScreenRect;
                     DWNativeHiddenRoot *root=self.nativeFillRoot;self.nativeFillAnimating=YES;__weak DWSizeTransition *weak=self;
                     NSMutableDictionary *frozen=[self.fillHandoff mutableCopy];frozen[@"target"]=DWRectJSON(target);self.fillHandoff=frozen.copy;
                     void (^reveal)(BOOL)=^(BOOL completed){DWSizeTransition *d=weak;if(!d||d.nativeFillRoot!=root||d.nativeFillResuming)return;
                         DWScene *now=[d.desktop sizeTransitionSnapshot];BOOL targetMatches=NO;
-                        for(DWPlacement *item in [d.desktop presentationSnapshot].placements)if([item.window isEqual:held[@"window"]]&&[item.output isEqual:held[@"output"]]&&CGRectEqualToRect(item.screenRect,target))targetMatches=YES;
+                        for(DWPlacement *item in [d.desktop presentationSnapshot].placements)if([item.window isEqual:held[@"window"]]&&[item.output isEqual:held[@"output"]]&&CGRectEqualToRect(item.nativeScreenRect,target))targetMatches=YES;
                         BOOL current=[d nativeFillCurrent:held snapshot:now];
                         if(!completed||!targetMatches||!current){if(DWDebugTrace())fprintf(stderr,"debug: native transition completion refused window=#%s completed=%d target=%d current=%d\n",[held[@"window"]description].UTF8String,completed,targetMatches,current);d.nativeFillPresentationDeadline=CACurrentMediaTime();return;}
                         d.nativeFillAnimated=YES;d.desktop.nativeViewSnapshot=nil;
@@ -585,8 +585,8 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
             // for the same exact target to become revealable; do not restart
             // animation or extend the bounded presentation deadline.
             if(self.nativeFillAnimated&&!self.nativeFillRevealing&&finalPlacement){
-                CGRect target=finalPlacement.screenRect;
-                double alpha=finalPlacement.opacity?finalPlacement.opacity.doubleValue:1;
+                CGRect target=finalPlacement.nativeScreenRect;
+                double alpha=finalPlacement.nativePresentationOpacity;
                 self.nativeFillRevealing=[self.desktop.native revealTransition:self.nativeFillRoot screen:target alpha:alpha];
                 if(self.nativeFillRevealing&&DWDebugTrace())fprintf(stderr,"debug: native transition reveal window=#%s accepted=1\n",[held[@"window"]description].UTF8String);
             }
