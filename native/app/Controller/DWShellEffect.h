@@ -20,5 +20,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *minimized;
 @property(nonatomic,readonly) CGRect regionOrNull;
 @property(nonatomic,readonly,nullable) NSNumber *fitPadding;
+@property(nonatomic,readonly,nullable) NSDictionary<NSString *,NSString *> *environment;
 @end
 NS_ASSUME_NONNULL_END

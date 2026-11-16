@@ -16,4 +16,5 @@
 - (NSNumber *)minimized { return DWNumber(self.rawDictionary[@"minimized"]); }
 - (CGRect)regionOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"region"],2)?self.region:CGRectNull; }
 - (NSNumber *)fitPadding { return DWNumber(self.rawDictionary[@"fit_padding"]); }
+- (NSDictionary<NSString *,NSString *> *)environment { return DWDictionary(self.rawDictionary[@"env"]); }
 @end
