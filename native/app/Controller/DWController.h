@@ -10,7 +10,7 @@
 #import "DWNativeResult.h"
 NS_ASSUME_NONNULL_BEGIN
 @class DWSceneWriter, DWResizeValidityFacts;
-typedef struct { BOOL control, option, shift, command; } DWModifiers;\n// Semantic protocol values, separate from transport operation names. Action
+typedef struct { BOOL control, option, shift, command; } DWModifierFlags;\n// Semantic protocol values, separate from transport operation names. Action
 // strings remain open (configuration and IPC define that vocabulary).
 typedef NSString *DWActivationCause NS_TYPED_EXTENSIBLE_ENUM;
 typedef NSString *DWControllerResizeEdges NS_TYPED_EXTENSIBLE_ENUM;
@@ -56,7 +56,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 - (nullable DWControllerReply *)resizeBorderOnOutput:(NSNumber *)output screen:(CGPoint)screen;
 - (nullable DWControllerReply *)gestureFingers;
 - (nullable DWControllerReply *)bindings;
-- (nullable DWControllerReply *)mouseBinding:(NSString *)trigger source:(nullable NSString *)source modifiers:(DWModifiers)modifiers windowContext:(BOOL)windowContext window:(nullable NSNumber *)window pick:(BOOL)pick;
+- (nullable DWControllerReply *)mouseBinding:(NSString *)trigger source:(nullable NSString *)source modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext window:(nullable NSNumber *)window pick:(BOOL)pick;
 - (nullable DWControllerReply *)hoverOnOutput:(NSNumber *)output screen:(CGPoint)screen time:(nullable NSNumber *)time;
 - (nullable DWControllerReply *)hoverWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation output:(NSNumber *)output screen:(CGPoint)screen time:(nullable NSNumber *)time forwardMotion:(BOOL)forward;
 - (nullable DWControllerReply *)pointerOnOutput:(nullable NSNumber *)output screen:(CGPoint)screen;
@@ -66,7 +66,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 - (nullable DWControllerReply *)beginResizeWindow:(NSNumber *)window output:(NSNumber *)output edges:(DWControllerResizeEdges)edges group:(BOOL)group;
 - (nullable DWControllerReply *)gestureTo:(CGPoint)delta pointer:(nullable NSValue *)pointer;
 - (nullable DWControllerReply *)endGesture;
-- (nullable DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifiers)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(BOOL)doubleTap time:(double)time;
+- (nullable DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(BOOL)doubleTap time:(double)time;
 - (nullable DWControllerReply *)updateGestureWithDelta:(CGPoint)delta scale:(double)scale rotation:(double)rotation time:(double)time held:(BOOL)held;
 - (nullable DWControllerReply *)endGestureCancelled:(BOOL)cancelled time:(double)time held:(BOOL)held;
 @end
@@ -136,7 +136,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 
 @protocol DWActionController <DWSceneController>
 - (nullable DWControllerReply *)action:(NSString *)action output:(nullable NSNumber *)output pointer:(nullable NSValue *)pointer held:(BOOL)held;
-- (nullable DWControllerReply *)tapModifiers:(DWModifiers)modifiers output:(nullable NSNumber *)output pointer:(nullable NSValue *)pointer held:(BOOL)held;
+- (nullable DWControllerReply *)tapModifiers:(DWModifierFlags)modifiers output:(nullable NSNumber *)output pointer:(nullable NSValue *)pointer held:(BOOL)held;
 - (nullable DWControllerReply *)hotCorner:(NSString *)corner output:(NSNumber *)output pointer:(nullable NSValue *)pointer held:(BOOL)held;
 - (nullable DWControllerReply *)stateOnOutput:(nullable NSNumber *)output;
 - (nullable DWControllerReply *)bookmark:(NSString *)name output:(NSNumber *)output;

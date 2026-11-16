@@ -16,7 +16,7 @@
 static NSDictionary *P(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
 static NSDictionary *R(CGRect r) { return @{@"x":@(r.origin.x),@"y":@(r.origin.y),@"width":@(r.size.width),@"height":@(r.size.height)}; }
 static NSDictionary *B(CGSize b) { return @{@"width":@(b.width),@"height":@(b.height)}; }
-static NSDictionary *M(DWModifiers m) { return @{@"control":@(m.control),@"option":@(m.option),@"shift":@(m.shift),@"command":@(m.command)}; }
+static NSDictionary *M(DWModifierFlags m) { return @{@"control":@(m.control),@"option":@(m.option),@"shift":@(m.shift),@"command":@(m.command)}; }
 static NSDictionary *I(DWIdentity *identity) { return identity.rawDictionary; }
 static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 
@@ -159,21 +159,30 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     return [self mutate:command];
 }
 
-- (DWControllerReply *)mouseBinding:(NSString *)trigger source:(NSString *)source modifiers:(DWModifiers)modifiers windowContext:(BOOL)windowContext window:(NSNumber *)window pick:(BOOL)pick {
-    NSMutableDictionary *command=[@{@"op":@"mouse_binding" ,@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":M(modifiers),@"context":windowContext?@"window":@"canvas",@"pick":@(pick)}mutableCopy];
-    if(window)command[@"window"]=window;
+- (DWControllerReply *)mouseBinding:(NSString *)trigger source:(NSString *)source modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext window:(NSNumber *)window pick:(BOOL)pick {
+    id<NSCopying> keys[7]={@"op",@"trigger",@"source",@"modifiers",@"context",@"pick"};
+    id values[7]={@"mouse_binding",trigger,source?:NSNull.null,M(modifiers),windowContext?@"window":@"canvas",@(pick)};
+    NSUInteger count=6;id optional;
+    if((optional=window)){keys[count]=@"window";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
 - (DWControllerReply *)hoverOnOutput:(NSNumber *)output screen:(CGPoint)screen time:(NSNumber *)time {
-    NSMutableDictionary *command=[@{@"op":@"hover" ,@"output":output,@"screen":P(screen)}mutableCopy];
-    if(time)command[@"time_ms"]=time;
+    id<NSCopying> keys[4]={@"op",@"output",@"screen"};
+    id values[4]={@"hover",output,P(screen)};
+    NSUInteger count=3;id optional;
+    if((optional=time)){keys[count]=@"time_ms";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
 - (DWControllerReply *)hoverWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation output:(NSNumber *)output screen:(CGPoint)screen time:(NSNumber *)time forwardMotion:(BOOL)forward {
-    NSMutableDictionary *command=[@{@"op":@"hover_source" ,@"window":window,@"identity":I(identity),@"generation":generation,@"output":output,@"screen":P(screen),@"forward_motion":@(forward)}mutableCopy];
-    if(time)command[@"time_ms"]=time;
+    id<NSCopying> keys[8]={@"op",@"window",@"identity",@"generation",@"output",@"screen",@"forward_motion"};
+    id values[8]={@"hover_source",window,I(identity),generation,output,P(screen),@(forward)};
+    NSUInteger count=7;id optional;
+    if((optional=time)){keys[count]=@"time_ms";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -203,8 +212,11 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)gestureTo:(CGPoint)delta pointer:(NSValue *)pointer {
-    NSMutableDictionary *command=[@{@"op":@"gesture_to" ,@"screen_delta":P(delta)}mutableCopy];
-    if(pointer?P(pointer.pointValue):nil)command[@"pointer"]=pointer?P(pointer.pointValue):nil;
+    id<NSCopying> keys[3]={@"op",@"screen_delta"};
+    id values[3]={@"gesture_to",P(delta)};
+    NSUInteger count=2;id optional;
+    if((optional=pointer?P(pointer.pointValue):nil)){keys[count]=@"pointer";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -213,7 +225,7 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     return [self mutate:command];
 }
 
-- (DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifiers)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(BOOL)doubleTap time:(double)time {
+- (DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(BOOL)doubleTap time:(double)time {
     NSDictionary *command=@{@"op":@"gesture_begin" ,@"kind":kind,@"fingers":@(fingers),@"modifiers":M(modifiers),@"context":windowContext?@"window":@"canvas",@"output":output,@"pointer":P(pointer),@"doubletap":@(doubleTap),@"time_ms":@(time)};
     return [self mutate:command];
 }
@@ -234,8 +246,12 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)activateWindow:(NSNumber *)window output:(NSNumber *)output cause:(DWActivationCause)cause identity:(DWIdentity *)identity generation:(NSNumber *)generation {
-    NSMutableDictionary *command=[@{@"op":@"activate" ,@"window":window,@"output":output?:NSNull.null,@"cause":cause}mutableCopy];
-    if(identity?I(identity):nil)command[@"identity"]=identity?I(identity):nil;if(generation)command[@"generation"]=generation;
+    id<NSCopying> keys[6]={@"op",@"window",@"output",@"cause"};
+    id values[6]={@"activate",window,output?:NSNull.null,cause};
+    NSUInteger count=4;id optional;
+    if((optional=identity?I(identity):nil)){keys[count]=@"identity";values[count++]=optional;}
+    if((optional=generation)){keys[count]=@"generation";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -285,20 +301,30 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)panOnOutput:(NSNumber *)output delta:(CGPoint)delta time:(NSNumber *)time source:(NSString *)source {
-    NSMutableDictionary *command=[@{@"op":@"pan" ,@"output":output,@"screen_delta":P(delta)}mutableCopy];
-    if(time)command[@"time_ms"]=time;if(source)command[@"source"]=source;
+    id<NSCopying> keys[5]={@"op",@"output",@"screen_delta"};
+    id values[5]={@"pan",output,P(delta)};
+    NSUInteger count=3;id optional;
+    if((optional=time)){keys[count]=@"time_ms";values[count++]=optional;}
+    if((optional=source)){keys[count]=@"source";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
 - (DWControllerReply *)endPanOnOutput:(NSNumber *)output time:(NSNumber *)time {
-    NSMutableDictionary *command=[@{@"op":@"pan_end" ,@"output":output}mutableCopy];
-    if(time)command[@"time_ms"]=time;
+    id<NSCopying> keys[3]={@"op",@"output"};
+    id values[3]={@"pan_end",output};
+    NSUInteger count=2;id optional;
+    if((optional=time)){keys[count]=@"time_ms";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
 - (DWControllerReply *)zoomOnOutput:(NSNumber *)output anchor:(CGPoint)anchor delta:(double)delta source:(NSString *)source phase:(NSString *)phase {
-    NSMutableDictionary *command=[@{@"op":@"zoom_by" ,@"output":output,@"anchor":P(anchor),@"delta":@(delta),@"source":source}mutableCopy];
-    if(phase)command[@"phase"]=phase;
+    id<NSCopying> keys[6]={@"op",@"output",@"anchor",@"delta",@"source"};
+    id values[6]={@"zoom_by",output,P(anchor),@(delta),source};
+    NSUInteger count=5;id optional;
+    if((optional=phase)){keys[count]=@"phase";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -313,8 +339,11 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)beginNativeResizeWindow:(NSNumber *)window output:(NSNumber *)output edges:(DWControllerResizeEdges)edges start:(CGPoint)start group:(BOOL)group {
-    NSMutableDictionary *command=[@{@"op":@"begin_native_resize" ,@"window":window,@"output":output,@"start_screen":P(start),@"group":@(group)}mutableCopy];
-    if(edges)command[@"edges"]=edges;
+    id<NSCopying> keys[6]={@"op",@"window",@"output",@"start_screen",@"group"};
+    id values[6]={@"begin_native_resize",window,output,P(start),@(group)};
+    NSUInteger count=5;id optional;
+    if((optional=edges)){keys[count]=@"edges";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -354,8 +383,11 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)windowClosed:(NSNumber *)window identity:(DWIdentity *)identity output:(NSNumber *)output {
-    NSMutableDictionary *command=[@{@"op":@"window_closed" ,@"window":window,@"identity":I(identity)}mutableCopy];
-    if(output)command[@"output"]=output;
+    id<NSCopying> keys[4]={@"op",@"window",@"identity"};
+    id values[4]={@"window_closed",window,I(identity)};
+    NSUInteger count=3;id optional;
+    if((optional=output)){keys[count]=@"output";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -400,8 +432,11 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)registerOutput:(NSString *)stableID screenBounds:(CGRect)bounds usableRect:(NSValue *)usable {
-    NSMutableDictionary *command=[@{@"op":@"register_output" ,@"stable_id":stableID,@"screen_bounds":R(bounds)}mutableCopy];
-    if(usable?R(usable.rectValue):nil)command[@"usable_rect_local"]=usable?R(usable.rectValue):nil;
+    id<NSCopying> keys[4]={@"op",@"stable_id",@"screen_bounds"};
+    id values[4]={@"register_output",stableID,R(bounds)};
+    NSUInteger count=3;id optional;
+    if((optional=usable?R(usable.rectValue):nil)){keys[count]=@"usable_rect_local";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -436,20 +471,29 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)action:(NSString *)action output:(NSNumber *)output pointer:(NSValue *)pointer held:(BOOL)held {
-    NSMutableDictionary *command=[@{@"op":@"action" ,@"action":action,@"output":output?:NSNull.null,@"held":@(held)}mutableCopy];
-    if(pointer?P(pointer.pointValue):nil)command[@"pointer"]=pointer?P(pointer.pointValue):nil;
+    id<NSCopying> keys[5]={@"op",@"action",@"output",@"held"};
+    id values[5]={@"action",action,output?:NSNull.null,@(held)};
+    NSUInteger count=4;id optional;
+    if((optional=pointer?P(pointer.pointValue):nil)){keys[count]=@"pointer";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
-- (DWControllerReply *)tapModifiers:(DWModifiers)modifiers output:(NSNumber *)output pointer:(NSValue *)pointer held:(BOOL)held {
-    NSMutableDictionary *command=[@{@"op":@"tap" ,@"modifiers":M(modifiers),@"output":output?:NSNull.null,@"held":@(held)}mutableCopy];
-    if(pointer?P(pointer.pointValue):nil)command[@"pointer"]=pointer?P(pointer.pointValue):nil;
+- (DWControllerReply *)tapModifiers:(DWModifierFlags)modifiers output:(NSNumber *)output pointer:(NSValue *)pointer held:(BOOL)held {
+    id<NSCopying> keys[5]={@"op",@"modifiers",@"output",@"held"};
+    id values[5]={@"tap",M(modifiers),output?:NSNull.null,@(held)};
+    NSUInteger count=4;id optional;
+    if((optional=pointer?P(pointer.pointValue):nil)){keys[count]=@"pointer";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
 - (DWControllerReply *)hotCorner:(NSString *)corner output:(NSNumber *)output pointer:(NSValue *)pointer held:(BOOL)held {
-    NSMutableDictionary *command=[@{@"op":@"hot_corner" ,@"corner":corner,@"output":output,@"held":@(held)}mutableCopy];
-    if(pointer?P(pointer.pointValue):nil)command[@"pointer"]=pointer?P(pointer.pointValue):nil;
+    id<NSCopying> keys[5]={@"op",@"corner",@"output",@"held"};
+    id values[5]={@"hot_corner",corner,output,@(held)};
+    NSUInteger count=4;id optional;
+    if((optional=pointer?P(pointer.pointValue):nil)){keys[count]=@"pointer";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -464,14 +508,20 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)closeWindow:(NSNumber *)window output:(NSNumber *)output {
-    NSMutableDictionary *command=[@{@"op":@"ipc" ,@"request":@{@"Close":window}}mutableCopy];
-    if(output)command[@"output"]=output;
+    id<NSCopying> keys[3]={@"op",@"request"};
+    id values[3]={@"ipc",@{@"Close":window}};
+    NSUInteger count=2;id optional;
+    if((optional=output)){keys[count]=@"output";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
 - (DWControllerReply *)relaunchWindow:(NSNumber *)window output:(NSNumber *)output {
-    NSMutableDictionary *command=[@{@"op":@"ipc" ,@"request":@{@"Relaunch":window}}mutableCopy];
-    if(output)command[@"output"]=output;
+    id<NSCopying> keys[3]={@"op",@"request"};
+    id values[3]={@"ipc",@{@"Relaunch":window}};
+    NSUInteger count=2;id optional;
+    if((optional=output)){keys[count]=@"output";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
@@ -481,8 +531,14 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)screenshotResultPath:(NSString *)path width:(NSNumber *)width height:(NSNumber *)height error:(NSString *)error {
-    NSMutableDictionary *command=[@{@"op":@"screenshot_result"}mutableCopy];
-    if(path)command[@"path"]=path;if(width)command[@"width"]=width;if(height)command[@"height"]=height;if(error)command[@"error"]=error;
+    id<NSCopying> keys[5]={@"op"};
+    id values[5]={@"screenshot_result"};
+    NSUInteger count=1;id optional;
+    if((optional=path)){keys[count]=@"path";values[count++]=optional;}
+    if((optional=width)){keys[count]=@"width";values[count++]=optional;}
+    if((optional=height)){keys[count]=@"height";values[count++]=optional;}
+    if((optional=error)){keys[count]=@"error";values[count++]=optional;}
+    NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
 }
 
