@@ -209,7 +209,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     if(!report||(moved&&CGPointEqualToPoint(p,self.pointerReported)))return;self.pointerReported=p;
     NSString *status=self.statusText;DWControllerReply *told=[self.controller pointerOnOutput:output screen:p];self.statusText=status;
     // The pull moved the focus: a hover's effect, performed as a hover's is (-pointerFocused:).
-    if([told.dirty isEqual:@YES]){[self.navigation perform:[told replyForPointerFocus]];self.sceneDirty=YES;[self render];}
+    if([told.dirty isEqual:@YES]){[self.navigation perform:[DWControllerReply pointerFocusReply:told]];self.sceneDirty=YES;[self render];}
 }
 // One frame of camera motion: every armed flight, a coasting pan, an edge pan. The navigation
 // coordinator owns the tick when there is one; otherwise the controller is ticked directly on the same clock.
