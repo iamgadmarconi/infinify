@@ -321,6 +321,7 @@ impl Controller {
     /// slot keeps the slot's frame, as upstream's adopted window does, and a
     /// frame that cannot be placed for the size asked is placed for its own:
     /// neither is asked anything.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn arrival_by_rule(
         &self,
         output: Option<OutputId>,
@@ -329,17 +330,18 @@ impl Controller {
         title: &str,
         own: Size,
         rule: Option<&AppliedWindowRule>,
+        unsolicited: bool,
     ) -> Result<(Arrival, bool), Error> {
         let size = rule.and_then(|rule| rule.size);
         if let Some((width, height)) = size.filter(|_| self.sizes.capability) {
             // Upstream's one-pixel floor, as IPC `resize` applies it.
             let asked = Size::new(width.max(1).into(), height.max(1).into());
-            let placed = self.arrival(output, pointer, bundle_id, title, asked, rule);
+            let placed = self.arrival(output, pointer, bundle_id, title, asked, rule, unsolicited);
             if let Ok(arrival @ (Arrival::Place { .. } | Arrival::Pin { .. })) = placed {
                 return Ok((arrival, true));
             }
         }
-        let arrival = self.arrival(output, pointer, bundle_id, title, own, rule)?;
+        let arrival = self.arrival(output, pointer, bundle_id, title, own, rule, unsolicited)?;
         Ok((arrival, false))
     }
     /// Upstream's size arm of a new toplevel's first commit: a rule's `size`

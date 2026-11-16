@@ -136,6 +136,26 @@ pub(crate) enum Arrival {
     /// canvas frame the pin shows right now.
     Pin { rect: Rect, pin: Pin },
 }
+/// Placement policy for a window that appeared without owner launch/switch intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnsolicitedPlacement {
+    /// Group with existing canvas windows of the same `bundle_id`, else place
+    /// just outside the active viewport's right edge.
+    SiblingOrOutsideViewport,
+    /// Group with off-screen siblings of the same `bundle_id`, else use normal
+    /// `window_placement`.
+    #[allow(dead_code)]
+    SiblingOffscreenOrConfigured,
+    /// Use normal `window_placement` unchanged.
+    #[allow(dead_code)]
+    Configured,
+}
+const UNSOLICITED_PLACEMENT: UnsolicitedPlacement = UnsolicitedPlacement::SiblingOrOutsideViewport;
+
+fn rects_overlap(a: auto_placement::Rect, b: auto_placement::Rect) -> bool {
+    a.x < b.x_high() && b.x < a.x_high() && a.y < b.y_high() && b.y < a.y_high()
+}
+
 /// Who takes the focus when the window that held it leaves.
 enum Follow {
     Raise(WindowId),
@@ -359,9 +379,143 @@ impl Controller {
             background: false,
         })
     }
+    /// Placement of an unsolicited post-launch window (isolated by
+    /// `UNSOLICITED_PLACEMENT`): groups with an existing canvas window of the
+    /// same `bundle_id`, or places just outside the active viewport's right
+    /// edge so background launches do not cover the active workspace.
+    fn unsolicited_spawn(
+        &self,
+        output: Option<OutputId>,
+        pointer: Option<Point>,
+        bundle_id: &str,
+        size: Size,
+    ) -> Result<Arrival, Error> {
+        if UNSOLICITED_PLACEMENT == UnsolicitedPlacement::Configured {
+            return self.spawn(output, pointer, size);
+        }
+        let (w, h) = (size.width.round(), size.height.round());
+        let config = self.config();
+        let gap = config.snap_gap;
+        let step = f64::from(config.decorations.title_bar_height.max(1));
+        let view_info = if let Some(output) = output {
+            let viewport = self
+                .scene
+                .output(output)
+                .ok_or(Error::Invalid("unknown output"))?;
+            let context = self.navigation_context(output)?;
+            let zoom = viewport.zoom.max(1e-6);
+            let view_w = viewport.screen_bounds.size.width / zoom;
+            let view_h = viewport.screen_bounds.size.height / zoom;
+            let margin = gap.max(context.outer_gap()).max(48.0);
+            let raw_view = auto_placement::Rect {
+                x: viewport.camera.x.floor(),
+                y: viewport.camera.y.floor(),
+                w: view_w.ceil(),
+                h: view_h.ceil(),
+            };
+            let protected_view = auto_placement::Rect {
+                x: (viewport.camera.x - margin).floor(),
+                y: (viewport.camera.y - margin).floor(),
+                w: (view_w + 2.0 * margin).ceil(),
+                h: (view_h + 2.0 * margin).ceil(),
+            };
+            let mid_y = viewport.camera.y + context.usable_rect_local.center().y / zoom;
+            Some((raw_view, protected_view, mid_y))
+        } else {
+            None
+        };
+        let canvas_windows: Vec<&Window> = self
+            .scene
+            .windows()
+            .iter()
+            .filter(|win| self.on_canvas(win.id))
+            .collect();
+        let window_rects: Vec<auto_placement::Rect> = canvas_windows
+            .iter()
+            .map(|win| {
+                let r = self.placed_rect(win);
+                auto_placement::Rect {
+                    x: r.origin.x.round(),
+                    y: r.origin.y.round(),
+                    w: r.size.width.round(),
+                    h: r.size.height.round(),
+                }
+            })
+            .collect();
+        let sibling_indices: Vec<usize> = (0..canvas_windows.len())
+            .filter(|&i| !bundle_id.is_empty() && self.bundle(canvas_windows[i].id) == bundle_id)
+            .collect();
+        let chosen_sibling = match UNSOLICITED_PLACEMENT {
+            UnsolicitedPlacement::SiblingOrOutsideViewport => sibling_indices
+                .iter()
+                .rev()
+                .copied()
+                .find(|&i| view_info.is_none_or(|(_, pv, _)| !rects_overlap(window_rects[i], pv)))
+                .or_else(|| sibling_indices.last().copied()),
+            UnsolicitedPlacement::SiblingOffscreenOrConfigured => {
+                let any_visible = sibling_indices.iter().any(|&i| {
+                    view_info.is_some_and(|(rv, _, _)| rects_overlap(window_rects[i], rv))
+                });
+                if any_visible || sibling_indices.is_empty() {
+                    return self.spawn(output, pointer, size);
+                }
+                sibling_indices.last().copied()
+            }
+            UnsolicitedPlacement::Configured => None,
+        };
+        let mut at = if let Some(sibling_idx) = chosen_sibling {
+            let anchor = window_rects[sibling_idx];
+            let mut rects = window_rects.clone();
+            let eligible: HashSet<usize> = (0..rects.len()).collect();
+            if let Some((_, pv, _)) = view_info
+                && !rects_overlap(anchor, pv)
+            {
+                // Keep the sibling's cluster growth out of the active viewport.
+                rects.push(pv);
+            }
+            place_auto(
+                &rects,
+                sibling_idx,
+                &eligible,
+                w,
+                h,
+                (anchor.cx(), anchor.cy()),
+                gap,
+            )
+            .map(|(x, y)| (x.round(), y.round()))
+            .unwrap_or((anchor.x, (anchor.y_high() + gap).round()))
+        } else if let Some((_, pv, mid_y)) = view_info {
+            let mut rects = Vec::with_capacity(1 + window_rects.len());
+            rects.push(pv);
+            rects.extend_from_slice(&window_rects);
+            let eligible: HashSet<usize> = (0..rects.len()).collect();
+            let park_x = pv.x_high() + gap.round();
+            let park_y = (mid_y - (h / 2.0).trunc()).round();
+            let bias = (park_x + w / 2.0 + 16.0, mid_y);
+            place_auto(&rects, 0, &eligible, w, h, bias, gap)
+                .map(|(x, y)| (x.round(), y.round()))
+                .unwrap_or((park_x, park_y))
+        } else {
+            (0.0, 0.0)
+        };
+        while self.scene.windows().iter().any(|window| {
+            let origin = self.placed_rect(window).origin;
+            (origin.x.round() - at.0).abs() <= 2.0 && (origin.y.round() - at.1).abs() <= 2.0
+        }) {
+            at = (at.0 + step, at.1 + step);
+        }
+        let rect = Rect::new(at.0, at.1, size.width, size.height);
+        readable(rect).map_err(Error::Refused)?;
+        Ok(Arrival::Place {
+            rect,
+            at_cursor: false,
+            background: false,
+        })
+    }
     /// A window has appeared: the slot it adopts, or where it is placed. `rule`
     /// is what its window rules merge to. An adopted window keeps its slot
     /// whatever the rule says of position or pinning, as upstream's does.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn arrival(
         &self,
         output: Option<OutputId>,
@@ -370,6 +524,7 @@ impl Controller {
         title: &str,
         size: Size,
         rule: Option<&AppliedWindowRule>,
+        unsolicited: bool,
     ) -> Result<Arrival, Error> {
         if output.is_some_and(|output| self.scene.output(output).is_none()) {
             return Err(Error::Invalid("unknown output"));
@@ -386,6 +541,9 @@ impl Controller {
         if let Some(arrival) = self.rule_arrival(output, size, rule)? {
             return Ok(arrival);
         }
+        if unsolicited && self.lifecycle.settled {
+            return self.unsolicited_spawn(output, pointer, bundle_id, size);
+        }
         match self.fullscreen_background(output, size) {
             Some(rect) => Ok(Arrival::Place {
                 rect,
@@ -401,24 +559,28 @@ impl Controller {
     /// and navigated to, resetting the zoom with `zoom.reset_on_new_window`;
     /// cursor placement stays put unless that reset has a zoomed-out view to
     /// rescue. A window pinned by its rule is raised and focused without a
-    /// navigation; a widget, and a window whose rule says `focus_on_open =
-    /// false`, is neither focused nor navigated to. During the launch pass
-    /// nothing asks for native focus or moves a camera: those windows were
-    /// already open, and nobody opened them here.
+    /// navigation; a widget, a window whose rule says `focus_on_open = false`,
+    /// or an unsolicited window is neither focused nor navigated to. During the
+    /// launch pass nothing asks for native focus or moves a camera: those
+    /// windows were already open, and nobody opened them here.
     pub(crate) fn settle_arrival(
         &mut self,
         window: WindowId,
         output: Option<OutputId>,
         arrival: Arrival,
+        unsolicited: bool,
     ) -> Result<Value, Error> {
         let (mut effect, mut navigation) = (Value::Null, Value::Null);
         self.log_arrival(window, output, arrival)?;
         // Upstream: a widget and a `focus_on_open = false` window map without
-        // taking the focus or moving the camera.
+        // taking the focus or moving the camera; unsolicited arrivals do too.
         let rule = self.policy.applied.get(&window);
-        let quiet = rule.is_some_and(|r| r.widget || r.focus_on_open == Some(false));
-        let focus_on_open_suppressed =
-            self.lifecycle.settled && rule.is_some_and(|r| r.focus_on_open == Some(false));
+        let is_widget = rule.is_some_and(|r| r.widget);
+        let quiet =
+            unsolicited || is_widget || rule.is_some_and(|r| r.focus_on_open == Some(false));
+        let focus_on_open_suppressed = self.lifecycle.settled
+            && !is_widget
+            && (unsolicited || rule.is_some_and(|r| r.focus_on_open == Some(false)));
         let reveal = self.lifecycle.settled && !quiet;
         match arrival {
             Arrival::Adopt(_) => {

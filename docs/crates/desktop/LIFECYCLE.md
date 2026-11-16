@@ -23,7 +23,7 @@ performs no native operation: `close_window`, `launch` and
 
 | `command.op` | Fields | Result data |
 | --- | --- | --- |
-| `attach`, a new window | as before, with neither `logical_id` nor `world_rect`; optional `output`, optional `pointer` | `{window, adopted, effect, navigation, dirty}`, and `transaction` with a one-entry `effects` when a size transaction began with this map, for the `size` this window's rule names or for that of a window that was waiting its turn ([RULES.md](RULES.md#a-rules-size)) |
+| `attach`, a new window | as before, with neither `logical_id` nor `world_rect`; optional `output`, optional `pointer`, optional `unsolicited` | `{window, adopted, effect, navigation, dirty}` (plus `focus_on_open_suppressed: true` when post-launch focus was suppressed by `focus_on_open = false` or `unsolicited`), and `transaction` with a one-entry `effects` when a size transaction began with this map, for the `size` this window's rule names or for that of a window that was waiting its turn ([RULES.md](RULES.md#a-rules-size)) |
 | `window_closed` | `window`, `identity`, optional `output` | `{standin, effect, navigation, dirty}` |
 | `retitle` | `window`, `identity`, `title` | `{dirty}` |
 | `adoption_complete` | optional `present`, an array of `{bundle_id, title}` | `{dropped, standins, dirty}` |
@@ -138,7 +138,11 @@ neither.
 
 Otherwise a window rule's `pinned_to_screen` or `position` places it, as
 [RULES.md](RULES.md#a-new-window) describes, and nothing below applies.
-Without either, `window_placement` places it. All arithmetic is upstream's: the
+Without either, an `unsolicited` post-launch arrival groups with an existing
+canvas window of the same `bundle_id` (avoiding the active viewport when an
+off-screen sibling exists), or places just outside the active viewport's right
+edge when the application has no canvas window yet; any other window is placed
+by `window_placement`. All arithmetic is upstream's: the
 frame's size is rounded to whole points for the policy, positions are rounded,
 and halving a size truncates. Chrome is zero, because a native frame already
 includes its title bar.
@@ -173,8 +177,9 @@ Without an `output` upstream has no view to place in: the origin, cascading.
 
 ### 3. Mapped
 
-A placed window goes on top of the stack. Then, as at upstream's first sized
-commit:
+A placed window goes on top of the stack (or directly below the focused window
+when `unsolicited` is true after the launch pass). Then, as at upstream's first
+sized commit:
 
 - it is focused, with a focus effect;
 - the camera navigates to it, to zoom 1 with `zoom.reset_on_new_window` (the
@@ -187,9 +192,9 @@ No flight is armed during a drag or resize gesture. Without an `output` there
 is no view to reveal it in: the window is placed at the origin, on top, and is
 neither focused nor navigated to. During the
 [launch pass](#slots-and-re-adoption-the-macos-rule) a placed window is neither
-focused nor navigated to. Nor is a widget, or a window whose rule says
-`focus_on_open = false`; a window pinned by its rule is focused and not
-navigated to.
+focused nor navigated to. Nor is a widget, an `unsolicited` window, or a window
+whose rule says `focus_on_open = false`; a window pinned by its rule is focused
+and not navigated to unless `unsolicited`.
 
 ## A window closes
 

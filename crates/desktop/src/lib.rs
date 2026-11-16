@@ -612,6 +612,11 @@ pub(crate) enum Command {
         /// An independently rooted overlay maps quietly in screen space.
         #[serde(default)]
         screen_pin: Option<SourceScreenPin>,
+        /// The window appeared without owner launch or switch intent: place it
+        /// out of the active workspace, below the focused window, and leave
+        /// focus and the camera untouched.
+        #[serde(default)]
+        unsolicited: bool,
     },
     /// The native window is gone. `output` is the active output, if known.
     WindowClosed {
@@ -1316,6 +1321,7 @@ impl Controller {
                 output,
                 pointer,
                 screen_pin,
+                unsolicited,
             } => {
                 identity.validate()?;
                 buffer.validate()?;
@@ -1352,6 +1358,7 @@ impl Controller {
                             &title,
                             source_rect.size,
                             rule.as_ref(),
+                            unsolicited,
                         )?;
                         (Some(arrival), ruled)
                     }
@@ -1386,7 +1393,24 @@ impl Controller {
                         Some(Arrival::Place { rect, .. } | Arrival::Pin { rect, .. }) => rect,
                         _ => world_rect.unwrap_or(source_rect),
                     };
+                    let above_newcomer: Vec<WindowId> = match self
+                        .scene
+                        .focused()
+                        .filter(|_| unsolicited && self.lifecycle.settled)
+                    {
+                        Some(focused) if !self.is_widget(focused) => self
+                            .scene
+                            .windows()
+                            .iter()
+                            .map(|w| w.id)
+                            .skip_while(|existing| *existing != focused)
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     self.scene.add_window(Window { id, world_rect })?;
+                    for above in above_newcomer {
+                        self.scene.raise(above)?;
+                    }
                     id
                 };
                 self.metadata.insert(id, Metadata { bundle_id, title });
@@ -1437,10 +1461,12 @@ impl Controller {
                         // Upstream's deferred fullscreen: a rule's
                         // `fullscreen` takes the place of the navigation,
                         // and of the size arm, whose size it then owes.
-                        if let Some(reply) = self.fullscreen_by_rule(id, output, arrival, own) {
+                        if !(unsolicited && self.lifecycle.settled)
+                            && let Some(reply) = self.fullscreen_by_rule(id, output, arrival, own)
+                        {
                             return Ok(reply);
                         }
-                        let reply = self.settle_arrival(id, output, arrival)?;
+                        let reply = self.settle_arrival(id, output, arrival, unsolicited)?;
                         // Upstream's size arm: a rule's `size`, placed for.
                         Ok(self.size_by_rule(id, output, own, reply))
                     }
