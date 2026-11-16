@@ -15,6 +15,10 @@
     if([op isEqual:@"close_window"])return DWEffectCloseWindow;
     if([op isEqual:@"set_minimized"])return DWEffectSetMinimized;
     if([op isEqual:@"subscribe"])return DWEffectSubscribe;
-    if([op isEqual:@"screenshot"])return DWEffectScreenshot;return DWEffectUnknown;
+    if([op isEqual:@"screenshot"])return DWEffectScreenshot;if([op isEqual:@"quit"])return DWEffectQuit;
+    if([op isEqual:@"warp_pointer"])return DWEffectWarpPointer;
+    if([op isEqual:@"switch_layout"])return DWEffectSwitchLayout;
+    if([op isEqual:@"reload_config"])return DWEffectReloadConfig;
+    return DWEffectUnknown;
 }
 @end

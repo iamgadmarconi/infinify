@@ -18,4 +18,9 @@
 - (NSNumber *)fitPadding { return DWNumber(self.rawDictionary[@"fit_padding"]); }
 - (NSDictionary<NSString *,NSString *> *)environment { return DWDictionary(self.rawDictionary[@"env"]); }
 - (NSString *)line { return DWString(self.rawDictionary[@"line"]); }
+- (CGPoint)screen { return DWScenePoint(self.rawDictionary[@"screen"]); }
+- (BOOL)screenHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"screen"],0); }
+- (DWValuePresence)screenPresence { return DWPresence(self.rawDictionary[@"screen"],NSDictionary.class); }
+- (NSString *)layoutTarget { return DWString(self.rawDictionary[@"target"]); }
+- (NSNumber *)layoutIndex { return DWNumber(self.rawDictionary[@"index"]); }
 @end

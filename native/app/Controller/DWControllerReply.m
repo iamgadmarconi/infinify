@@ -106,4 +106,10 @@
         NSMutableArray *a=[NSMutableArray array];for(DWShellEffect *e in self.arrayShellEffects)if(e.kind==DWEffectSubscribe&&e.line)[a addObject:e.line];return a.copy;
     }];
 }
+- (DWControllerReply *)replyForNavigationAfterConsumingSizeEffect:(DWSizeEffect *)sized {
+    id effect=self.rawDictionary[@"effect"];
+    BOOL beside=sized&&effect!=sized.rawDictionary&&DWDictionary(effect);
+    if(effect&&!beside&&(sized||DWArray(self.rawDictionary[@"effects"])))return [self replyWithoutEffect];
+    return self;
+}
 @end

@@ -6,7 +6,8 @@ NS_ASSUME_NONNULL_BEGIN
 typedef NS_ENUM(NSUInteger,DWEffectKind) {
     DWEffectUnknown, DWEffectFocusNativeWindow, DWEffectResizeNativeWindow,
     DWEffectObserveResizeSource, DWEffectExec, DWEffectLaunch,
-    DWEffectCloseWindow, DWEffectSetMinimized, DWEffectScreenshot, DWEffectSubscribe
+    DWEffectCloseWindow, DWEffectSetMinimized, DWEffectScreenshot, DWEffectSubscribe,
+    DWEffectQuit, DWEffectWarpPointer, DWEffectSwitchLayout, DWEffectReloadConfig
 };
 @interface DWEffect : DWControllerValue
 

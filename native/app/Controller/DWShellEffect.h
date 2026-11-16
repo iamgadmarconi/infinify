@@ -22,5 +22,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *fitPadding;
 @property(nonatomic,readonly,nullable) NSDictionary<NSString *,NSString *> *environment;
 @property(nonatomic,readonly,nullable) NSString *line;
+@property(nonatomic,readonly) CGPoint screen;
+@property(nonatomic,readonly) BOOL screenHasNumericComponents;
+@property(nonatomic,readonly) DWValuePresence screenPresence;
+@property(nonatomic,readonly,nullable) NSString *layoutTarget;
+@property(nonatomic,readonly,nullable) NSNumber *layoutIndex;
 @end
 NS_ASSUME_NONNULL_END

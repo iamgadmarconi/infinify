@@ -117,5 +117,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Shell effects from the plural effect stream only; singular effects are deliberately ignored.
 @property(nonatomic,readonly,nullable) NSArray<DWShellEffect *> *arrayShellEffects;
 @property(nonatomic,readonly) NSArray<NSString *> *subscribeLines;
+// The exact navigation view after the size coordinator has claimed its effect.
+// Keeps an independent dictionary-valued focus effect beside a size in effects[].
+- (DWControllerReply *)replyForNavigationAfterConsumingSizeEffect:(nullable DWSizeEffect *)sized;
 @end
 NS_ASSUME_NONNULL_END
