@@ -95,4 +95,15 @@
     if(!DWDictionary(d[@"effect"]))[d removeObjectForKey:@"effect"];
     [d removeObjectForKey:@"effects"];return DWProject(self,d);
 }
+- (NSArray<DWShellEffect *> *)arrayShellEffects {
+    return [self cachedProjection:@"arrayShellEffects" make:^id{
+        if(!DWArray(self.rawDictionary[@"effects"]))return nil;
+        NSMutableArray *a=[NSMutableArray array];for(DWEffect *e in self.effects)if([e isKindOfClass:DWShellEffect.class])[a addObject:e];return a.copy;
+    }];
+}
+- (NSArray<NSString *> *)subscribeLines {
+    return [self cachedProjection:@"subscribeLines" make:^id{
+        NSMutableArray *a=[NSMutableArray array];for(DWShellEffect *e in self.arrayShellEffects)if(e.kind==DWEffectSubscribe&&e.line)[a addObject:e.line];return a.copy;
+    }];
+}
 @end

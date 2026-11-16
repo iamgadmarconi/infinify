@@ -5,4 +5,5 @@
 - (NSString *)topRight { return DWString(self.rawDictionary[@"top_right"]); }
 - (NSString *)bottomLeft { return DWString(self.rawDictionary[@"bottom_left"]); }
 - (NSString *)bottomRight { return DWString(self.rawDictionary[@"bottom_right"]); }
+- (BOOL)hasEntries { return self.rawDictionary.count>0; }
 @end

@@ -114,5 +114,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *changed;
 - (DWControllerReply *)replyForLifecycleFollow;
 + (DWControllerReply *)lifecycleFollowReply:(nullable DWControllerReply *)reply;
+// Shell effects from the plural effect stream only; singular effects are deliberately ignored.
+@property(nonatomic,readonly,nullable) NSArray<DWShellEffect *> *arrayShellEffects;
+@property(nonatomic,readonly) NSArray<NSString *> *subscribeLines;
 @end
 NS_ASSUME_NONNULL_END

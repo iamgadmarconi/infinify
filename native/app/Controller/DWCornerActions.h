@@ -7,5 +7,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSString *topRight;
 @property(nonatomic,readonly,nullable) NSString *bottomLeft;
 @property(nonatomic,readonly,nullable) NSString *bottomRight;
+@property(nonatomic,readonly) BOOL hasEntries;
 @end
 NS_ASSUME_NONNULL_END
