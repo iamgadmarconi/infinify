@@ -51,6 +51,8 @@ The rule relocation (old coordinator methods below are in
 
 | Rule, unchanged | Previous location | Current location in `focus_policy.rs` |
 | --- | --- | --- |
+| Facts and receipts mutate only serde-skipped policy state; failed facts restore that small state; no controller clone, settlement or snapshot-cache invalidation | native property-only bookkeeping / cached idle observation | direct `execute` policy path; native query list |
+| Reply policy work is gated by a focus effect (`effect` / `effects` via `focusEffect`), `background`, or `focus_on_open_suppressed`; other replies skip the fact | coordinator `perform:` focus-effect gate and arrival protection | `FocusFact::Reply`, native `perform:` |
 | Full-desktop filter only; uncertain classification does not move focus/camera | coordinator application/observe gates | `focus_policy_fact`, `observe_owner_focus` (adapter still reports run eligibility) |
 | Exact PID and birth of confirmed live process; retained through its own unadopted panel while live intent survives | `isConfirmedFocusedProcess:` | `classify_process`, `confirmed_live_binding` |
 | Held switch authorizes unconditionally, records 2.5 s; release records 1.5 s | `noteSystemSwitchHeld:` | `FocusFact::Switch` |
@@ -66,6 +68,7 @@ The rule relocation (old coordinator methods below are in
 | Restore sends `focus` before epoch advance; only widened window is one in-process receipt call between focus and `perform:`'s advance (formerly assignments); no-effect fall-through retains consumed budget | coordinator restore/protection helpers | `plan_correction`, `observation_receipt`, `perform_reply` |
 | Normal/rule placement, focus-on-open, fullscreen/utility exceptions | `lifecycle.rs` spawn/arrival settlement | `spawn`, `arrival`, `settle_arrival` (adoption search stays in lifecycle) |
 | Owner-approved fix: repeated family observation produces no steps when binding, element and internal logical focus agree and no effect is pending | unreachable native `focus[@"logical"]` check | `observe_owner_focus_from`, `ObservationReceipt::Activated`, `ResetPolicy` |
+| Accepted dedup difference: a native-click alias match, stale read or `observeNativeClick:` early return can retain remembered family observation; logical-root/no-pending checks still apply | native cleared family memory before these returns | adapter early returns before observation fact |
 | Activation no-pan uncertainty, clipped reveal, cycle/click rules and configured zoom | `window_actions.rs::activate` | `activate`, `activation_zoom` |
 
 

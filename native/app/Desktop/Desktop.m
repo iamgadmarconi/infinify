@@ -70,7 +70,8 @@
     BOOL snapshot=command.count==1&&[command[@"op"]isEqual:@"snapshot"];
     if(snapshot&&!raw&&self.controllerSnapshot)return self.controllerSnapshot;
     NSString *operation=DWTyped(command[@"op"],NSString.class);
-    BOOL query=snapshot||[operation isEqual:@"hit"]||[operation isEqual:@"input"]||[operation isEqual:@"resize_border"]||[operation isEqual:@"gesture_fingers"];
+    // focus_policy changes only serde-skipped policy state, so cached snapshot sections remain valid.
+    BOOL query=snapshot||[operation isEqual:@"hit"]||[operation isEqual:@"input"]||[operation isEqual:@"resize_border"]||[operation isEqual:@"gesture_fingers"]||[operation isEqual:@"focus_policy"];
     BOOL tick=[operation isEqual:@"tick_navigation"];
     NSDictionary *before=tick?self.controllerSnapshot:nil,*visual=tick?self.controllerVisualSnapshot:nil;
     if(!query){self.controllerSnapshot=nil;self.controllerVisualSnapshot=nil;}

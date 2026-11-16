@@ -928,6 +928,23 @@ impl Controller {
             // every window or revalidating an unchanged settled scene.
             return self.tick_navigation_clock(*timestamp_ns);
         }
+        if let Command::FocusPolicy {
+            timestamp_ns,
+            filter,
+            focus_allowed,
+            fact,
+        } = request.command
+        {
+            // Facts change only serde-skipped policy state, never settled scene,
+            // focus or camera state. Keep failure atomic without cloning windows.
+            let before = self.focus.policy.clone();
+            self.focus.policy.configure(filter, focus_allowed);
+            let result = self.focus_policy_fact(timestamp_ns, fact);
+            if result.is_err() {
+                self.focus.policy = before;
+            }
+            return result;
+        }
         let mut next = self.clone();
         let carries = fullscreen::carries(&request.command);
         let mut result = next.apply(request.command)?;
@@ -1022,14 +1039,10 @@ impl Controller {
             _ => {}
         }
         match command {
-            Command::FocusPolicy {
-                timestamp_ns,
-                filter,
-                focus_allowed,
-                fact,
-            } => {
-                self.focus.policy.configure(filter, focus_allowed);
-                return self.focus_policy_fact(timestamp_ns, fact);
+            Command::FocusPolicy { .. } => {
+                return Err(Error::Invalid(
+                    "a focus policy fact reached the mutating path",
+                ));
             }
             // `execute` answers these from the controller itself, before it
             // clones one to mutate.

@@ -64,6 +64,9 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 }
 - (void)perform:(NSDictionary *)reply {
     if(!self.enabled||self.closed||!reply)return;
+    if(!focusEffect(reply)&&![reply[@"background"]boolValue]&&![reply[@"focus_on_open_suppressed"]boolValue]){
+        [self perform:reply decision:nil];return;
+    }
     NSDictionary *decision=[self policy:@{@"kind":@"reply",@"reply":reply,@"protect":@(self.arrivalProtection&&self.arrivalProtection())}];
     [self perform:reply decision:decision];
 }
@@ -119,6 +122,7 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
     [self consumePolicy:decision];
 }
 - (NSDictionary *)policy:(NSDictionary *)fact {
+    // Calls without a closed check are safe because stopNavigation sets self.navigation=nil immediately after shutdown.
     return self.command(@{@"op":@"focus_policy",@"timestamp_ns":@(self.clock()),@"filter":@(self.filterUnsolicitedActivations),@"focus_allowed":@(self.focusAllowed),@"fact":fact});
 }
 - (void)noteSystemSwitchHeld:(BOOL)held {
