@@ -23,3 +23,9 @@ _Avoid_: Hysteresis, debounce
 **Size transition**:
 One change of a window's native size together with the still picture that stands in for the window while it changes, from the request until the window's final placement on screen is confirmed.
 _Avoid_: Fill handoff, resize presentation, snapshot bridge, resize animation
+
+### Input
+
+**Press admission**:
+The decision, taken when a pointer button goes down, of who receives that press and everything that follows it until the release: the canvas, a window's title bar and buttons, or the application under the pointer.
+_Avoid_: Hit testing, input routing, event dispatch, click handling
