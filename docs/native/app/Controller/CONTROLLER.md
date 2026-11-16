@@ -125,3 +125,43 @@ pure. Arbitrary concurrent scene lazy access is not a supported API.
   screenshots, and raw IPC/persistence compatibility.
 
 No test files were changed by this migration.
+
+## Final source inventory
+
+Recounted against both `d012329` and chrome-poll main `954dd89` (same baseline
+counts). Outside Controller:
+
+| Lexical metric | Before | After |
+| --- | ---: | ---: |
+| Objective-C `call:` message sends | 114 | 0 |
+| Literal `op` dictionary fields | 151 / 61 names | 1 / 1 name, external IPC only |
+| Explicit snapshot operation literals | 49 | 0 |
+| `snapshot/snap/scene/prior/now` direct keyed reads | 129 | 15, all native handoff/wallpaper records |
+
+The IPC completion assignment also names `screenshot_result`; it is deliberately
+not an internal semantic caller. Semantic audit found no remaining controller
+scene schema reads outside Controller. The residual 15 lexical occurrences are
+`prior`/`now` native records, not snapshots. `Desktop` no longer owns
+`controllerSnapshot`, `controllerVisualSnapshot` or `snapshotMirror`; its raw
+`DriftDesktop *` is replaced by `DWController *`. Removed methods are `call:`,
+`call:raw:` and `navigationCall:`. Existing shell scene accessors now return
+`DWScene` and do not expose JSON.
+
+The final per-path call/rebuild accounting is unchanged:
+
+| Path | Controller calls before → after | Snapshot rebuilds before → after |
+| --- | --- | --- |
+| Navigation tick | 1 → 1 | clock-only 0 → 0; same visual identity |
+| Hit/input/border | 1 → 1 | 0 → 0 |
+| Hover with child ACK | 1 plus conditional 1 → same | same conditional cached source query |
+| Render | cached 0 / invalidated 1 → same | cached 0 / invalidated 1 → same |
+| Gesture begin/update/end | 1 each → 1 each | same consumer-triggered rebuild |
+| Hidden resize picture validity | cached 0 / invalidated 1 → same | cached 0 / invalidated 1 → same |
+| Cached chrome content refusal | 0 → 0 | 0 → 0 |
+| Protected arrival | fact + attach, 2 → 2 | same command continuation queries |
+| Observation duplicate | 1 → 1 | 0 → 0 |
+| Bound activation observation | fact + command + receipt, 3 → 3 | same result/answer validation queries |
+
+Allocation and call counts above are code-reading bounds, not measured native
+window usability or runtime performance evidence. Compile-only verification
+cannot establish behavior parity; the later test phase remains required.

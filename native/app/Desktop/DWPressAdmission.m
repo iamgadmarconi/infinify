@@ -434,7 +434,7 @@ static uint64_t DWClickRevertToken;
             [self.desktop cancelNativeTitleClick];self.nativeFillBlockedButtons|=1;return YES;
         }
     }
-    for(DWPlacement *placement in DWTyped([self fillHandoff][@"background"],DWScene.class).placements){
+    for(DWPlacement *placement in ((DWScene *)DWTyped([self fillHandoff][@"background"],DWScene.class)).placements){
         LiveSource *background=self.desktop.sources[placement.window];NSDictionary *identity=background.identity;
         if(background&&!background.detached&&[placement.output isEqual:[self fillHandoff][@"output"]]
             &&boundIdentity(DWNativeIdentity(placement.source.identity),identity)&&[root isEqual:identity[@"wid"]]
@@ -616,7 +616,7 @@ static uint64_t DWClickRevertToken;
         BOOL held=[root isEqual:[self fillHandoff][@"identity"][@"wid"]];
         // Retained background windows are visual coverage only. Their current
         // fullscreen scene has no input site, so consume the complete pair.
-        for(DWPlacement *placement in DWTyped([self fillHandoff][@"background"],DWScene.class).placements){
+        for(DWPlacement *placement in ((DWScene *)DWTyped([self fillHandoff][@"background"],DWScene.class)).placements){
             LiveSource *live=self.desktop.sources[placement.window];
             if(live&&!live.detached&&[placement.output isEqual:[self fillHandoff][@"output"]]
                 &&boundIdentity(DWNativeIdentity(placement.source.identity),live.identity)&&[root isEqual:live.identity[@"wid"]])held=YES;

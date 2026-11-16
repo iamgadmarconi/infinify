@@ -136,8 +136,8 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     NSDictionary *button=[asArray(source.nativeButtons[@"buttons"])firstObject];if(!button)return ipcError(@"this source exposes no enabled native green control");
     CGRect local=DWRectFromJSON(button);CGPoint point=CGPointMake(displayed.origin.x+CGRectGetMidX(local)*displayed.size.width/own.size.width,displayed.origin.y+CGRectGetMidY(local)*displayed.size.height/own.size.height);
     if(![self nativeGreen:source at:point])return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugDecoration":@{@"ready":@NO}}} options:0 error:nil];
-    NSNumber *output=nil;NSDictionary *hit=nil;for(DesktopView *view in self.views)if(CGRectContainsPoint(view.globalBounds,point)){output=[view outputAt:point];if(output)hit=[view hit:point output:output];break;}
-    BOOL eligible=[hit.windowisEqual:source.logical]&&![hit[@"pick"]boolValue]&&![hit[@"widget"]boolValue]&&[self nativeSource:source.router.wid at:point]==source;
+    NSNumber *output=nil;DWHit *hit=nil;for(DesktopView *view in self.views)if(CGRectContainsPoint(view.globalBounds,point)){output=[view outputAt:point];if(output)hit=[view hit:point output:output];break;}
+    BOOL eligible=[hit.window isEqual:source.logical]&&!hit.pick.boolValue&&!hit.widget.boolValue&&[self nativeSource:source.router.wid at:point]==source;
     if(!eligible)return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugDecoration":@{@"ready":@NO,@"screen":@[@(point.x),@(point.y)],@"output":output?:NSNull.null,@"canvas_hit":hit?:NSNull.null}}} options:0 error:nil];
     if([phase isEqual:@"click"]){
         if(self.pressAdmission.gestureView||self.nativeScrollView)return ipcError(@"another native input sequence is active");
@@ -236,7 +236,7 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     DWHit *hit=up?nil:[view hit:s output:placement.output];
     // A point named by an offset is one of the window's resize border, or of the window itself: the controller says which.
     DWResizeBorder *border=!up&&offset&&!hit?[view resizeBorderAt:s output:placement.output quiet:YES]:nil;self.statusText=status;
-    if(!up&&![hit.windowisEqual:window]&&![border.windowisEqual:window])return ipcError(hit?[NSString stringWithFormat:@"window #%@ is under that point",hit.window]:border?[NSString stringWithFormat:@"the resize border of window #%@ is under that point",border.window]:@"no window takes a press at that point");
+    if(!up&&![hit.window isEqual:window]&&![border.window isEqual:window])return ipcError(hit?[NSString stringWithFormat:@"window #%@ is under that point",hit.window]:border?[NSString stringWithFormat:@"the resize border of window #%@ is under that point",border.window]:@"no window takes a press at that point");
     NSData *reply=[NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugPointer":@{@"screen":@[@(s.x),@(s.y)],@"screen_rect":placement.externalScreenRect,@"clip_rect":placement.externalClipRect,@"hit":up||!hit?NSNull.null:hit.window,@"border":border?border.edges:NSNull.null}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
     if([phase isEqual:@"probe"])return reply;
     if(up?!view.injected:(view.gesture||view.injected))return ipcError(up?@"no DebugPointer press is down":@"a press is already down");

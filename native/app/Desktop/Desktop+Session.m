@@ -48,7 +48,7 @@
     // drain/completion can ask to reconnect, even if that completion is immediate.
     if(leaving)self.sessionInactive=YES;
     [self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];[self saveScene];
-    [self.nativeFamilies reset];self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
+    [self.nativeFamilies reset];self.overlayFamilySnapshot=self.overlayFamilyBase=nil;self.overlayFamilyDescriptions=nil;
     // Capture work stops with presentation in both backends. Retain overlay
     // bindings/shareable windows so normal demand can resume them on return.
     self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
@@ -190,7 +190,7 @@
     [self cancelCapturedInputForWindow:nil];
     self.cleaning=YES;[self.sizeTransition cancelPresentation];[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
     [self.pressAdmission forgetNativeMouseOwner];
-    [self.nativeFamilies reset];self.nativeFamilies=nil;self.nativeViewSnapshot=nil;self.nativeOwnerSnapshot=nil;self.nativeViewPresenter=nil;self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
+    [self.nativeFamilies reset];self.nativeFamilies=nil;self.nativeViewSnapshot=nil;self.nativeOwnerSnapshot=nil;self.nativeViewPresenter=nil;self.overlayFamilySnapshot=self.overlayFamilyBase=nil;self.overlayFamilyDescriptions=nil;
     self.nativeSessionEpoch++;self.nativeResumeWanted=NO;
     [self.windowObserver cancel];self.windowObserver=nil;
     [self.globalTrackpad stop];self.globalTrackpad=nil;
