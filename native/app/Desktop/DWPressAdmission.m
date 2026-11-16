@@ -89,6 +89,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
 @property NSMapTable<LiveSource *,DWPressChromeSchedule *> *chromeSchedules;
 @property CGPoint chromePointer;
 @property BOOL chromePointerKnown;
+@property BOOL chromeHoverRefreshPending;
 - (void)readNativeButtons:(LiveSource *)source;
 - (void)requestNativeButtons:(LiveSource *)source;
 - (BOOL)settledContent:(LiveSource *)source at:(CGPoint)point;
@@ -280,12 +281,19 @@ static uint64_t DWClickRevertToken;
     [self requestNativeButtons:[self hoveredChromeSource]];
 }
 - (void)chromeKeyDown:(CGEventRef)event {
+    // No NSEvent allocation or keyboard-layout lookup for ordinary typing:
+    // qualify using only flags and the physical virtual-key code (F1..F20).
     CGEventFlags flags=CGEventGetFlags(event);
-    NSEvent *key=[NSEvent eventWithCGEvent:event];NSString *characters=key.charactersIgnoringModifiers;
-    unichar character=characters.length?[characters characterAtIndex:0]:0;
-    if(!(flags&(kCGEventFlagMaskCommand|kCGEventFlagMaskControl))
-        &&CGEventGetIntegerValueField(event,kCGKeyboardEventKeycode)!=53
-        &&!(character>=NSF1FunctionKey&&character<=NSF35FunctionKey))return;
+    int64_t code=CGEventGetIntegerValueField(event,kCGKeyboardEventKeycode);
+    if(!(flags&(kCGEventFlagMaskCommand|kCGEventFlagMaskControl))&&code!=kVK_Escape){
+        switch(code){
+            case kVK_F1:case kVK_F2:case kVK_F3:case kVK_F4:case kVK_F5:
+            case kVK_F6:case kVK_F7:case kVK_F8:case kVK_F9:case kVK_F10:
+            case kVK_F11:case kVK_F12:case kVK_F13:case kVK_F14:case kVK_F15:
+            case kVK_F16:case kVK_F17:case kVK_F18:case kVK_F19:case kVK_F20:break;
+            default:return;
+        }
+    }
     if(self.desktop.cleaning||self.desktop.sessionInactive)return;
     LiveSource *source=[self hoveredChromeSource];if(!source)return;
     DWPressChromeSchedule *state=[self chromeSchedule:source];
@@ -324,12 +332,17 @@ static uint64_t DWClickRevertToken;
         [self readNativeButtons:hovered];
 }
 - (void)refreshNativeButtons:(LiveSource *)source {
-    // Existing observation call sites name the changed window. Also re-resolve
-    // the stationary pointer: that event may have moved a different window under
-    // it. This is event work, never an idle poll's WindowServer query.
-    LiveSource *hovered=[self hoveredChromeSource];
+    // Request the named window immediately, but resolve stationary hover only
+    // once after this turn's observation batch (which can name every window of
+    // a PID). Never multiply WindowServer/hit queries by the batch's size.
     [self requestNativeButtons:source];
-    if(hovered!=source)[self requestNativeButtons:hovered];
+    if(self.chromeHoverRefreshPending)return;
+    self.chromeHoverRefreshPending=YES;__weak DWPressAdmission *weak=self;
+    dispatch_async(dispatch_get_main_queue(),^{
+        DWPressAdmission *admission=weak;
+        admission.chromeHoverRefreshPending=NO;
+        [admission refreshHoveredChrome];
+    });
 }
 - (void)requestNativeButtons:(LiveSource *)source {
     if(!source)return;

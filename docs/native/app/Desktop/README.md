@@ -30,9 +30,12 @@ Focused windows are no longer refreshed merely for being focused.
 Motion primes the hovered window with the existing 0.1/0.2 s throttles; a changed
 hover target or the first motion after a 0.2 s rest bypasses the read throttle.
 Existing frame/title/family observations, focus and display notifications prime
-asynchronously too. The existing listen-only navigation tap observes qualifying
+asynchronously too; observation batches coalesce stationary-hover re-resolution
+to one main-queue callback instead of one WindowServer query per window.
+The existing listen-only navigation tap observes qualifying
 key-downs when ListenEvent access was already granted: Command/Control chords,
-Escape and function keys only. One read is requested 50 ms after the first key
+Escape and physical function keys F1–F20 only (integer CGEvent flags/key-code
+checks, with no NSEvent conversion for plain typing). One read is requested 50 ms after the first key
 of a burst and one 250 ms after its last key, coalesced with any in-flight read.
 Plain typing schedules no reads; periodic band refresh remains independent.
 
@@ -40,6 +43,8 @@ A complete, settled last good map can refuse a point outside that band without
 AX or WindowServer queries **inside the refusal**. It must still be the published
 map for the same identity, controller generation, native bounds, chrome revision
 and native session, with no read in flight, request outstanding or key burst owed.
+The settled-content return precedes `decorationDragMiss`, so its debug miss line
+is no longer printed; formats of the lines still printed are unchanged.
 This is negative evidence only: it cannot authorize a canvas-owned press. All
 other title/green checks retain their lifetimes, geometry/identity checks and
 synchronous stale-map fallback. That fallback has a nominal 150 ms AX deadline
