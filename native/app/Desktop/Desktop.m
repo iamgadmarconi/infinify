@@ -3,9 +3,16 @@
 // Desktop: init/dealloc, the controller boundary (call:), the shared reply tail, status notes, scene load/save and the poll.
 #import "Desktop.h"
 #import "Desktop+Private.h"
+#import "DWPressNativeAdapter.h"
+#import "DWPressSceneAdapter.h"
 #import "DWDebugTrace.h"
 #import "DWInputSources.h"
 @implementation Desktop
+@synthesize pressAdmission=_pressAdmission;
+- (DWPressAdmission *)pressAdmission {
+    if(!_pressAdmission)_pressAdmission=[[DWPressAdmission alloc]initWithDesktop:self scene:[[DWPressSceneAdapter alloc]initWithDesktop:self] native:[DWPressNativeAdapter new]];
+    return _pressAdmission;
+}
 - (instancetype)init {
     if((self=[super init])){_controller=driftwm_desktop_create();_snapshotMirror=[DWSnapshotMirror new];_panels=[NSMutableArray array];_views=[NSMutableArray array];_sources=[NSMutableDictionary dictionary];_choices=[NSMutableArray array];_pendingStops=[NSMutableArray array];_postingTags=[NSMutableSet set];
         __weak Desktop *weak=self;_panLaunch=[[DWPanLaunch alloc]initWithLaunch:^(NSNumber *output){[weak panEnd:output];}];}
@@ -147,7 +154,7 @@
     NSDictionary *focus=DWTyped(self.controllerVisualSnapshot[@"focus"],NSDictionary.class);
     NSNumber *focused=DWTyped(focus[@"intent"],NSNumber.class);
     if(self.native&&focused)[self refreshNativeButtons:self.sources[focused]];
-    if(self.nativeButtonHover&&(!self.native||![self.nativeButtonHover isEqual:focused]))[self refreshNativeButtons:self.sources[self.nativeButtonHover]];
+    if(self.pressAdmission.buttonHover&&(!self.native||![self.pressAdmission.buttonHover isEqual:focused]))[self refreshNativeButtons:self.sources[self.pressAdmission.buttonHover]];
     if(self.sizeTransition&&CACurrentMediaTime()-self.lastResizeObservation>=1){self.lastResizeObservation=CACurrentMediaTime();[self.sizeTransition reap];}
     [self endLostInput];
     [self watchCorners];

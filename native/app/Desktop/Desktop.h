@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Split from native/desktop/main.m at 37b27b1.
 // Infinify's desktop shell: the canvas panels, window capture, input routing and run lifecycle around the Rust controller.
+#import "DWPressAdmission.h"
 #import <AppKit/AppKit.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Carbon/Carbon.h>
@@ -146,14 +147,13 @@
 @property BOOL debugPointer; // --debug-pointer: the DebugPointer request is served (-debugPointer:)
 // --native-helper: the other way to present (DWNativePresenter.h). The window server draws the real windows where the canvas places
 // them and the panel draws none of them; nil in every other run, which is then the overlay and runs none of what this gates.
+@property (nonatomic,readonly) DWPressAdmission *pressAdmission;
 @property DWNativePresenter *native;
 @property DWNativeViews *nativeViews;
 @property DWNativeReplicaFamilies *nativeFamilies;
 @property NSDictionary *overlayFamilySnapshot,*overlayFamilyBase,*overlayFamilyDescriptions;
 @property NSDictionary *nativeViewSnapshot,*nativeOwnerSnapshot;
-@property uint64_t nativeFillBlockedButtons;
-@property BOOL nativeFillBlockedScroll;
-@property (weak) LiveSource *nativeMouseOwner;
+
 @property DWNativePresenter *nativeViewPresenter;
 @property NSUInteger nativeFamilyRevision,nativeViewFamilyRevision;
 @property BOOL nativeViewEnabled;
@@ -187,20 +187,12 @@
 @property NSDictionary *controllerSnapshot,*controllerVisualSnapshot,*renderedPresentation;
 @property DWSnapshotMirror *snapshotMirror; // internal snapshots arrive as changed top-level sections; its baseline outlives controllerSnapshot's invalidation
 @property (copy) NSString *renderedStatusText;
-@property DesktopView *nativeGestureView,*nativeScrollView;
+@property DesktopView *nativeScrollView;
 @property DesktopView *nativeMagnifyView;
 @property LiveSource *nativeMagnifySource;
 @property BOOL nativePinchAccepted;
-@property NSInteger nativeGestureButton;
 @property NSTimeInterval nativeScrollTime;
 @property BOOL nativeInputNoted;
-// Set only while a fresh plain title down is evaluated at the session tap.
-// The copied annotations select the common admission path; nothing is posted.
-@property BOOL routingEarlyNativeTitle;
-@property NSDictionary *nativeDecorationPress;
-@property NSNumber *nativeButtonHover;
-@property CFTimeInterval nativeButtonMotion;
-@property dispatch_queue_t nativeButtonQueue;
 @property BOOL screenshotBusy;
 @property BOOL adopted; // adoption_complete was sent for the manager in place
 @property NSString *discoveryNote; // the failed-read note last written to stderr

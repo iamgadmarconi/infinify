@@ -85,43 +85,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     return DWCapturedInputAvailable(source)?@{@"window":source.logical,@"output":output,@"generation":binding[@"generation"],@"identity":identity,@"root_identity":source.identity,@"native_member":@(member!=nil)}:nil;
 }
 - (NSDictionary *)hit:(CGPoint)p output:(NSNumber *)output {
-    if(self.nativePointValid&&self.nativeFamilyHit)return self.nativeFamilyHit;
-    // Controller input intentionally rejects placeholders. Find their geometry only
-    // for the explicit dismiss action; this result never authorizes native delivery.
-    NSDictionary *snapshot=[self.desktop presentationSnapshot];NSNumber *under=nil;
-    BOOL inOutput=NO;for(NSDictionary *item in snapshot[@"outputs"])if([item[@"id"]isEqual:output]&&CGRectContainsPoint(DWRectFromJSON(item[@"screen_bounds"]),p))inOutput=YES;if(!inOutput)return nil;
-    NSArray *tokens=[self.desktop.compositor appliedOrderForOutput:output snapshot:snapshot];
-    // Stale pixels/layout cannot authorize a differently ordered replica hit.
-    if(!tokens){
-        if(self.desktop.routingEarlyNativeTitle&&getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title hit refused output=#%s point=%g,%g reason=renderer_order\n",output.description.UTF8String,p.x,p.y);
-        return nil;
-    }
-    NSMutableDictionary *placements=[NSMutableDictionary dictionary];for(NSDictionary *placement in snapshot[@"placements"])if([placement[@"output"]isEqual:output])placements[placement[@"window"]]=placement;
-    // Native replicas use exactly the renderer's described root/child order.
-    // Placeholders still only authorize canvas actions, never native delivery.
-    for(NSDictionary *token in [tokens reverseObjectEnumerator]){
-        if(!DWTyped(token[@"window"],NSNumber.class))continue;
-        NSDictionary *placement=placements[token[@"window"]];if(!placement||![placement[@"output"]isEqual:output])continue;
-        NSString *key=DWTyped(token[@"key"],NSString.class);
-        LiveSource *source=self.desktop.sources[placement[@"window"]];CGRect site=DWRectFromJSON(placement[@"screen_rect"]),own=CGRectZero;
-        if(source.router.bounds)CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&own);
-        if(key&&source.pixels&&!source.error&&!source.detached&&(!self.desktop.native||[self.desktop.nativeViews replica:source.logical output:output])&&site.size.width>0&&site.size.height>0){
-            CGPoint local=CGPointMake((p.x-site.origin.x)*own.size.width/site.size.width,(p.y-site.origin.y)*own.size.height/site.size.height);
-            NSDictionary *member=key?[self.desktop.nativeFamilies hit:source.logical key:key local:local]:[self.desktop.nativeFamilies hit:source.logical local:local];
-            if(member){NSMutableDictionary *context=[@{@"window":source.logical,@"local":pointJSON(local),@"native_member":member,@"generation":member[@"generation"]}mutableCopy];
-                for(NSString *flag in @[@"widget",@"pinned"])if([DWTyped(placement[flag],NSNumber.class)boolValue])context[flag]=@YES;
-                return context[@"widget"]||context[@"pinned"]||[placement[@"fullscreen"]boolValue]?context:DWPickHit(context,snapshot,output);
-            }
-        }
-        if(key)continue;
-        // A family-only projection has no visible root content. Only an exact
-        // captured child hit above can authorize a recipient in its clip.
-        if([placement[@"family_only"]boolValue]||!CGRectContainsPoint(DWRectFromJSON(placement[@"clip_rect"]),p))continue;
-        if(!source){NSMutableDictionary *held=[@{@"window":placement[@"window"],@"placeholder":@YES} mutableCopy];for(NSString *flag in @[@"widget",@"pinned"])if([DWTyped(placement[flag],NSNumber.class)boolValue])held[flag]=@YES;return held[@"widget"]||held[@"pinned"]?held:DWPickHit(held,snapshot,output);}under=placement[@"window"];break;
-    }
-    if(!under)return nil;
-    NSDictionary *reply=[self.desktop call:@{@"op":@"hit",@"output":output,@"screen":pointJSON(p)}];
-    return DWControllerHit(reply[@"hit"],YES,under);
+    return [self.desktop.pressAdmission hit:p output:output view:self];
 }
 // A child press may activate its application, but must never raise the root:
 // doing so can dismiss an application's popup or take focus from its sheet.
@@ -289,89 +253,11 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 }
 // A title grab cannot be lent to a rebound source or a replacement output.
 // Once cancelled, the tap still swallows this physical pair through its release.
-- (BOOL)nativeTitlePressCurrent {
-    NSDictionary *intent=self.nativeTitlePress;Desktop *d=self.desktop;LiveSource *source=intent?d.sources[intent[@"window"]]:nil;
-    if(!intent||!d.native||[d nativeUnavailable]||d.cleaning||d.sessionInactive
-        ||![d.views containsObject:self]||![self.outputs containsObject:intent[@"output"]]
-        ||![self.dragOutput isEqual:intent[@"output"]]
-        ||![[d.nativeViews desiredOwnerForWindow:intent[@"window"]]isEqual:intent[@"output"]]||!source||source.detached
-        ||!boundIdentity(source.identity,intent[@"identity"])||!DWInScope(d.scope,source.router.pid)
-        ||![birth(source.router.pid)isEqual:source.router.processBirth]
-        ||![[d.native rootWindowFor:source.router.wid]isEqual:@(source.router.wid)])return NO;
-    NSDictionary *snapshot=[d call:@{@"op":@"snapshot"}],*binding=nil;BOOL output=NO;
-    for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:intent[@"window"]]){binding=DWTyped(window[@"source"],NSDictionary.class);break;}
-    for(NSDictionary *view in snapshot[@"outputs"])if([view[@"id"]isEqual:intent[@"output"]]){output=YES;break;}
-    return output&&boundIdentity(source.identity,binding[@"identity"])&&[binding[@"generation"]isEqual:intent[@"generation"]];
-}
 // A normal run's press, dispatched as upstream's on_pointer_button does: the binding
 // for the held modifiers in the window or canvas context, else the native window
 // under the pointer. An unbound press on empty canvas means nothing to upstream either.
 - (void)press:(NSEvent *)e button:(NSInteger)button hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output {
-    if(self.desktop.sizeTransition.fillHandoff)return;
-    NSArray<NSString *> *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];LiveSource *source=hit?self.desktop.sources[hit[@"window"]]:nil;self.lastScrollPan=0;self.clearsFocus=NO;
-    // One lookup says all of it: the binding, or nil for none, for one the window under the pointer claims by its pass_mouse rule, and
-    // over a pick target for a button whose modifiers are not held. A pick target claims nothing; a pinned window is never one, and keeps
-    // its button claims below [zoom] interact_min (upstream's try_pinned_button, which stands ahead of try_pick_button).
-    NSDictionary *binding=button<(NSInteger)triggers.count?[self.desktop mouseBinding:triggers[button] source:nil flags:e.modifierFlags window:hit!=nil under:liveHit(hit) pick:[hit[@"pick"]isEqual:@YES]]:nil;NSString *kind=DWTyped(binding[@"kind"],NSString.class),*action=DWTyped(binding[@"action"],NSString.class);
-    BOOL move=[kind isEqual:@"move_window"]||[kind isEqual:@"move_snapped_windows"],resize=[kind isEqual:@"resize_window"]||[kind isEqual:@"resize_window_snapped"];
-    // Upstream's resize border ([mouse] resize_on_border): a left press in the band across a window's visible edge raises and focuses that
-    // window and resizes it by that edge, with the cluster when decoration_resize_snapped says so, unless a binding whose modifiers are
-    // held claims the press on that window (on_pointer_button asks modifier_button_binding first). The controller says where the band is.
-    // A press it does not take goes on as the canvas press it is to -hit:, where upstream would still count the band as the window.
-    NSDictionary *border=[self resizeBorderForButton:button flags:e.modifierFlags hit:hit at:p output:output];
-    if(border){
-        if(DWDebugTrace())fprintf(stderr,"debug: pointer down button=%ld trigger=left binding=none border=%s window=#%s\n",(long)button,((NSString *)DWTyped(border[@"edges"],NSString.class)).UTF8String?:"?",[border[@"window"]description].UTF8String);
-        [self beginResize:DWTyped(border[@"window"],NSNumber.class) edges:DWTyped(border[@"edges"],NSString.class) snapped:[DWTyped(border[@"snapped"],NSNumber.class)boolValue] at:p output:output];[self.desktop render];return;}
-    if(DWDebugTrace())fprintf(stderr,"debug: pointer down button=%ld trigger=%s binding=%s window=%s\n",(long)button,button<(NSInteger)triggers.count?triggers[button].UTF8String:"?",kind.UTF8String?:"none",hit?[NSString stringWithFormat:@"#%@",hit[@"window"]].UTF8String:"none");
-    // Upstream try_pick_button, ahead of everything but a binding whose modifiers are held, which is the only kind the
-    // lookup answers over a pick target: below [zoom] interact_min a window or placeholder is one target, whatever the
-    // button, and the press is never the application's.
-    if([self.hover pickPress:hit button:button claimed:binding!=nil at:p output:output]){self.gesture=DWPolicyPress;return;}
-    // ⌃⌥-click still dismisses a detached placeholder while no binding claims that press.
-    if(!binding&&!button&&hit&&!source&&(e.modifierFlags&NSEventModifierFlagControl)&&(e.modifierFlags&NSEventModifierFlagOption)){[self.desktop call:@{@"op":@"forget",@"window":hit[@"window"]}];[self.desktop render];[self.desktop saveScene];return;}
-    // pointer.rs try_suspended_button: modified bindings and pick mode won
-    // above; the label relaunches, the bar moves, the body only focuses.
-    if(!binding&&!button&&[hit[@"placeholder"]boolValue]){
-        NSDictionary *snapshot=[self.desktop presentationSnapshot];
-        NSString *part=[self.desktop.compositor standInPart:hit[@"window"] output:output screen:p snapshot:snapshot];
-        if([part isEqual:@"close"]){self.gesture=DWPolicyPress;
-            [self.desktop applyReply:[self.desktop call:@{@"op":@"ipc",@"output":output,@"request":@{@"Close":hit[@"window"]}}]];return;}
-        if([part isEqual:@"label"]){self.gesture=DWPolicyPress;
-            [self.desktop applyReply:[self.desktop call:@{@"op":@"focus",@"window":hit[@"window"]}]];
-            [self.desktop applyReply:[self.desktop call:@{@"op":@"ipc",@"output":output,@"request":@{@"Relaunch":hit[@"window"]}}]];return;}
-        if([part isEqual:@"title"])move=YES;
-    }
-    if(self.nativeTitlePress){
-        // This is an internal, already intercepted native chrome press. A
-        // refusal stays swallowed; it must not fall through to app forwarding.
-        if(binding||button!=0||[hit[@"pick"]boolValue]||[hit[@"widget"]boolValue]||hit[@"native_member"]
-            ||![hit[@"window"]isEqual:self.nativeTitlePress[@"window"]]||![self nativeTitlePressCurrent])return;
-        move=YES;
-    }
-    // A widget ignores drags and resizes, as upstream's does: the bound press starts no gesture and goes to the widget as a plain click (upstream's move and resize arms fall through to click-to-focus and forward it).
-    if((move||resize)&&[DWTyped(hit[@"widget"],NSNumber.class)boolValue]){[self.desktop flashStatus:@"A widget stays where its rule puts it: drags and resizes are ignored"];move=resize=NO;}
-    // Upstream on_pointer_button: raise_and_focus, then the move grab. The controller does both inside begin_drag, a pinned window's included, and its reply
-    // carries the focus request an activate reply carries: the coordinator's to perform on the native window, as a click's is and a move gesture's.
-    if(move&&hit){NSDictionary *begun=[self.desktop call:@{@"op":@"begin_drag",@"window":hit[@"window"],@"output":output,@"group":[kind isEqual:@"move_snapped_windows"]?@YES:@NO}];if(begun){self.gesture=2;[self.desktop.navigation perform:DWTyped(begun,NSDictionary.class)];}}
-    else if(resize&&hit)[self beginResize:hit[@"window"] edges:nil snapped:[kind isEqual:@"resize_window_snapped"] at:p output:output];
-    // Upstream's pan grab remembers that it began on empty canvas: released without a drag, it unfocuses.
-    else if([kind isEqual:@"pan_viewport"]){self.gesture=1;self.clearsFocus=!hit;}
-    // Upstream's NavigateGrab: the drag, not the press, takes the direction.
-    else if([kind isEqual:@"center_nearest"]){self.gesture=DWPolicyPress;[self.hover nearestPress:p output:output focus:[binding[@"focus"]isEqual:@YES]];}
-    // Upstream raises and focuses the window under the pointer, stand-ins included, then runs the action on it.
-    else if([kind isEqual:@"action"]&&action){if(hit)[self.desktop applyReply:[self.desktop call:@{@"op":@"focus",@"window":hit[@"window"]}]];[self.desktop action:action output:output at:p held:[DWCycleHold modifiersDown]!=0];return;}
-    // Unbound, or bound to a gesture with nothing to act on here: click-to-focus, then the press is the native window's,
-    // once the window has the focus that was asked for (-holdPress:window:intent:at:output:).
-    else if(hit){NSDictionary *intent=[self inputIntentForHit:hit output:output];BOOL child=DWTyped(hit[@"native_member"],NSDictionary.class)!=nil;self.gesture=3;self.clickWindow=child?nil:hit[@"window"];
-        if(child){if(![self focusChildIntent:intent])return;}else {
-            NSDictionary *reply=[self.desktop call:@{@"op":@"activate",@"window":hit[@"window"],@"output":output?:NSNull.null,@"cause":@"click"}];
-            // Pin before applying the reply: completion/rendering must not lend
-            // this physical press a later request for the same logical window.
-            if(intent){NSMutableDictionary *held=[intent mutableCopy];held[@"focus_effect"]=DWTyped(reply[@"effect"],NSDictionary.class)?:NSNull.null;intent=held.copy;}
-            [self.desktop applyReply:reply];
-        }
-        [self.desktop render];if(![hit[@"placeholder"]boolValue])[self holdPress:e window:hit[@"window"] intent:intent at:p output:output];return;}
-    [self.desktop render];
+    [self.desktop.pressAdmission press:e button:button hit:hit at:p output:output view:self];
 }
 - (void)mouseDown:(NSEvent *)e {
     if(self.desktop.sessionInactive||[self.desktop nativeUnavailable])return;
@@ -402,12 +288,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     if([self.desktop nativeUnavailable])return;
     if(e.buttonNumber!=self.gestureButton)return;
     CGPoint p=[self screenPoint:e];
-    if(self.nativeTitlePress){
-        if(hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>5)self.nativeTitleMoved=YES;
-        // A title click owns the native pair but is not yet a window move.
-        // Even a zero delta can magnetically snap and arm edge pan.
-        if(!self.nativeTitleMoved){self.lastPoint=p;return;}
-    }
+    if(![self.desktop.pressAdmission prepareDrag:e at:p view:self])return;
     // A pick-mode press dragged past the click slop is a window move from here on, as upstream's grab starts where it is promoted.
     if(self.gesture==DWPolicyPress&&[self.hover pressDragged:p]){self.gesture=2;self.startPoint=p;}
     // Each drag event says where the pointer is; the controller asks one size at a time of the window and keeps only the latest while one
@@ -454,7 +335,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         CFRelease(up);if(wasStopped)DWStopSignal=wasStopped;self.pressedSource=nil;self.pressedTarget=nil;self.pressedTablet=NO;self.pressedTabletDevice=nil;self.pressedPointerGrab=NO;}
 }
 - (void)mouseUp:(NSEvent *)e { if(e.buttonNumber!=self.gestureButton)return;
-    self.nativeTitleReleased=self.nativeTitlePress&&e.type==NSEventTypeLeftMouseUp;
+    [self.desktop.pressAdmission noteRelease:e view:self];
     if(self.heldPress)self.heldRelease=e;
     else if(self.pressedSource){CGEventRef packet=CGEventCreateCopy(e.CGEvent);BOOL posted=[self forward:packet at:[self screenPoint:e] output:self.dragOutput];CFRelease(packet);if(posted){self.pressedSource=nil;self.pressedTarget=nil;self.pressedTablet=NO;self.pressedTabletDevice=nil;self.pressedPointerGrab=NO;}}
     [self released:[self screenPoint:e] at:e.timestamp]; }
@@ -463,16 +344,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 // The end of a press, whatever it had become: at the global point and the event time of its release, or of the moment a release that never
 // arrived was noticed (-[Desktop endLostInput]).
 - (void)released:(CGPoint)p at:(NSTimeInterval)time { self.liftSeen=0;self.takenOverAt=0;
-    NSDictionary *titleClick=self.nativeTitleReleased&&!self.nativeTitleMoved&&self.gesture==2&&self.gestureButton==0
-        &&hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)<=5&&[[self outputAt:p]isEqual:self.dragOutput]
-        &&[self nativeTitlePressCurrent]?self.nativeTitlePress:nil;
-    self.nativeTitleReleased=NO;
-    // Native title movement never reaches AppKit. After crossing click slop,
-    // apply the final up through the same pointer-to-world mapping. An up may
-    // be the first packet beyond slop; a stationary click must never snap.
-    if(self.nativeTitlePress&&self.gesture==2&&(self.nativeTitleMoved||hypot(p.x-self.startPoint.x,p.y-self.startPoint.y)>5)&&[self nativeTitlePressCurrent])
-        [self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y)),@"pointer":pointJSON(p)}];
-    self.nativeTitlePress=nil;
+    NSDictionary *titleClick=[self.desktop.pressAdmission releaseTitleAt:p view:self];
     // The release of a resize grab: the last size asked is let through, the window is read once more, and the canvas has the size it has.
     // A transaction that ended by itself meanwhile has nothing to release, and says so to nobody.
     if(self.gesture==4&&self.resizeTransaction){NSString *status=self.desktop.statusText;

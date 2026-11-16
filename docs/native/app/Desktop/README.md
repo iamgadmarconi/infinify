@@ -2,6 +2,25 @@
 
 How the shell captures windows and draws them to its panels: capture streams, export snapshots, drawables and saves (code in `native/app/Desktop`, chiefly `LiveSource` and the capture, rendering and session categories of `Desktop`). The parity contract, [docs/parity/README.md](../../../parity/README.md), keeps what this document describes at `implemented_unverified` or below.
 
+## Press admission
+
+`DWPressAdmission` owns session/annotated press classification, native title and
+traffic-light admission, Fill refusal pairs, native drag takeover and title click
+slop. `DWPressPairing` is its private physical-pair implementation; `DWNativeInput`
+only installs taps and applies its pass/drop result. `DesktopView` hands AppKit
+presses and title motion/release bookkeeping to the same module; resize execution
+and controller gesture updates remain with their existing hosts.
+
+Its internal seams accept `DWPressNativeLookup` (the real WindowServer/AX adapter,
+`DWPressNativeAdapter`) and `DWPressSceneLookup` (renderer-ordered hits, mouse
+bindings and unchanged JSON controller calls, `DWPressSceneAdapter`). Missing
+evidence refuses admission; a swallowed down keeps its tail even after logical
+cancellation. Session admission precedes annotated admission on the main thread.
+Chrome retention, the 0.5 s title lifetime, 1 s green lifetime, 0.2 s refresh and
+the one-entry on-demand title cache live in admission, not the AX lookup.
+`LiveSource` still carries published chrome observations and their source-revision
+tokens so discovery can invalidate them. This is structural, not new live proof.
+
 ## Capture and rendering performance
 
 Managed overlay streams capture enough pixels for their largest placement on any

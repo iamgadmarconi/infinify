@@ -113,7 +113,7 @@
         LiveSource *source=d.sources[intent[@"window"]];
         NSDictionary *focus=DWTyped([d call:@{@"op":@"snapshot"}][@"focus"],NSDictionary.class);
         if(DWTyped(focus[@"pending_effect"],NSDictionary.class)||d.sizeTransition.fillHandoff||source.nativeMouseOwnership||d.nativeOwnershipTransfer||d.nativeHoverTransfer
-            ||d.nativeGestureView||d.nativeScrollView||d.nativeMagnifyView||d.pointerGrab.active||d.gestureOwner||d.magnifying
+            ||d.pressAdmission.gestureView||d.nativeScrollView||d.nativeMagnifyView||d.pointerGrab.active||d.gestureOwner||d.magnifying
             ||d.trackpad.engaged||d.globalGestureContact||d.globalTrackpad.ownsTouches||d.globalTrackpad.hasNativeMousePress
             ||NSEvent.pressedMouseButtons||[[d.sizeTransition busyWindow]isEqual:source.logical])return;
         for(DesktopView *view in d.views)if(view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab)return;

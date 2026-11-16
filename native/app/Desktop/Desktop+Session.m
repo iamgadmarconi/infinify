@@ -37,7 +37,7 @@
 - (void)suspendPresentationLeavingSession:(BOOL)leaving {
     [self.sizeTransition suspendPresentation]; // teardown must not admit a waiting next transaction
     self.compositor.nativeMenuBackground=NO;
-    self.nativeMouseOwner=nil;
+    [self.pressAdmission forgetNativeMouseOwner];
     for(LiveSource *source in self.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.observationEpoch;}
     [self cancelCapturedInputForWindow:nil];
     [self cancelGestures];[self cancelNativeInput];[self.panLaunch cancel];
@@ -190,7 +190,7 @@
     [self stopMacWallpapers];
     [self cancelCapturedInputForWindow:nil];
     self.cleaning=YES;[self.sizeTransition cancelPresentation];[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
-    self.nativeMouseOwner=nil;
+    [self.pressAdmission forgetNativeMouseOwner];
     for(LiveSource *source in self.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.observationEpoch;}
     [self.nativeFamilies reset];self.nativeFamilies=nil;self.nativeViewSnapshot=nil;self.nativeOwnerSnapshot=nil;self.nativeViewPresenter=nil;self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;
     self.nativeSessionEpoch++;self.nativeResumeWanted=NO;

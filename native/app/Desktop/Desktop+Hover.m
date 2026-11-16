@@ -12,7 +12,7 @@
 - (BOOL)nativeHoverAllowed {
     if(!self.native||self.sizeTransition.fillHandoff||self.native.ended||self.cleaning||self.sessionInactive
         ||NSEvent.pressedMouseButtons||self.globalTrackpad.hasNativeMousePress||self.globalTrackpad.ownsTouches
-        ||self.nativeGestureView||self.pointerGrab.active||self.gestureOwner||self.trackpad.engaged
+        ||self.pressAdmission.gestureView||self.pointerGrab.active||self.gestureOwner||self.trackpad.engaged
         ||self.globalGestureContact||self.magnifying||self.flying||self.frameFlying||self.compositor.hasGeometryTransitions)return NO;
     for(DesktopView *view in self.views)if(view.gesture||view.heldPress||view.pressedTablet)return NO;
     return YES;

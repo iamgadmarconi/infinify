@@ -6,6 +6,8 @@
 #import "FlippedView.h"
 @class Desktop, LiveSource;
 @interface DesktopView : FlippedView
+- (BOOL)focusChildIntent:(NSDictionary *)intent;
+- (void)holdPress:(NSEvent *)event window:(NSNumber *)window intent:(NSDictionary *)intent at:(CGPoint)point output:(NSNumber *)output;
 - (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output;
 - (NSDictionary *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output;
 @property (weak) Desktop *desktop;
@@ -45,9 +47,6 @@
 @property NSDictionary *nativeFamilyHit;
 // Only a positively identified native root drag region installs this intent.
 // It keeps the binding/output of the swallowed physical pair, never app input.
-@property NSDictionary *nativeTitlePress;
-@property BOOL nativeTitleMoved,nativeTitleReleased;
-- (BOOL)nativeTitlePressCurrent;
 @property CFTimeInterval lastScrollPan; // last finger scroll that panned, 0 for none
 @property BOOL clearsFocus; // a pan begun on empty canvas that has not moved 5 points yet: released so, it unfocuses
 @property NSNumber *clickWindow; // the window an unbound press focused: released within 5 points, it is a completed click

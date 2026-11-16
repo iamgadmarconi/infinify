@@ -86,8 +86,6 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)nativeMouseOwnershipChanged:(CGEventRef)event buttons:(NSIndexSet *)buttons;
 - (void)updateNativeMouseOwners;
 - (LiveSource *)nativeSource:(CGWindowID)window at:(CGPoint)point;
-- (BOOL)takeOverNativeDrag:(LiveSource *)source event:(CGEventRef)event;
-- (void)finishNativeMouseOwner:(LiveSource *)source reason:(NSString *)reason;
 @end
 // Desktop+CapturedInput.m
 @interface Desktop (CapturedInput)
@@ -102,11 +100,9 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 @end
 // Desktop+NativeTitles.m
 @interface Desktop (NativeTitles)
-- (BOOL)earlyNativeTitle:(CGEventType)type event:(CGEventRef)event;
 - (void)refreshNativeButtons:(LiveSource *)source;
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point;
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output;
-- (BOOL)pickMotionAt:(CGPoint)point window:(NSNumber *)root;
 @end
 // Desktop+Gestures.m
 @interface Desktop (Gestures)

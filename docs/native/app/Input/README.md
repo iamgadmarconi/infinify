@@ -2,6 +2,13 @@
 
 How trackpad gestures reach the canvas: the touch recogniser, the MultitouchSupport source and the Dock-control guard (code in `native/app/Input`). The parity contract, [docs/parity/README.md](../../../parity/README.md), keeps what this document describes at `implemented_unverified` or below.
 
+Pointer event taps in `DWNativeInput` are transport: they install/remove and
+re-enable taps, then apply the pass/drop answer from the Desktop module's private
+`DWPressPairing`. Pair ownership, companion-button tombstones, cancellation and
+native takeover bookkeeping are not duplicated in the transport. Press policy
+and chrome freshness are owned by `DWPressAdmission`
+([Desktop](../Desktop/README.md#press-admission)).
+
 Keyboard input-source (TIS) access is main-thread only. `NSCAssert` enforces
 this at `keyboardLayout()` in `DWHotKeys.m` and at the `DWInputSources` entry
 points `DWCurrentLayout` and `DWSwitchLayout`; these assertions remain active
