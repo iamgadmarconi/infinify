@@ -120,5 +120,6 @@ NS_ASSUME_NONNULL_BEGIN
 // The exact navigation view after the size coordinator has claimed its effect.
 // Keeps an independent dictionary-valued focus effect beside a size in effects[].
 - (DWControllerReply *)replyForNavigationAfterConsumingSizeEffect:(nullable DWSizeEffect *)sized;
++ (DWControllerReply *)replyWithFocusEffect:(nullable DWFocusEffect *)effect;
 @end
 NS_ASSUME_NONNULL_END

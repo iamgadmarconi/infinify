@@ -112,4 +112,5 @@
     if(effect&&!beside&&(sized||DWArray(self.rawDictionary[@"effects"])))return [self replyWithoutEffect];
     return self;
 }
++ (DWControllerReply *)replyWithFocusEffect:(DWFocusEffect *)effect { return DWProject(self,effect?@{@"effect":effect.rawDictionary}:@{}); }
 @end
