@@ -59,7 +59,7 @@ The rule relocation (old coordinator methods below are in
 | Process activation 4 s, attach 15 s; delayed facts check event or read time; PID reuse rejected | `authorizeProcess:` | `classify_process` |
 | Intent consumed before attach; survives attach failure; driver epoch invalidated first | `Desktop+Windows.m` plus `consumeAttachIntentForPID:` | `WindowArrived`, `classify_process`; coordinator `attach:` relays cancellation then attaches |
 | Consumed process attach authorization capped at now + 1.5 s; bundle consumed on authorization | `authorizeProcess:` | `classify_process` |
-| Restore at most twice per PID per 5 s, age strictly greater than 5 s expires; failure stops retries | `startCorrectionTo:`, `complete:`, `pruneIntentsAt:` | `plan_correction`, `observation_receipt`, `Answer`, `prune` |
+| Restore at most twice per PID per 5 s, age strictly greater than 5 s expires; failure stops retries | `restoreConfirmedFocus:`, `complete:`, `pruneIntentsAt:` | `plan_correction`, `observation_receipt`, `Answer`, `prune` |
 | Background cohorts, exact bindings, 1.5 s lifetime, input cancellation, family observations | native protection/observe methods | `preserve_arrival`, `cancel_background`, `observe_owner_focus` |
 | Sibling placement else immediately outside viewport; stack below focused; suppress focus/navigation | `lifecycle.rs` unsolicited placement and settlement | `unsolicited_spawn`, `settle_arrival` |
 | Observation epoch precedes focus/camera command; pending effects answered against captured epoch; nil fact reproduces nil-snapshot fall-through (cancel click, advance, `focus_lost`, changed) | coordinator `observe` | `observe_owner_focus`, `observation_receipt`; native six-step dispatch |
