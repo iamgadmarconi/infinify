@@ -6,7 +6,6 @@
 #import "DWNativeFocus.h"
 #import "DWNativeFocusDriver.h"
 #import "DWNativeFamily.h"
-#import "DWGeometryJSON.h"
 // Listen-only session observer of physical mouse presses/releases and scrolls:
 // classifies clicks on Dock/Spotlight/Menu Bar vs inside the confirmed focused
 // window vs outside the canvas, without cancelling focus restoration on typing.
@@ -37,7 +36,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
         }else if(down){
             NSNumber *clicked=[desktop nativeSource:top at:point].logical;
             if(!clicked)for(DesktopView *view in desktop.views)if((CGWindowID)view.window.windowNumber==top){
-                NSNumber *output=[view outputAt:point];clicked=output?DWTyped([view hit:point output:output][@"window"],NSNumber.class):nil;break;
+                NSNumber *output=[view outputAt:point];clicked=output?[view hit:point output:output].window:nil;break;
             }
             [desktop.navigation noteWindowClick:clicked];
         }
@@ -47,15 +46,15 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     [desktop.navigation interrupt];return event;
 }
 @implementation Desktop (Navigation)
-- (NSDictionary *)sizeTransitionSnapshot {return [self call:@{@"op":@"snapshot"}];}
+- (id<DWResizeController>)sizeController {return self.controller;}
+- (DWScene *)sizeTransitionSnapshot {return self.controller.scene;}
 - (LiveSource *)sizeTransitionSource:(NSNumber *)window {return self.sources[window];}
 - (BOOL)sizeTransitionHeld:(NSNumber *)transaction {
     for(DesktopView *view in self.views)if(view.gesture==4&&[view.resizeTransaction isEqual:transaction])return YES;
     return self.gestureOwner&&self.gestureResize;
 }
 - (BOOL)sizeTransitionRemovalAllowed:(NSNumber *)window allowed:(BOOL *)allowed {
-    uint8_t ok=0;if(!self.controller||!driftwm_desktop_resize_removal_allowed(self.controller,window==nil,window.unsignedLongLongValue,&ok))return NO;
-    *allowed=ok!=0;return YES;
+    return [self.controller resizeRemovalAllowedForWindow:window allowed:allowed];
 }
 - (BOOL)sizeTransitionCaptureAllowed {return CGPreflightScreenCaptureAccess();}
 - (NSDictionary *)sizeTransitionWindowInfo:(CGWindowID)window {return windowInfo(window);}
@@ -69,46 +68,48 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
 // scene load, which rebuilds the controller. A size is settled by the native read alone (docs/crates/desktop/NATIVE_RESIZE.md).
 - (void)resizeCapability {
     NSString *status=self.statusText;
-    if(![self call:@{@"op":@"native_resize_capability",@"enabled":@YES}]){fprintf(stderr,"native_resize_capability: %s\n",self.statusText.UTF8String);self.statusText=status;}
+    if(![self.controller setNativeResizeCapability:YES]){fprintf(stderr,"native_resize_capability: %s\n",self.statusText.UTF8String);self.statusText=status;}
 }
 // The navigation coordinator's commands. An activation the user made natively may leave fullscreen, as upstream exits before it
 // activates another window of that output: the size transaction that takes the window back comes with the focus request and is
 // the resize coordinator's to perform, like any other. The coordinator reads "effect" as a focus request, so a size
 // transaction's is taken out of what it is handed, as in -applyReply:; no reply of its commands carried one before fullscreen.
-- (NSDictionary *)navigationCall:(NSDictionary *)command {
-    NSDictionary *reply=[self call:command],*sized=[self.sizeTransition consumeSize:reply];if(!sized||reply[@"effect"]!=sized)return reply;
-    NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];return rest;
-}
 // Every normal run: the coordinator ticks camera flights, performs the controller's focus
 // requests on native windows and follows native focus the user moved.
 - (void)configureNavigation {
     if(self.navigation)return;
     __weak Desktop *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.navigation",DISPATCH_QUEUE_SERIAL);
-    self.navigation=[[DWNavigationCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak navigationCall:c];} driver:[DWNativeFocusDriver new] clock:^uint64_t{return (uint64_t)(CACurrentMediaTime()*1e9);} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
+    self.controller.navigationPostprocess=^DWControllerReply *(DWControllerReply *reply){
+        DWSizeEffect *sized=[weak.sizeTransition consumeSize:reply];
+        return [reply replyAfterNavigationConsumedSizeEffect:sized];
+    };
+    self.navigation=[[DWNavigationCoordinator alloc]initWithController:self.controller driver:[DWNativeFocusDriver new] clock:^uint64_t{return (uint64_t)(CACurrentMediaTime()*1e9);} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
     self.navigation.enabled=YES;self.cycleHold=[DWCycleHold new];
     self.navigation.filterUnsolicitedActivations=!self.windowed&&self.managing&&!self.scope;
     self.navigation.arrivalProtection=^BOOL{Desktop *d=weak;return d.navigation.filterUnsolicitedActivations||(d.navigationTap&&d.navigationTapSource&&CGEventTapIsEnabled(d.navigationTap));};
     self.navigation.changed=^{[weak render];[weak ensureFrames];};
     self.navigation.settled=^{[weak saveScene];};
     self.navigation.output=^NSNumber *{return [weak viewOutput];};
-    self.navigation.nativeClickReleaseReady=^BOOL(NSDictionary *click){
-        Desktop *d=weak;LiveSource *source=d.sources[click[@"window"]];
+    self.navigation.nativeClickReleaseReady=^BOOL(DWSourceBinding *click,NSNumber *output){
+        Desktop *d=weak;LiveSource *source=d.sources[click.window];NSDictionary *identity=DWNativeIdentity(click.identity);
         if(!d||d.cleaning||d.sessionInactive||d.native.ended||!source||source.detached||source.nativeMouseOwnership
-            ||!boundIdentity(source.identity,click[@"identity"])||![[d.nativeViews desiredOwnerForWindow:source.logical]isEqual:click[@"output"]])return NO;
-        DWNativeAppliedPlacement *placed=[d.native acknowledgedPlacementForWindow:click[@"window"] identity:click[@"identity"] generation:click[@"generation"] output:click[@"output"]];
+            ||!boundIdentity(source.identity,identity)||![[d.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return NO;
+        DWNativeAppliedPlacement *placed=[d.native acknowledgedPlacementForWindow:click.window identity:identity generation:click.generation output:output];
         return placed&&[d.native isAcknowledgedPlacementCurrent:placed];
     };
     self.navigation.observationBinding=^DWObservedBinding{
         Desktop *d=weak;if(!d||d.cleaning||d.native.ended||(d.native&&!d.native.familiesNeeded))return nil;
-        NSMutableArray *roots=[NSMutableArray array];
-        // The live sources, each asked for its current controller binding: no whole-scene serialization per observation.
-        for(NSNumber *logical in d.sources){NSDictionary *source=[d sourceBinding:logical],*identity=DWTyped(source[@"identity"],NSDictionary.class);LiveSource *live=d.sources[logical];
-            if(!live||live.detached||!identity||!boundIdentity(live.identity,identity))continue;
-            [roots addObject:@{@"window":logical,@"identity":identity,@"generation":source[@"generation"]}];
+        NSMutableArray<DWSourceBinding *> *roots=[NSMutableArray array];
+        // Capture plain immutable bindings and force their nested projections on
+        // main. The worker only reads native identities; no scene/interner work.
+        for(NSNumber *logical in d.sources){DWSource *source=[d sourceBinding:logical];DWIdentity *identity=source.identity;LiveSource *live=d.sources[logical];
+            if(!live||live.detached||!identity||!boundIdentity(live.identity,DWNativeIdentity(identity)))continue;
+            DWSourceBinding *binding=[DWSourceBinding bindingWithWindow:logical identity:identity generation:source.generation];
+            (void)binding.identity;[roots addObject:binding];
         }
-        NSArray *bindings=roots.copy;
-        return ^NSDictionary *(NSDictionary *actual){
-            for(NSDictionary *binding in bindings){NSDictionary *root=binding[@"identity"];BOOL same=YES;
+        NSArray<DWSourceBinding *> *bindings=roots.copy;
+        return ^DWSourceBinding *(NSDictionary *actual){
+            for(DWSourceBinding *binding in bindings){NSDictionary *root=DWNativeIdentity(binding.identity);BOOL same=YES;
                 for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec"])if(![actual[key]isEqual:root[key]])same=NO;
                 if(same&&![actual[@"wid"]isEqual:root[@"wid"]]&&DWNativeWindowBelongsToRoot(actual,root))return binding;
             }
@@ -160,7 +161,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     [self cancelNativeTitleClick];
     [self.navigation invalidate];
     // Without the coordinator, pointer intent still stops every view-action flight.
-    if(!self.navigation)for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)[self call:@{@"op":@"cancel_navigation",@"output":output}];
+    if(!self.navigation)for(DesktopView *view in self.views)for(NSNumber *output in view.outputs)[self.controller cancelNavigationOnOutput:output];
 }
 - (void)stopNavigation {
     [self cancelNativeTitleClick];
@@ -179,7 +180,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     if(!self.pointerOutputs.count)return nil;
     NSInteger top=[NSWindow windowNumberAtPoint:NSMakePoint(p.x,screenTop()-p.y) belowWindowWithWindowNumber:0];
     BOOL native=[self nativeSource:(CGWindowID)top at:p]!=nil;
-    for(DesktopView *view in self.views)if(view.window.windowNumber==top||native)for(NSDictionary *o in self.pointerOutputs)if([view.outputs containsObject:o[@"id"]]&&CGRectContainsPoint(DWRectFromJSON(o[@"screen_bounds"]),p))return o[@"id"];
+    for(DesktopView *view in self.views)if(view.window.windowNumber==top||native)for(DWOutput *o in self.pointerOutputs)if([view.outputs containsObject:o.identifier]&&CGRectContainsPoint(o.screenBoundsOrNull,p))return o.identifier;
     return nil;
 }
 // The pointer's part of a frame, before the tick. It is read once, and only when one of its
@@ -206,9 +207,9 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     CGPoint p=pointer();NSNumber *output=[self outputUnderPointer:p];
     if(hover)for(DesktopView *view in self.views.copy)[view.hover frame:p output:[view.outputs containsObject:output]?output:nil];
     if(!report||(moved&&CGPointEqualToPoint(p,self.pointerReported)))return;self.pointerReported=p;
-    NSString *status=self.statusText;NSDictionary *told=[self call:@{@"op":@"pointer",@"output":output?:NSNull.null,@"screen":pointJSON(p)}];self.statusText=status;
+    NSString *status=self.statusText;DWControllerReply *told=[self.controller pointerOnOutput:output screen:p];self.statusText=status;
     // The pull moved the focus: a hover's effect, performed as a hover's is (-pointerFocused:).
-    if([told[@"dirty"]isEqual:@YES]){NSDictionary *effect=DWTyped(told[@"effect"],NSDictionary.class);[self.navigation perform:effect?@{@"effect":effect}:@{}];self.sceneDirty=YES;[self render];}
+    if([told.dirty isEqual:@YES]){[self.navigation perform:[told replyForPointerFocus]];self.sceneDirty=YES;[self render];}
 }
 // One frame of camera motion: every armed flight, a coasting pan, an edge pan. The navigation
 // coordinator owns the tick when there is one; otherwise the controller is ticked directly on the same clock.
@@ -216,9 +217,9 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     if(self.cleaning||self.sessionInactive||[self nativeUnavailable])return NO;
     [self pointerFrame];
     if(self.navigation)return [self.navigation frame];
-    NSDictionary *result=[self call:@{@"op":@"tick_navigation",@"timestamp_ns":@((uint64_t)(CACurrentMediaTime()*1e9))}];
-    if([result[@"changed_outputs"]count])[self render];
-    BOOL active=[result[@"needs_frames"]boolValue];if(!active&&self.flying)[self saveScene];self.flying=active;return active;
+    DWControllerReply *result=[self.controller tickNavigationAt:(uint64_t)(CACurrentMediaTime()*1e9)];
+    if(result.changedOutputs.count)[self render];
+    BOOL active=[result.needsFrames boolValue];if(!active&&self.flying)[self saveScene];self.flying=active;return active;
 }
 // Something may be in motion: a frame per display refresh from the next one on. Only the
 // controller knows what is, so that frame asks it, and the timer stops serving motion when nothing is.
@@ -228,7 +229,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
 - (void)panEnd:(NSNumber *)output {
     if(self.cleaning||[self nativeUnavailable]||!output)return;
     if(!self.frameFlying)[self cameraFrame];
-    [self call:@{@"op":@"pan_end",@"output":output}];[self ensureFrames];
+    [self.controller endPanOnOutput:output time:nil];[self ensureFrames];
 }
 // A reply that began a native size transaction carries its effect: a sizing action's, an IPC resize's, a fullscreen's, or the attach
 // of a window whose rule names a size. It is the resize coordinator's to perform, which every run has.
@@ -239,19 +240,18 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
 // Logical focus and raising are done when this returns. The native focus request is only
 // handed to the coordinator, which performs it on the freshly validated window on its worker:
 // the press is forwarded while that request is in flight, not after it.
-- (void)activate:(NSNumber *)window output:(NSNumber *)output { [self applyReply:[self call:@{@"op":@"activate",@"window":window,@"output":output?:NSNull.null,@"cause":@"click"}]]; }
+- (void)activate:(NSNumber *)window output:(NSNumber *)output { [self applyReply:[self.controller activateWindow:window output:output cause:@"click" identity:nil generation:nil]]; }
 // That press released as a completed click. With auto_navigate_on_click the controller flies
 // to a window that still holds focus and is not wholly in view. The reply carries a flight or
 // nothing, never a focus request, so the press's request stays the coordinator's.
-- (void)clickReleased:(NSNumber *)window output:(NSNumber *)output { if([self nativeUnavailable])return;[self applyReply:[self call:@{@"op":@"activate",@"window":window,@"output":output?:NSNull.null,@"cause":@"click_release"}]]; }
+- (void)clickReleased:(NSNumber *)window output:(NSNumber *)output { if([self nativeUnavailable])return;[self applyReply:[self.controller activateWindow:window output:output cause:@"click_release" identity:nil generation:nil]]; }
 // Pinned upstream pointer.rs title-bar branch and navigation.rs resolve_click_navigate:
 // a stationary title grab is still a click; wait past its competing double-click.
 - (void)cancelNativeTitleClick { [self.nativeTitleClickTimer invalidate];self.nativeTitleClickTimer=nil;self.nativeTitleClick=nil; }
 - (void)deferNativeTitleClick:(NSDictionary *)intent {
-    [self cancelNativeTitleClick];NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*pose=nil;
-    for(NSDictionary *view in snapshot[@"outputs"])if([view[@"id"]isEqual:intent[@"output"]])pose=view;
+    [self cancelNativeTitleClick];DWScene *snapshot=self.controller.scene;DWOutput *pose=[snapshot outputWithID:intent[@"output"]];
     if(!pose)return;
-    NSMutableDictionary *click=[intent mutableCopy];click[@"pose"]=@{@"camera":pose[@"camera"],@"zoom":pose[@"zoom"],@"screen_bounds":pose[@"screen_bounds"]};click[@"session"]=@(self.nativeSessionEpoch);self.nativeTitleClick=click.copy;
+    NSMutableDictionary *click=[intent mutableCopy];click[@"pose"]=pose;click[@"session"]=@(self.nativeSessionEpoch);self.nativeTitleClick=click.copy;
     __weak Desktop *weak=self;
     self.nativeTitleClickTimer=[NSTimer timerWithTimeInterval:MAX(.3,NSEvent.doubleClickInterval) repeats:NO block:^(NSTimer *timer){[weak fireNativeTitleClick:timer];}];
     [NSRunLoop.mainRunLoop addTimer:self.nativeTitleClickTimer forMode:NSRunLoopCommonModes];
@@ -264,27 +264,25 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
         ||[click[@"session"]unsignedLongLongValue]!=self.nativeSessionEpoch||!boundIdentity(source.identity,click[@"identity"])
         ||![birth(source.router.pid)isEqual:source.router.processBirth]
         ||![[self.nativeViews desiredOwnerForWindow:source.logical]isEqual:click[@"output"]])return;
-    NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*binding=nil,*pose=nil,*focus=DWTyped(snapshot[@"focus"],NSDictionary.class);
-    for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:click[@"window"]])binding=DWTyped(window[@"source"],NSDictionary.class);
-    for(NSDictionary *view in snapshot[@"outputs"])if([view[@"id"]isEqual:click[@"output"]])pose=view;
-    if(!pose||![binding[@"generation"]isEqual:click[@"generation"]]||!boundIdentity(binding[@"identity"],click[@"identity"])
-        ||![focus[@"intent"]isEqual:click[@"window"]]||DWTyped(focus[@"pending_effect"],NSDictionary.class))return;
-    for(NSString *key in @[@"camera",@"zoom",@"screen_bounds"])if(![pose[key]isEqual:click[@"pose"][key]])return;
-    if(!self.logicalFocus){NSDictionary *observed=DWTyped(focus[@"observed_native"],NSDictionary.class);
-        if(![observed[@"window"]isEqual:click[@"window"]]||![observed[@"generation"]isEqual:click[@"generation"]]
-            ||!boundIdentity(observed[@"identity"],click[@"identity"])||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=source.router.pid)return;}
-    NSMutableDictionary *command=[click mutableCopy];[command removeObjectsForKeys:@[@"pose",@"session"]];command[@"op"]=@"activate";command[@"cause"]=@"click_release";
-    [self applyReply:[self call:command]];
+    DWScene *snapshot=self.controller.scene;DWSource *binding=[snapshot windowWithID:click[@"window"]].source;
+    DWOutput *pose=[snapshot outputWithID:click[@"output"]];DWFocus *focus=snapshot.focus;
+    if(!pose||![binding.generation isEqual:click[@"generation"]]||!boundIdentity(DWNativeIdentity(binding.identity),click[@"identity"])
+        ||![focus.intent isEqual:click[@"window"]]||focus.pendingEffect)return;
+    if(![pose hasSamePoseAsOutput:click[@"pose"]])return;
+    if(!self.logicalFocus){DWEffect *observed=focus.observedNative;
+        if(![observed.window isEqual:click[@"window"]]||![observed.generation isEqual:click[@"generation"]]
+            ||!boundIdentity(DWNativeIdentity(observed.identity),click[@"identity"])||NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=source.router.pid)return;}
+    [self applyReply:[self.controller activateWindow:click[@"window"] output:click[@"output"] cause:@"click_release" identity:DWControllerIdentity(click[@"identity"]) generation:click[@"generation"]]];
 }
 // Upstream's raise_and_focus by itself, for a press bound to a resize that begins nothing: the gate is off or the begin was
 // turned away (-beginResize:…), or the window is screen-pinned (-press:…).
-- (void)raiseFocus:(NSNumber *)window { [self applyReply:[self call:@{@"op":@"focus",@"window":window}]]; }
+- (void)raiseFocus:(NSNumber *)window { [self applyReply:[self.controller focusWindow:window]]; }
 // The reply to a resize the pointer began, at a handle or by a press bound to resize-window. Upstream raises and focuses the window
 // ahead of its resize grab, and the controller does so inside begin_native_resize. That reply's "effect" is the size transaction's,
 // which the resize coordinator has consumed, so the focus request is among its "effects", as in a sizing action's reply, and is the
 // navigation coordinator's to perform; with none, nothing is read.
-- (void)resizeFocus:(NSDictionary *)reply { if(!self.navigation)return;NSMutableDictionary *rest=[reply mutableCopy];[rest removeObjectForKey:@"effect"];[self.navigation perform:rest]; }
+- (void)resizeFocus:(DWControllerReply *)reply { if(!self.navigation)return;[self.navigation perform:[reply replyWithoutEffect]]; }
 // Upstream src/grabs/pan_grab.rs: a press on empty canvas released within 5 points leaves
 // no window focused. Logical only: nothing is asked of any native application.
-- (void)clearFocus { [self applyReply:[self call:@{@"op":@"clear_focus"}]]; }
+- (void)clearFocus { [self applyReply:[self.controller clearFocus]]; }
 @end
