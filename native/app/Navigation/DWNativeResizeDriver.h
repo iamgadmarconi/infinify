@@ -33,7 +33,7 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 // Main-only. Pin one exact initial read for an explicit snapshot handoff. Its
 // main-queue admission may wait until 2.5s after preparation; ordinary reads and
 // every setter keep .25s. Validation and canPerform must both still allow it.
-- (void)prepareBaseline:(NSDictionary *)effect validate:(BOOL (^)(void))validate;
+- (void)prepareBaseline:(DWSizeEffect *)effect validate:(BOOL (^)(void))validate;
 // Main-only. Revoke the pinned read, including a callback already queued.
 - (void)clearPreparedBaseline;
 // Explicit snapshot handoffs may extend preparation to 2.5s. Zero keeps the
@@ -51,7 +51,7 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 // even when native Fill succeeded; the snapshot owns the visible animation.
 @property (copy) DWNativeFillReadiness (^restoreReady)(DWSizeEffect *effect);
 // Safe from main or worker: only a successful actual app Fill qualifies.
-- (BOOL)hasNativeFillForEffect:(NSDictionary *)effect;
+- (BOOL)hasNativeFillForEffect:(DWSizeEffect *)effect;
 // Called on the resize worker and an independent watchdog. NO starts one hold;
 // YES balances it. Missing/failed hold support refuses rebasing before AX.
 @property (copy) CGError (^screenUpdates)(BOOL enabled);

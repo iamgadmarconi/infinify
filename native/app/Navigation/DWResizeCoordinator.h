@@ -48,7 +48,7 @@ typedef DWControllerReply *(^DWResizeRequest)(id<DWResizeController> controller)
 @property (copy) BOOL (^deferred)(DWSizeEffect *effect);
 // Retire only an exact, never-admitted pending baseline without native work.
 // Setters, superseded effects and effects with running obligations are refused.
-- (void)discardDeferredEffect:(NSDictionary *)effect;
+- (void)discardDeferredEffect:(DWSizeEffect *)effect;
 // Is this transaction held by input that is still down (a resize press whose button is down, a resize swipe whose fingers
 // are)? A pointer at rest sends nothing and no effect is owed for it: such a transaction is no orphan, and -reap leaves it alone. Whoever
 // answers YES ends the transaction itself when that input ends or is lost. Unset, nothing is held.
