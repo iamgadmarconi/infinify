@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Bundled, checkout-independent launcher for the full desktop helper: run by the owner in a terminal, by the login item
 # when the owner enabled compositor mode (--login), and by the running app after a Dock restart (--reload).
-# No settings change, automatic retry of an uncertain injection or runtime cleanup. The one Dock restart it makes is after an update
-# whose helper code differs from the code in the recorded, still running Dock (native_restart_recorded_dock, below).
+# No settings change, automatic retry of an uncertain injection or runtime cleanup. It restarts the recorded, still running Dock
+# once only when an update changed the helper code, when migrating an earlier /tmp runtime, or when a recorded runtime lost its
+# nonce or /tmp payload copy while that Dock lived (native_restart_recorded_dock, below).
 set +x
 set -eu
 umask 077
@@ -242,7 +243,7 @@ native_lock="$native_state_dir/launch.lock"
 [ ! -L "$native_state_dir" ] || fail 'the launch-state directory must not be a symlink.'
 /bin/mkdir -p "$native_state_dir"
 [ -d "$native_state_dir" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_state_dir")" = "$native_uid:700" ] || fail 'launch-state directory must be owned by this login user with mode 0700.'
-/bin/mkdir "$native_lock" 2>/dev/null || fail 'another launch or interrupted launch lock exists; inspect it before retrying.'
+/bin/mkdir "$native_lock" 2>/dev/null || fail 'another launch or interrupted launch lock exists; inspect it before retrying. Wait a moment and try again, or remove ~/Library/Application Support/Infinify/native-desktop/launch.lock once no Infinify launcher is running.'
 native_lock_held=true
 # Only this invocation's empty lock is removed. Runtimes, nonce files, payload
 # sidecars and recovery journals are never deleted, even after an early failure.
@@ -275,8 +276,8 @@ elif native_paused; then
   esac
 fi
 if [ -e "$native_pending_record" ] || [ -L "$native_pending_record" ]; then
-  private_file "$native_pending_record" || fail 'an interrupted launch or recovery marker is not private; preserve it and inspect before retrying.'
-  fail 'an interrupted launch or recovery remains pending; preserve its runtime and inspect it before retrying.'
+  private_file "$native_pending_record" || fail 'an interrupted launch or recovery marker is not private; preserve it and inspect before retrying. Once no load is running, restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.pending.plist, and open Infinify again.'
+  fail 'an interrupted launch or recovery remains pending; preserve its runtime and inspect it before retrying. Once no load is running, restart your Mac (or run killall Dock in Terminal), remove ~/Library/Application Support/Infinify/native-desktop/launch.pending.plist, and open Infinify again.'
 fi
 
 native_prior_dock_gone() {
@@ -343,59 +344,67 @@ native_validate_retired_journal() {
     if [ -e "$native_runtime/$native_artifact" ] || [ -L "$native_runtime/$native_artifact" ]; then native_journal_absent=false; fi
   done
   if [ "$native_journal_absent" = true ]; then native_journal_refused=absent; return 0; fi
-  private_file "$native_journal" || fail 'the retired helper has no private committed v2 journal; preserve its state and inspect it.'
-  native_journal_size=$(/usr/bin/stat -f '%z' "$native_journal") || fail 'could not inspect the retired helper journal.'
-  native_decimal "$native_journal_size" && [ "$native_journal_size" -ge 1 ] && [ "$native_journal_size" -le 4194304 ] || fail 'the retired helper journal size is invalid; preserve it and inspect it.'
-  native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no integer schema number; preserve it and inspect it.'
-  native_decimal "$native_journal_version" || fail 'the retired helper journal has an invalid schema number; preserve it and inspect it.'
+  private_file "$native_journal" || fail 'the retired helper has no private committed v2 journal; preserve its state and inspect it. Restart your Mac to start fresh without replaying it.'
+  native_journal_size=$(/usr/bin/stat -f '%z' "$native_journal") || fail 'could not inspect the retired helper journal. Restart your Mac to start fresh.'
+  native_decimal "$native_journal_size" && [ "$native_journal_size" -ge 1 ] && [ "$native_journal_size" -le 4194304 ] || fail 'the retired helper journal size is invalid; preserve it and inspect it. Restart your Mac to start fresh.'
+  native_journal_version=$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no integer schema number; preserve it and inspect it. Restart your Mac to start fresh.'
+  native_decimal "$native_journal_version" || fail 'the retired helper journal has an invalid schema number; preserve it and inspect it. Restart your Mac to start fresh.'
   if [ "$native_journal_version" != "$native_journal_schema" ]; then native_journal_refused=true; return 0; fi
-  native_journal_pid=$(/usr/bin/plutil -extract server_pid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer server PID.'
-  native_pid_valid "$native_journal_pid" && [ "$native_journal_pid" = "$native_old_dock_pid" ] || fail 'the retired helper journal does not identify its recorded Dock process.'
-  native_journal_sec=$(/usr/bin/plutil -extract server_birth_sec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time.'
-  native_journal_usec=$(/usr/bin/plutil -extract server_birth_usec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time.'
-  native_journal_uid=$(/usr/bin/plutil -extract server_uid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server UID.'
-  native_decimal "$native_journal_sec" && [ "$native_journal_sec" = "$native_old_dock_sec" ] || fail 'the retired helper journal birth time differs from the launch record.'
-  native_decimal "$native_journal_usec" && [ "$native_journal_usec" = "$native_old_dock_usec" ] || fail 'the retired helper journal birth time differs from the launch record.'
-  [ "$native_journal_uid" = "$native_uid" ] || fail 'the retired helper journal belongs to another login user.'
-  native_journal_boot_uuid=$(/usr/bin/plutil -extract boot_uuid raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no exact boot session UUID.'
-  native_valid_boot_uuid "$native_journal_boot_uuid" && [ "$native_journal_boot_uuid" = "$native_boot_uuid" ] || fail 'the retired helper journal belongs to a different boot session; preserve it and inspect it.'
-  native_journal_generation=$(/usr/bin/plutil -extract generation raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer generation.'
-  native_decimal "$native_journal_generation" || fail 'the retired helper journal generation is invalid.'
-  native_journal_state=$(/usr/bin/plutil -extract state raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no valid state.'
-  case "$native_journal_state" in empty|holding|restoring) ;; *) fail 'the retired helper journal has an unknown state; preserve it and inspect it.' ;; esac
-  [ "$(/usr/bin/plutil -type windows "$native_journal")" = array ] || fail 'the retired helper journal has no valid active window table.'
-  [ "$(/usr/bin/plutil -type released_windows "$native_journal")" = array ] || fail 'the retired helper journal has no valid retained-original table.'
-  native_journal_restore_type=$(/usr/bin/plutil -type last_restore "$native_journal") || fail 'the retired helper journal has no valid restoration receipt.'
-  case "$native_journal_restore_type" in '(any)'|dictionary) ;; *) fail 'the retired helper journal has an unknown restoration receipt; preserve it and inspect it.' ;; esac
+  native_journal_pid=$(/usr/bin/plutil -extract server_pid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer server PID. Restart your Mac to start fresh.'
+  native_pid_valid "$native_journal_pid" && [ "$native_journal_pid" = "$native_old_dock_pid" ] || fail 'the retired helper journal does not identify its recorded Dock process. Restart your Mac to start fresh.'
+  native_journal_sec=$(/usr/bin/plutil -extract server_birth_sec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time. Restart your Mac to start fresh.'
+  native_journal_usec=$(/usr/bin/plutil -extract server_birth_usec raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server birth time. Restart your Mac to start fresh.'
+  native_journal_uid=$(/usr/bin/plutil -extract server_uid raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact server UID. Restart your Mac to start fresh.'
+  native_decimal "$native_journal_sec" && [ "$native_journal_sec" = "$native_old_dock_sec" ] || fail 'the retired helper journal birth time differs from the launch record. Restart your Mac to start fresh.'
+  native_decimal "$native_journal_usec" && [ "$native_journal_usec" = "$native_old_dock_usec" ] || fail 'the retired helper journal birth time differs from the launch record. Restart your Mac to start fresh.'
+  [ "$native_journal_uid" = "$native_uid" ] || fail 'the retired helper journal belongs to another login user. Restart your Mac to start fresh.'
+  native_journal_boot_uuid=$(/usr/bin/plutil -extract boot_uuid raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no exact boot session UUID. Restart your Mac to start fresh.'
+  native_valid_boot_uuid "$native_journal_boot_uuid" && [ "$native_journal_boot_uuid" = "$native_boot_uuid" ] || fail 'the retired helper journal belongs to a different boot session; preserve it and inspect it. Restart your Mac to start fresh.'
+  native_journal_generation=$(/usr/bin/plutil -extract generation raw -expect integer -o - "$native_journal") || fail 'the retired helper journal has no exact integer generation. Restart your Mac to start fresh.'
+  native_decimal "$native_journal_generation" || fail 'the retired helper journal generation is invalid. Restart your Mac to start fresh.'
+  native_journal_state=$(/usr/bin/plutil -extract state raw -expect string -o - "$native_journal") || fail 'the retired helper journal has no valid state. Restart your Mac to start fresh.'
+  case "$native_journal_state" in empty|holding|restoring) ;; *) fail 'the retired helper journal has an unknown state; preserve it and inspect it. Restart your Mac to start fresh.' ;; esac
+  [ "$(/usr/bin/plutil -type windows "$native_journal")" = array ] || fail 'the retired helper journal has no valid active window table. Restart your Mac to start fresh.'
+  [ "$(/usr/bin/plutil -type released_windows "$native_journal")" = array ] || fail 'the retired helper journal has no valid retained-original table. Restart your Mac to start fresh.'
+  native_journal_restore_type=$(/usr/bin/plutil -type last_restore "$native_journal") || fail 'the retired helper journal has no valid restoration receipt. Restart your Mac to start fresh.'
+  case "$native_journal_restore_type" in '(any)'|dictionary) ;; *) fail 'the retired helper journal has an unknown restoration receipt; preserve it and inspect it. Restart your Mac to start fresh.' ;; esac
   native_import_source="$native_runtime/recovery-source.json"
-  native_sidecar="$native_loaded_dir/payload-arm64e.dylib.json"
-  private_file "$native_sidecar" || fail 'the retired helper sidecar is missing or not private; preserve the runtime and inspect it.'
-  if [ -e "$native_import_source" ] || [ -L "$native_import_source" ]; then
-    private_file "$native_import_source" || fail 'the retained historical recovery source is not private; preserve it and inspect it.'
-    native_import_size=$(/usr/bin/stat -f '%z' "$native_import_source") || fail 'could not inspect the historical recovery source.'
-    native_decimal "$native_import_size" && [ "$native_import_size" -ge 1 ] && [ "$native_import_size" -le 4194304 ] || fail 'the historical recovery source size is invalid; preserve it and inspect it.'
-    private_file "$native_sidecar" || fail 'the retained recovery sidecar is missing or not private; preserve the runtime and inspect it.'
-    native_import_hash=$(/usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar") || fail 'the retained recovery sidecar has no source digest.'
-    native_valid_hash "$native_import_hash" || fail 'the retained recovery sidecar has an invalid source digest.'
-    [ "$(native_digest "$native_import_source")" = "$native_import_hash" ] || fail 'the retained historical recovery source differs from its sidecar digest.'
-    [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_import_source")" = "$native_journal_schema" ] || fail "the retained historical recovery source is not schema $native_journal_schema."
-    for native_pair in 'server_pid recovery_server_pid' 'server_birth_sec recovery_server_birth_sec' 'server_birth_usec recovery_server_birth_usec' 'server_uid recovery_server_uid'; do
-      native_source_key=${native_pair%% *}
-      native_sidecar_key=${native_pair#* }
-      native_source_value=$(/usr/bin/plutil -extract "$native_source_key" raw -expect integer -o - "$native_import_source") || fail 'the retained historical recovery source is missing writer identity.'
-      native_sidecar_value=$(/usr/bin/plutil -extract "$native_sidecar_key" raw -expect integer -o - "$native_sidecar") || fail 'the retained recovery sidecar is missing writer identity.'
-      [ "$native_source_value" = "$native_sidecar_value" ] || fail 'the retained historical source identity differs from its sidecar.'
-    done
-    native_source_boot_uuid=$(/usr/bin/plutil -extract boot_uuid raw -expect string -o - "$native_import_source") || fail 'the retained historical source has no boot session UUID.'
-    native_sidecar_boot_uuid=$(/usr/bin/plutil -extract recovery_boot_uuid raw -expect string -o - "$native_sidecar") || fail 'the retained recovery sidecar has no boot session UUID.'
-    native_valid_boot_uuid "$native_source_boot_uuid" && [ "$native_source_boot_uuid" = "$native_sidecar_boot_uuid" ] || fail 'the retained historical source boot identity differs from its sidecar.'
+  if [ -n "${native_loaded_dir:-}" ]; then
+    native_sidecar="$native_loaded_dir/payload-arm64e.dylib.json"
+    private_file "$native_sidecar" || fail 'the retired helper sidecar is missing or not private; preserve the runtime and inspect it. Restart your Mac to start fresh.'
+    if [ -e "$native_import_source" ] || [ -L "$native_import_source" ]; then
+      private_file "$native_import_source" || fail 'the retained historical recovery source is not private; preserve it and inspect it. Restart your Mac to start fresh.'
+      native_import_size=$(/usr/bin/stat -f '%z' "$native_import_source") || fail 'could not inspect the historical recovery source. Restart your Mac to start fresh.'
+      native_decimal "$native_import_size" && [ "$native_import_size" -ge 1 ] && [ "$native_import_size" -le 4194304 ] || fail 'the historical recovery source size is invalid; preserve it and inspect it. Restart your Mac to start fresh.'
+      native_import_hash=$(/usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar") || fail 'the retained recovery sidecar has no source digest. Restart your Mac to start fresh.'
+      native_valid_hash "$native_import_hash" || fail 'the retained recovery sidecar has an invalid source digest. Restart your Mac to start fresh.'
+      [ "$(native_digest "$native_import_source")" = "$native_import_hash" ] || fail 'the retained historical recovery source differs from its sidecar digest. Restart your Mac to start fresh.'
+      [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_import_source")" = "$native_journal_schema" ] || fail "the retained historical recovery source is not schema $native_journal_schema. Restart your Mac to start fresh."
+      for native_pair in 'server_pid recovery_server_pid' 'server_birth_sec recovery_server_birth_sec' 'server_birth_usec recovery_server_birth_usec' 'server_uid recovery_server_uid'; do
+        native_source_key=${native_pair%% *}
+        native_sidecar_key=${native_pair#* }
+        native_source_value=$(/usr/bin/plutil -extract "$native_source_key" raw -expect integer -o - "$native_import_source") || fail 'the retained historical recovery source is missing writer identity. Restart your Mac to start fresh.'
+        native_sidecar_value=$(/usr/bin/plutil -extract "$native_sidecar_key" raw -expect integer -o - "$native_sidecar") || fail 'the retained recovery sidecar is missing writer identity. Restart your Mac to start fresh.'
+        [ "$native_source_value" = "$native_sidecar_value" ] || fail 'the retained historical source identity differs from its sidecar. Restart your Mac to start fresh.'
+      done
+      native_source_boot_uuid=$(/usr/bin/plutil -extract boot_uuid raw -expect string -o - "$native_import_source") || fail 'the retained historical source has no boot session UUID. Restart your Mac to start fresh.'
+      native_sidecar_boot_uuid=$(/usr/bin/plutil -extract recovery_boot_uuid raw -expect string -o - "$native_sidecar") || fail 'the retained recovery sidecar has no boot session UUID. Restart your Mac to start fresh.'
+      native_valid_boot_uuid "$native_source_boot_uuid" && [ "$native_source_boot_uuid" = "$native_sidecar_boot_uuid" ] || fail 'the retained historical source boot identity differs from its sidecar. Restart your Mac to start fresh.'
+    elif [ "$native_runtime_in_tmp" != true ]; then
+      if /usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar" >/dev/null 2>&1; then
+        fail 'the recovery sidecar names a historical source that is missing; preserve the runtime and inspect it. Restart your Mac to start fresh.'
+      fi
+    fi
   else
-    if /usr/bin/plutil -extract recovery_source_sha256 raw -expect string -o - "$native_sidecar" >/dev/null 2>&1; then
-      fail 'the recovery sidecar names a historical source that is missing; preserve the runtime and inspect it.'
+    # Only a /tmp runtime from <= 0.2.9 whose sudo payload copy and sidecar were both removed by macOS's /tmp cleaner reaches here with
+    # native_loaded_dir unset; loader-arm64e validates v2-journal.json against the retired Dock identity before importing it.
+    if [ -e "$native_import_source" ] || [ -L "$native_import_source" ]; then
+      private_file "$native_import_source" || fail 'the retained historical recovery source is not private; preserve it and inspect it. Restart your Mac to start fresh.'
+      [ "$(/usr/bin/plutil -extract v raw -expect integer -o - "$native_import_source")" = "$native_journal_schema" ] || fail "the retained historical recovery source is not schema $native_journal_schema. Restart your Mac to start fresh."
     fi
   fi
   for native_artifact in v2-journal.next recovery.json recovery.next helper.sock; do
-    [ ! -e "$native_runtime/$native_artifact" ] && [ ! -L "$native_runtime/$native_artifact" ] || fail "the retired helper runtime contains $native_artifact; preserve it and inspect it."
+    [ ! -e "$native_runtime/$native_artifact" ] && [ ! -L "$native_runtime/$native_artifact" ] || fail "the retired helper runtime contains $native_artifact; preserve it and inspect it. Restart your Mac to start fresh."
   done
   native_recovery_source=$native_journal
 }
@@ -428,25 +437,45 @@ native_payload_identity() {
 native_identity_signer() { printf '%s\n' "$1" | /usr/bin/grep -v '^cdhash='; }
 native_identity_cdhash() { printf '%s\n' "$1" | /usr/bin/sed -n 's/^cdhash=//p'; }
 
-# After an update whose helper code differs from the code the recorded, still running Dock holds, the Dock is restarted once, as
-# Sunlight does after an update (it "loads it by itself the first time it starts after the update, which restarts the Dock once"), and
-# the start goes on through the retired-Dock path below: journal handoff, recovery, load through the launch daemon. Only where the load
-# needs no password (the daemon is enabled and answers; a login start or a start by hand, never --reload), only after every check that
-# path makes of the retired runtime has passed, only the Dock the record names (the loader compares its PID and process birth just
-# before the signal), and once per run. No Infinify runs now (checked above), so no app's Dock reloader sees this restart.
+# After an update whose helper code differs from the code the recorded, still running Dock holds, or when an earlier /tmp runtime or a
+# runtime whose nonce or /tmp payload copy disappeared must be retired, the recorded Dock is restarted once, as Sunlight does after an
+# update, and the start goes on through the retired-Dock path below: journal handoff, recovery, load through the launch daemon (or an
+# explicit terminal sudo run). Never in --reload, only after every check that path makes of the retired runtime has passed, only the
+# Dock the record names (the loader compares its PID and process birth just before the signal), and once per run. No Infinify runs now
+# (checked above), so no app's Dock reloader sees this restart.
+native_can_load_after_restart() {
+  native_daemon_enabled || { [ "$native_mode" = launch ] && [ "$native_setup_feedback" != true ] && [ -t 0 ]; }
+}
 native_dock_restarted=false
 native_restart_recorded_dock() {
+  native_restart_why=$1
   [ "$native_dock_restarted" = false ] || fail 'the Dock was already restarted once in this start; nothing more was done. Start Infinify again.'
   case "$native_mode" in
     login|launch) ;;
-    *) fail 'the running Dock holds the helper of another Infinify build; a reload does not restart the Dock. Quit Infinify and start it again.' ;;
+    *)
+      if [ "$native_restart_why" = runtime ]; then
+        fail 'the recorded helper runtime lost its credentials while the Dock lived; a reload does not restart the Dock. Quit Infinify and start it again.'
+      fi
+      fail 'the running Dock holds the helper of another Infinify build; a reload does not restart the Dock. Quit Infinify and start it again.'
+      ;;
   esac
-  native_daemon_enabled || fail 'the running Dock holds the helper of an earlier Infinify build, and without the launch daemon a new one cannot be loaded without a password. Run Infinify native-desktop enable in Terminal once, or restart the Dock (killall Dock) and run Infinify native-desktop in Terminal; the windows are restored from the journal.'
-  native_ping_daemon
+  if native_daemon_enabled; then
+    native_ping_daemon
+  elif [ "$native_mode" = launch ] && [ "$native_setup_feedback" != true ] && [ -t 0 ]; then
+    /usr/bin/sudo /usr/bin/true || fail 'sudo authorization failed; the Dock was not restarted and nothing was loaded.'
+  elif [ "$native_restart_why" = runtime ]; then
+    fail 'the recorded helper runtime lost its nonce while the Dock was still running, and without the launch daemon a new helper cannot be loaded without a password. Run Infinify native-desktop enable in Terminal once, or restart the Dock (killall Dock) and run Infinify native-desktop in Terminal; the windows are restored from the journal.'
+  else
+    fail 'the running Dock holds the helper of an earlier Infinify build, and without the launch daemon a new one cannot be loaded without a password. Run Infinify native-desktop enable in Terminal once, or restart the Dock (killall Dock) and run Infinify native-desktop in Terminal; the windows are restored from the journal.'
+  fi
   native_validate_retired_journal
   native_dock_restarted=true
   "$native_loader" --restart-dock "$native_old_dock_pid" "$native_old_dock_sec" "$native_old_dock_usec" >/dev/null || fail 'the Dock is no longer the one the launch record names, so it was not restarted and nothing was loaded. Start Infinify again.'
-  printf '%s\n' 'Infinify restarted the Dock once: it held the helper of an earlier Infinify build, and this build'"'"'s helper is other code; the new Dock gets this build'"'"'s helper and the windows are restored from the journal.'
+  case "$native_restart_why" in
+    runtime) printf '%s\n' 'Infinify restarted the Dock once: the recorded runtime lost its nonce or /tmp payload while that Dock lived; the new Dock gets a fresh /var/tmp runtime and the windows are restored from the journal.' ;;
+    migrate) printf '%s\n' 'Infinify restarted the Dock once: the recorded runtime was under /tmp from an earlier build; the new Dock gets a /var/tmp runtime that survives nightly /tmp cleanup and the windows are restored from the journal.' ;;
+    *) printf '%s\n' 'Infinify restarted the Dock once: it held the helper of an earlier Infinify build, and this build'"'"'s helper is other code; the new Dock gets this build'"'"'s helper and the windows are restored from the journal.' ;;
+  esac
   # The next Dock, launchd's, settled as a login start wants it (the same identity twice, three seconds apart), for up to about three minutes.
   native_restart_wait=0
   while :; do
@@ -455,7 +484,7 @@ native_restart_recorded_dock() {
     if native_read_dock 1 3; then
       native_take_dock
       if [ "$native_dock_pid" != "$native_old_dock_pid" ] || [ "$native_dock_sec" != "$native_old_dock_sec" ] || [ "$native_dock_usec" != "$native_old_dock_usec" ]; then
-        [ "$native_boot_uuid" = "$native_record_boot_uuid" ] || fail 'the boot session changed while the Dock restarted; preserve the launch record and inspect it.'
+        [ "$native_boot_uuid" = "$native_record_boot_uuid" ] || fail 'the boot session changed while the Dock restarted; preserve the launch record and inspect it. Restart your Mac, then open Infinify again.'
         return 0
       fi
     fi
@@ -465,16 +494,18 @@ native_restart_recorded_dock() {
 
 native_reuse=false
 native_recovery=false
+native_runtime_in_tmp=false
+native_loaded_dir=
 
 if [ -e "$native_record" ] || [ -L "$native_record" ]; then
-  private_file "$native_record" || fail 'the existing launch record is not a private regular file; inspect it before retrying.'
-  /usr/bin/plutil -lint "$native_record" >/dev/null || fail 'the existing launch record is not a valid property list.'
-  native_record_keys=$(/usr/bin/plutil -convert xml1 -o - "$native_record" | /usr/bin/sed -n 's/^[[:space:]]*<key>\([^<]*\)<\/key>$/\1/p' | /usr/bin/sort) || fail 'could not inspect launch-record keys.'
+  private_file "$native_record" || fail 'the existing launch record is not a private regular file; inspect it before retrying. Restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.'
+  /usr/bin/plutil -lint "$native_record" >/dev/null || fail 'the existing launch record is not a valid property list. Restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.'
+  native_record_keys=$(/usr/bin/plutil -convert xml1 -o - "$native_record" | /usr/bin/sed -n 's/^[[:space:]]*<key>\([^<]*\)<\/key>$/\1/p' | /usr/bin/sort) || fail 'could not inspect launch-record keys. Restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.'
   native_expected_record_keys=$(printf '%s\n' boot_uuid dock_birth_sec dock_birth_usec dock_pid nonce_file outcome payload_sha256 runtime version | /usr/bin/sort)
-  [ "$native_record_keys" = "$native_expected_record_keys" ] || fail 'unknown or incomplete launch-record shape; preserve it and inspect before retrying.'
-  [ "$(record_value version integer)" = 3 ] || fail 'unsupported launch-record format; preserve it and inspect before retrying.'
-  native_outcome=$(record_value outcome string) || fail 'invalid launch-record outcome; inspect it before retrying.'
-  [ "$native_outcome" = ready ] || fail 'a prior injection outcome is pending or unknown; retain its runtime and inspect it, do not inject again.'
+  [ "$native_record_keys" = "$native_expected_record_keys" ] || fail 'unknown or incomplete launch-record shape; preserve it and inspect before retrying. Restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.'
+  [ "$(record_value version integer)" = 3 ] || fail 'unsupported launch-record format; preserve it and inspect before retrying. Restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.'
+  native_outcome=$(record_value outcome string) || fail 'invalid launch-record outcome; inspect it before retrying. Restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.'
+  [ "$native_outcome" = ready ] || fail 'a prior injection outcome is pending or unknown; retain its runtime and inspect it, do not inject again. Once no load is running, restart your Mac (or run killall Dock in Terminal), remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.'
   native_record_boot_uuid=$(record_value boot_uuid string) || fail 'launch record has no exact boot-session UUID; preserve it and inspect it before retrying.'
   native_valid_boot_uuid "$native_record_boot_uuid" || fail 'launch record has an invalid boot-session UUID; preserve it and inspect it before retrying.'
   native_old_dock_pid=$(record_value dock_pid integer) || fail 'launch record has no exact integer Dock PID; inspect it before retrying.'
@@ -487,7 +518,11 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
   native_valid_hash "$native_record_payload_sha256" || fail 'launch record has an invalid payload digest; inspect it before retrying.'
   native_runtime=$(record_value runtime string) || fail 'invalid recorded runtime path.'
   native_nonce_file=$(record_value nonce_file string) || fail 'invalid recorded nonce-file path.'
-  case "$native_runtime" in /tmp/if-native.??????) ;; *) fail 'invalid recorded private runtime path.' ;; esac
+  case "$native_runtime" in
+    /var/tmp/if-native.??????) ;;
+    /tmp/if-native.??????) native_runtime_in_tmp=true ;;
+    *) fail 'invalid recorded private runtime path. Restart your Mac, remove ~/Library/Application Support/Infinify/native-desktop/launch.plist, and open Infinify again.' ;;
+  esac
   native_runtime_suffix=${native_runtime##*.}
   case "$native_runtime_suffix" in *[!A-Za-z0-9]*|'') fail 'invalid recorded private runtime path.' ;; esac
   [ "$native_nonce_file" = "$native_runtime/nonce" ] || fail 'recorded nonce file does not belong to its runtime.'
@@ -495,17 +530,30 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
     native_archive_and_remove_prior_boot_record
     printf '%s\n' 'The ready record belongs to a previous boot session; its prior Dock cannot survive this boot. The record was archived, any remaining runtime was left untouched, and startup will be fresh without journal replay.'
   else
-    [ -d "$native_runtime" ] && [ ! -L "$native_runtime" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_runtime")" = "$native_uid:700" ] || fail 'recorded runtime is missing or no longer private in this boot session; do not inject again.'
-    private_file "$native_nonce_file" || fail 'recorded nonce file is missing or no longer private; do not inject again.'
-    native_loaded=$(native_loaded_payload "$native_runtime") || fail 'recorded runtime payload is missing, no longer private, or no longer the launch daemon'"'"'s root-owned copy; do not inject again.'
-    native_loaded_dir=${native_loaded% *}
-    [ "${native_loaded##* }" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper.'
-    /usr/bin/codesign --verify --strict "$native_loaded_dir/payload-arm64e.dylib" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper.'
+    [ -d "$native_runtime" ] && [ ! -L "$native_runtime" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_runtime")" = "$native_uid:700" ] || fail 'recorded runtime is missing or no longer private in this boot session; do not inject again. Restart your Mac, then open Infinify again.'
+    native_nonce_present=false
+    if [ -e "$native_nonce_file" ] || [ -L "$native_nonce_file" ]; then
+      private_file "$native_nonce_file" || fail 'recorded nonce file is missing or no longer private; do not inject again. Restart your Mac, then open Infinify again.'
+      native_nonce_present=true
+    fi
+    if native_loaded=$(native_loaded_payload "$native_runtime" 2>/dev/null); then
+      native_loaded_dir=${native_loaded% *}
+      [ "${native_loaded##* }" = "$native_record_payload_sha256" ] || fail 'recorded runtime payload bytes differ from the launch record; do not reuse the old helper. Restart your Mac, then open Infinify again.'
+      /usr/bin/codesign --verify --strict "$native_loaded_dir/payload-arm64e.dylib" || fail 'recorded runtime payload signature verification failed; do not reuse the old helper. Restart your Mac, then open Infinify again.'
+    elif [ "$native_runtime_in_tmp" = true ] && [ ! -e "$native_runtime/payload-arm64e.dylib" ] && [ ! -L "$native_runtime/payload-arm64e.dylib" ] && [ ! -e "$native_runtime/payload-arm64e.dylib.json" ] && [ ! -L "$native_runtime/payload-arm64e.dylib.json" ] && { [ "$native_nonce_present" != true ] || ! native_daemon_enabled; }; then
+      native_loaded_dir=
+    else
+      fail 'recorded runtime payload is missing, no longer private, or no longer the launch daemon'"'"'s root-owned copy; do not inject again. Restart your Mac, then open Infinify again.'
+    fi
     if [ "$native_old_dock_pid" = "$native_dock_pid" ] && [ "$native_old_dock_sec" = "$native_dock_sec" ] && [ "$native_old_dock_usec" = "$native_dock_usec" ]; then
-      # The same Dock. Its helper is reused when it is this bundle's code: the same bytes, or (after an update that signed the payload
-      # again) the same CodeDirectory hash under the same identifier, team and authority chain. The record keeps describing the copy the
-      # Dock opened (payload_sha256, the bytes checked above), so a reuse leaves it as it is and the next start decides the same way.
-      if [ "$native_record_payload_sha256" = "$native_payload_sha256" ]; then
+      # The same Dock. If its nonce (or an earlier /tmp runtime's sudo payload copy) is gone, it cannot be authenticated or reused and
+      # is never injected a second time: that Dock is restarted once and its journal recovered into a fresh /var/tmp runtime. An intact
+      # earlier /tmp runtime is likewise migrated once when a load is available, so nightly /tmp cleanup cannot remove its journal later.
+      if [ "$native_nonce_present" != true ] || [ -z "$native_loaded_dir" ]; then
+        native_restart_recorded_dock runtime
+      elif [ "$native_runtime_in_tmp" = true ] && native_can_load_after_restart; then
+        native_restart_recorded_dock migrate
+      elif [ "$native_record_payload_sha256" = "$native_payload_sha256" ]; then
         native_reuse=true
       else
         native_loaded_identity=$(native_payload_identity "$native_loaded_dir/payload-arm64e.dylib") || fail 'could not read the code identity of the helper payload in the running Dock; nothing was loaded. Restart the Dock (killall Dock) and start Infinify again; the windows are restored from the journal.'
@@ -515,7 +563,7 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
           native_reuse=true
           native_reuse_signature=$(native_identity_cdhash "$native_bundle_identity")
         else
-          native_restart_recorded_dock
+          native_restart_recorded_dock update
         fi
       fi
     fi
@@ -524,8 +572,8 @@ if [ -e "$native_record" ] || [ -L "$native_record" ]; then
         :
       else
         native_prior_status=$?
-        [ "$native_prior_status" -ne 1 ] || fail 'the recorded Dock PID is still present; preserve its launch record and runtime.'
-        fail 'could not prove the recorded Dock process is gone; preserve its launch record and runtime.'
+        [ "$native_prior_status" -ne 1 ] || fail 'the recorded Dock PID is still present; preserve its launch record and runtime. Restart the Dock (killall Dock) or restart your Mac, then open Infinify again.'
+        fail 'could not prove the recorded Dock process is gone; preserve its launch record and runtime. Restart your Mac, then open Infinify again.'
       fi
       native_validate_retired_journal
       if [ "$native_journal_refused" != false ]; then native_refuse_unrecoverable_journal; else native_recovery=true; fi
@@ -552,7 +600,15 @@ else
       ;;
     *) [ "$native_load_via" = daemon ] || [ -t 0 ] || fail 'start this owner-run launcher in a terminal for the explicit sudo loader step.' ;;
   esac
-  native_runtime=$(/usr/bin/mktemp -d /tmp/if-native.XXXXXX)
+  # /var/tmp (/private/var/tmp) is never swept by macOS's /usr/libexec/tmp_cleaner (/tmp) or dirhelper (/var/folders), while keeping
+  # RUNTIME/v2.sock well under the 103-byte Unix socket limit regardless of the user's home path.
+  native_retired_suffix=${native_runtime_suffix:-}
+  while :; do
+    native_runtime=$(/usr/bin/mktemp -d /var/tmp/if-native.XXXXXX)
+    [ "${native_runtime##*.}" != "$native_retired_suffix" ] && break
+    /bin/rmdir "$native_runtime"
+  done
+  [ -d "$native_runtime" ] && [ ! -L "$native_runtime" ] && [ "$(/usr/bin/stat -f '%u:%Lp' "$native_runtime")" = "$native_uid:700" ] || fail 'could not create a private runtime directory.'
   native_nonce_file="$native_runtime/nonce"
   /usr/bin/openssl rand -hex 32 > "$native_nonce_file"
   private_file "$native_nonce_file" || fail 'could not create a private nonce file.'

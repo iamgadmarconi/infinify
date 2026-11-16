@@ -72,9 +72,10 @@ BOOL DWDockReloadParseEndpoint(NSString *output,NSString *__autoreleasing *runti
     NSArray<NSString *> *parts=[[line substringFromIndex:kEndpointPrefix.length] componentsSeparatedByString:@" "];
     if(parts.count!=2)return NO;
     NSString *path=parts[0],*nonce=parts[1];
-    static NSString *const prefix=@"/tmp/if-native.";
-    if(path.length!=prefix.length+6||![path hasPrefix:prefix])return NO;
-    for(NSUInteger i=prefix.length;i<path.length;i++){unichar c=[path characterAtIndex:i];if(!((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')))return NO;}
+    NSString *matchedPrefix=nil;
+    for(NSString *prefix in @[@"/var/tmp/if-native.",@"/tmp/if-native."])if([path hasPrefix:prefix]){matchedPrefix=prefix;break;}
+    if(!matchedPrefix||path.length!=matchedPrefix.length+6)return NO;
+    for(NSUInteger i=matchedPrefix.length;i<path.length;i++){unichar c=[path characterAtIndex:i];if(!((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')))return NO;}
     if(![nonce isEqualToString:[path stringByAppendingString:@"/nonce"]])return NO;
     if(runtime)*runtime=path;
     if(nonceFile)*nonceFile=nonce;

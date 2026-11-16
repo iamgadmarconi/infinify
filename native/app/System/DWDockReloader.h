@@ -40,7 +40,7 @@ BOOL DWDockReloadPause(NSString *directory,NSString *payloadSHA256,NSString *rea
 BOOL DWDockReloadResume(NSString *directory);
 
 // The launcher's --reload ends its output with `INFINIFY-NATIVE-ENDPOINT RUNTIME NONCE_FILE`. YES with the two paths when
-// the last such line has the form the launcher writes (a /tmp/if-native.XXXXXX runtime and its nonce file).
+// the last such line has the form the launcher writes (a /var/tmp/if-native.XXXXXX or /tmp/if-native.XXXXXX runtime and its nonce file).
 BOOL DWDockReloadParseEndpoint(NSString *output,NSString *__autoreleasing *runtime,NSString *__autoreleasing *nonceFile);
 
 @interface DWDockReloader : NSObject

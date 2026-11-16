@@ -30,13 +30,18 @@ NSString *DWLoadCallerRequirement(NSString *team) {
     return [NSString stringWithFormat:@"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%@\"",DWLoadAppIdentifier,team];
 }
 
-// /tmp/if-native.XXXXXX, the form DWLoader.m's private_runtime_path accepts.
-static BOOL runtimePath(NSString *path) {
-    static NSString *const prefix=@"/tmp/if-native.";
-    if(![path isKindOfClass:NSString.class]||path.length!=prefix.length+6||![path hasPrefix:prefix])return NO;
-    for(NSUInteger i=prefix.length;i<path.length;i++)if(!alnum([path characterAtIndex:i]))return NO;
-    return YES;
+// /var/tmp/if-native.XXXXXX (and /tmp/if-native.XXXXXX from 0.2.9 and earlier), the forms DWLoader.m's private_runtime_path accepts.
+static NSString *runtimeSuffix(NSString *path) {
+    if(![path isKindOfClass:NSString.class])return nil;
+    for(NSString *prefix in @[@"/var/tmp/if-native.",@"/tmp/if-native."]){
+        if(path.length==prefix.length+DW_STAGED_SUFFIX_LENGTH&&[path hasPrefix:prefix]){
+            for(NSUInteger i=prefix.length;i<path.length;i++)if(!alnum([path characterAtIndex:i]))return nil;
+            return [path substringFromIndex:prefix.length];
+        }
+    }
+    return nil;
 }
+static BOOL runtimePath(NSString *path) { return runtimeSuffix(path)!=nil; }
 // A canonical unsigned decimal in [minimum, maximum]: no sign, no space, no leading zero.
 static BOOL canonicalDecimal(NSString *text,unsigned long long minimum,unsigned long long maximum) {
     if(![text isKindOfClass:NSString.class]||!text.length||text.length>20)return NO;
@@ -53,8 +58,8 @@ NSString *DWLoadArgumentsRefusal(NSArray<NSString *> *arguments) {
     if(![arguments isKindOfClass:NSArray.class])return @"the load request has no arguments";
     for(id argument in arguments)if(![argument isKindOfClass:NSString.class]||[argument length]>256)return @"a load argument is not a short string";
     if(arguments.count!=8&&arguments.count!=14)return @"the load request is not one of the launcher's two forms";
-    NSString *runtime=arguments[0];
-    if(!runtimePath(runtime))return @"the runtime is not a private /tmp/if-native.XXXXXX directory";
+    NSString *runtime=arguments[0],*suffix=runtimeSuffix(runtime);
+    if(!suffix)return @"the runtime is not a private /var/tmp/if-native.XXXXXX directory";
     if(![arguments[1] isEqualToString:@"--nonce-file"]||![arguments[2] isEqualToString:[runtime stringByAppendingString:@"/nonce"]])return @"the nonce file is not the runtime's nonce";
     if(![arguments[3] isEqualToString:@"--desktop"])return @"only the whole-desktop scope is loaded";
     if(![arguments[4] isEqualToString:@"--expected-dock"]||!identity(arguments,5))return @"the load does not pin an exact Dock process";
@@ -62,8 +67,8 @@ NSString *DWLoadArgumentsRefusal(NSArray<NSString *> *arguments) {
     if(![arguments[8] isEqualToString:@"--recover-journal"]||![arguments[10] isEqualToString:@"--expected-retired-dock"]||!identity(arguments,11))return @"the recovery arguments are not the launcher's";
     NSString *journal=arguments[9];
     if(![journal hasSuffix:@"/v2-journal.json"])return @"the recovery journal is not a v2-journal.json";
-    NSString *old=[journal substringToIndex:journal.length-@"/v2-journal.json".length];
-    if(!runtimePath(old)||[old isEqualToString:runtime])return @"the recovery journal is not that of a different private runtime";
+    NSString *old=[journal substringToIndex:journal.length-@"/v2-journal.json".length],*oldSuffix=runtimeSuffix(old);
+    if(!oldSuffix||[oldSuffix isEqualToString:suffix])return @"the recovery journal is not that of a different private runtime";
     return nil;
 }
 

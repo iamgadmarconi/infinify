@@ -194,14 +194,16 @@ static BOOL json_integer(id value,uint64_t minimum,uint64_t maximum) {
         && [value compare:@(minimum)]!=NSOrderedAscending
         && [value compare:@(maximum)]!=NSOrderedDescending;
 }
-static BOOL private_runtime_path(const char *path) {
-    static const char prefix[]="/tmp/if-native.";
-    if(!path || strncmp(path,prefix,sizeof(prefix)-1))return NO;
-    const char *suffix=path+sizeof(prefix)-1;
-    if(strlen(suffix)!=6)return NO;
-    for(const char *p=suffix;*p;p++)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')))return NO;
-    return YES;
+static const char *private_runtime_suffix(const char *path) {
+    static const char varPrefix[]="/var/tmp/if-native.",tmpPrefix[]="/tmp/if-native.";
+    const char *suffix=NULL;
+    if(path && !strncmp(path,varPrefix,sizeof(varPrefix)-1))suffix=path+sizeof(varPrefix)-1;
+    else if(path && !strncmp(path,tmpPrefix,sizeof(tmpPrefix)-1))suffix=path+sizeof(tmpPrefix)-1;
+    if(!suffix || strlen(suffix)!=6)return NULL;
+    for(const char *p=suffix;*p;p++)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')))return NULL;
+    return suffix;
 }
+static BOOL private_runtime_path(const char *path) { return private_runtime_suffix(path)!=NULL; }
 static BOOL retired_process(pid_t pid,uint64_t birthSec,uint64_t birthUsec) {
     struct proc_bsdinfo current={0};
     errno=0;
@@ -242,7 +244,8 @@ static BOOL recovery_journal(const char *sourcePath,const char *runtime,const st
     size_t directoryLength=(size_t)(lastSlash-sourcePath);
     if(!directoryLength || directoryLength>=PATH_MAX)return NO;
     char sourceDirectory[PATH_MAX];memcpy(sourceDirectory,sourcePath,directoryLength);sourceDirectory[directoryLength]=0;
-    if(!private_runtime_path(sourceDirectory) || !strcmp(sourceDirectory,runtime))return NO;
+    const char *runtimeSuffix=private_runtime_suffix(runtime),*sourceSuffix=private_runtime_suffix(sourceDirectory);
+    if(!runtimeSuffix || !sourceSuffix || !strcmp(sourceSuffix,runtimeSuffix))return NO;
     int sourceFD=open(sourceDirectory,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     if(sourceFD<0)return NO;
     struct stat directoryStat={0},stageStat={0};

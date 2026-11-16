@@ -11,8 +11,10 @@ artifact hashes and deep app signature, then runs the doctor without sudo,
 runtime creation, loading or app launch. The bundled launcher uses only macOS
 system tools and files inside its own app, so it does not need Python, Homebrew,
 or the checkout. It never changes SIP, permissions or settings, or retries an
-uncertain injection automatically. It restarts the Dock in one case only, an update
-whose helper code differs from the code in the recorded, still running Dock (below).
+uncertain injection automatically. It restarts the recorded, still running Dock
+once only when an update changed the helper code, when migrating an earlier `/tmp`
+runtime, or when a recorded runtime lost its nonce or `/tmp` payload copy while
+that Dock lived (below).
 
 The repository wrapper `./scripts/start-native-desktop.sh` is checkout-aware.
 It verifies the selected bundle against current source and the standard app's
@@ -56,17 +58,21 @@ differs from this bundle"). Now, in the same Dock:
   The launch record stays version 3 with the same keys; a record written by 0.2.5 is read unchanged.
 - **Another signer.** Another team, identifier or authority chain is refused, whatever the code: the Dock is not restarted
   by itself, and the refusal says to restart the Dock (`killall Dock`) or log out and in, then start again.
-- **Other code.** The helper is a real change. Where a load needs no password (the launch daemon is enabled and answers;
-  a login start or a start by hand, never `--reload`), and after every check the retired-Dock path makes of the recorded
-  runtime has passed (ready outcome, nothing pending, no pause for this payload, a journal that recovery would accept),
-  the launcher restarts the Dock once, as Sunlight 0.2 does after an update: the loader's `--restart-dock PID SEC USEC`
-  sends SIGTERM to the login user's Dock only if its PID and process birth are exactly the record's, read just before the
-  signal, and never as root. The launcher prints one line saying so (the terminal, or `login.log`), waits for launchd's next
-  Dock to read the same twice three seconds apart, and goes on through the retired-Dock path: journal handoff, recovery load
-  through the daemon, a new ready record. It restarts at most once per run. Without the daemon the start is refused with
-  what to do (`Infinify native-desktop enable`, or `killall Dock` and a start in Terminal). No Infinify runs at that point
-  (the launcher refuses to start beside one), so no app's Dock reloader (`DWDockReloader`) sees this restart, and the
-  crash guard counts only the load that follows it.
+- **Other code, or an earlier `/tmp` or credential-stripped runtime.** Where the helper code
+  changed, where the recorded runtime is under `/tmp/if-native.XXXXXX` from 0.2.9 or earlier, or
+  where the recorded runtime's `nonce` (or a `/tmp` sudo payload copy) disappeared while that Dock
+  lived—for example after `/usr/libexec/tmp_cleaner` removed untouched regular files older than
+  three days from `/tmp`—the running helper is never injected a second time. When a load is
+  available (the launch daemon is enabled and answers, or an explicit terminal `sudo` start; never
+  `--reload`), and after every check the retired-Dock path makes of the recorded runtime's committed
+  `v2-journal.json` has passed, the launcher restarts that recorded Dock once (`--restart-dock PID SEC USEC`
+  sends SIGTERM to the login user's Dock only if its PID and process birth are exactly the record's,
+  read just before the signal, and never as root), waits for launchd's next Dock to settle, and
+  recovers the journal into a fresh `/var/tmp/if-native.XXXXXX` runtime (which macOS's `/tmp` and
+  `/var/folders` cleaners never sweep). Without the daemon or an interactive terminal, the start is
+  refused with what to do (`Infinify native-desktop enable`, or `killall Dock` and a start in Terminal).
+  No Infinify runs at that point (the launcher refuses to start beside one), so no app's Dock reloader
+  (`DWDockReloader`) sees this restart, and the crash guard counts only the load that follows it.
 
 What the guest showed (macOS 27.0.1 26A434, SIP off, 2026-11-02; the screen stayed locked, so the app opened no canvas and placed
 no window, and the launch daemon could not be approved without the GUI: the loads used the documented sudo path, passwordless in the
@@ -151,7 +157,7 @@ writable by others and writable by a group only if the login user is not in it
 (`/private/var/run` is `root:daemon 0775`), the staged directory is root's and writable by no
 one else, and the payload is root's regular file, not group/other-writable, with one link; no
 component may be a link (`native/dock-helper/Loader/DWStagedPayload.h`, shared with the daemon).
-The runtime directory, the nonce file and the journals stay the login user's, private (0700, 0600).
+The runtime directory (`/var/tmp/if-native.XXXXXX`, with `/tmp/if-native.XXXXXX` also accepted for recovery from 0.2.9 and earlier), the nonce file and the journals stay the login user's, private (0700, 0600).
 The nonce is a cryptographically random 32-byte value encoded as 64 lowercase
 hexadecimal characters, in a login-user-owned regular file with mode 0600; one
 trailing newline is accepted. Nonce bytes are never accepted in the loader's

@@ -65,8 +65,9 @@ ranges). It answers two commands:
 - `load`: the arguments of the bundled loader's `--inject-dock` after the payload, only in the launcher's two forms
   (`DWLoaddRequest.m`): `RUNTIME --nonce-file NONCE --desktop --expected-dock PID SEC USEC`
   and, for recovery, `... --recover-journal JOURNAL --expected-retired-dock PID SEC USEC`.
-  RUNTIME is `/tmp/if-native.XXXXXX`; NONCE is that runtime's `nonce`; JOURNAL is the
-  `v2-journal.json` of a different such runtime; PID/SEC/USEC are canonical decimals in range.
+  RUNTIME is `/var/tmp/if-native.XXXXXX` (or `/tmp/if-native.XXXXXX` from 0.2.9 and earlier);
+  NONCE is that runtime's `nonce`; JOURNAL is the `v2-journal.json` of a different such runtime
+  (distinct 6-character suffix); PID/SEC/USEC are canonical decimals in range.
   There is no payload argument and the request cannot name one: the daemon supplies the file the Dock opens (below).
   No unpinned Dock, no other flag, nothing else.
 

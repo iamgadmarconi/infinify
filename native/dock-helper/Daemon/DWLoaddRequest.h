@@ -32,9 +32,10 @@ NSString *DWLoadRefusal(NSString *command,NSArray<NSString *> *arguments);
 // The shapes "load" accepts, which are the launcher's two:
 //   RUNTIME --nonce-file NONCE --desktop --expected-dock PID SEC USEC
 //   ... and then --recover-journal JOURNAL --expected-retired-dock PID SEC USEC
-// RUNTIME is /tmp/if-native.XXXXXX; NONCE is the file the launcher puts in it; JOURNAL is the v2-journal.json of a
-// different runtime of the same form. There is no payload argument: the Dock opens the daemon's own root-owned copy of the
-// bundled payload (below), never a file the caller can name or write. nil when the arguments are one of them.
+// RUNTIME is /var/tmp/if-native.XXXXXX (or /tmp/if-native.XXXXXX from an earlier build); NONCE is the file the launcher
+// puts in it; JOURNAL is the v2-journal.json of a different runtime of the same form. There is no payload argument: the
+// Dock opens the daemon's own root-owned copy of the bundled payload (below), never a file the caller can name or write.
+// nil when the arguments are one of them.
 NSString *DWLoadArgumentsRefusal(NSArray<NSString *> *arguments);
 
 // Code-signature rules for the XPC caller, on top of the requirement from DWLoadCallerRequirement: the app must run with
