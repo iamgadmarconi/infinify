@@ -5,5 +5,6 @@ NS_ASSUME_NONNULL_BEGIN
 @interface DWScreenshotWindowTarget : DWControllerValue
 @property(nonatomic,readonly,nullable) NSNumber *window;
 @property(nonatomic,readonly,nullable) NSNumber *fitPadding;
+@property(nonatomic,readonly,nullable) NSNumber *opacity;
 @end
 NS_ASSUME_NONNULL_END
