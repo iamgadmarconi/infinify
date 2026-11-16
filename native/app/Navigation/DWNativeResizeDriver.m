@@ -81,6 +81,9 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
 @property DWPreparedBaselineAdmission *preparedBaseline;
 @end
 @implementation DWNativeResizeDriver
+@synthesize nativeFill=_nativeFill, canPerform=_canPerform, fillPreparationTimeout=_fillPreparationTimeout;
+@synthesize fillReady=_fillReady, fillRebase=_fillRebase, restoreReady=_restoreReady;
+@synthesize screenUpdates=_screenUpdates, didPerform=_didPerform;
 - (void)prepareBaseline:(NSDictionary *)effect validate:(BOOL (^)(void))validate {
     NSAssert(NSThread.isMainThread,@"baseline preparation is main-only");
     [self clearPreparedBaseline];

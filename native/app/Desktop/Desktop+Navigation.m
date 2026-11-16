@@ -49,6 +49,22 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     [desktop.navigation interrupt];return event;
 }
 @implementation Desktop (Navigation)
+- (NSDictionary *)sizeTransitionSnapshot {return [self call:@{@"op":@"snapshot"}];}
+- (LiveSource *)sizeTransitionSource:(NSNumber *)window {return self.sources[window];}
+- (BOOL)sizeTransitionHeld:(NSNumber *)transaction {
+    for(DesktopView *view in self.views)if(view.gesture==4&&[view.resizeTransaction isEqual:transaction])return YES;
+    return self.gestureOwner&&self.gestureResize;
+}
+- (BOOL)sizeTransitionRemovalAllowed:(NSNumber *)window allowed:(BOOL *)allowed {
+    uint8_t ok=0;if(!self.controller||!driftwm_desktop_resize_removal_allowed(self.controller,window==nil,window.unsignedLongLongValue,&ok))return NO;
+    *allowed=ok!=0;return YES;
+}
+- (BOOL)sizeTransitionCaptureAllowed {return CGPreflightScreenCaptureAccess();}
+- (NSDictionary *)sizeTransitionWindowInfo:(CGWindowID)window {return windowInfo(window);}
+- (BOOL)sizeTransitionNativeBounds:(CGWindowID)window bounds:(CGRect *)bounds {return DWNativeBounds(window,bounds);}
+- (BOOL)sizeTransitionOwner:(DWFocusIdentity)identity bounds:(CGRect *)bounds {return dw_focus_owner(identity,bounds);}
+- (NSDictionary *)sizeTransitionFamily:(NSDictionary *)identity why:(NSString *__autoreleasing *)why {return DWNativeWindowFamily(identity,why);}
+
 // native_resize_capability: DriftWM's sizing actions, the IPC resize write, a rule's size and fullscreen reach a native window through
 // the resize coordinator, which every normal run has. main() says so before the config is read, since the binding table marks the
 // actions that run here and a chord whose action does not is never registered; the coordinator's creation says so again, after the

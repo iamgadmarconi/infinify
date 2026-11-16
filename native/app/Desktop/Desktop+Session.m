@@ -35,9 +35,7 @@
 // state and drain the existing helper. Outputs and world geometry stay in place.
 - (BOOL)nativeUnavailable { return self.native&&(self.native.ended||self.nativeResumeWanted||self.nativeRestoring||self.nativeResumeInFlight); }
 - (void)suspendPresentationLeavingSession:(BOOL)leaving {
-    [self.sizeTransition cancelPresentationForSessionDeparture]; // teardown must not admit a waiting next transaction
-    [self.sizeTransition cancelPresentation];
-    [self.sizeTransition clearNativeFillPresentation];
+    [self.sizeTransition suspendPresentation]; // teardown must not admit a waiting next transaction
     self.compositor.nativeMenuBackground=NO;
     self.nativeMouseOwner=nil;
     for(LiveSource *source in self.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.observationEpoch;}
@@ -191,7 +189,7 @@
     self.compositor.nativeMenuBackground=NO;
     [self stopMacWallpapers];
     [self cancelCapturedInputForWindow:nil];
-    self.cleaning=YES;[self.sizeTransition cancelPresentation];[self.sizeTransition clearNativeFillPresentation];[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
+    self.cleaning=YES;[self.sizeTransition cancelPresentation];[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;[self.canvasCursor reset];self.captureRecoveryGeneration++;self.captureRecoveryReading=NO;
     self.nativeMouseOwner=nil;
     for(LiveSource *source in self.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.observationEpoch;}
     [self.nativeFamilies reset];self.nativeFamilies=nil;self.nativeViewSnapshot=nil;self.nativeOwnerSnapshot=nil;self.nativeViewPresenter=nil;self.overlayFamilySnapshot=self.overlayFamilyBase=self.overlayFamilyDescriptions=nil;

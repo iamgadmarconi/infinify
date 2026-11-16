@@ -23,6 +23,24 @@ Output removal cancels input while outstanding native results still drain.
 Logical `begin_resize` remains a canvas operation; native pinned resizing uses
 `begin_native_resize`.
 
+## Native size-transition seam
+
+`native/app/Navigation/DWSizeTransition` owns the shell's interactive resize,
+Fill and Restore lifecycle, including Restore deferred until a camera flight
+lands. `Desktop` holds one owner; it submits effects and ordinary render/session
+events, not capture/hide/readiness callbacks. The module owns the resize worker
+coordinator, Accessibility driver admission, static pictures, attached-family
+and no-Screen-Recording fallbacks, timeouts, background retention and the single
+presenter acknowledgement subscription. `Desktop+Fill.m` no longer exists.
+
+The injectable host, driver and capture adapters sit above that glue, so future
+tests exercise complete handoffs through `DWSizeTransition`, not independently
+wired picture/coordinator objects. Input reads only its immutable `fillHandoff`
+facts. The hidden interactive picture still performs the existing 1/60-second
+validity check through `DWSizeTransitionHost -sizeTransitionSnapshot`, with the
+same snapshot observation and deadlines. A narrow typed query or revision
+notification belongs to the later controller-seam change, not this refactor.
+
 ## Commands and effects
 
 - `begin_native_resize {window, output, edges, start_screen, group:false}` returns

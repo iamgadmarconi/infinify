@@ -3,7 +3,8 @@
 #import "DWNativeTransition.h"
 #import "DWNavigationCoordinator.h"
 
-// Deliberately small injectable boundary: tests never create native windows.
+// Internal picture adapter contracts. The whole handoff is exercised through
+// DWSizeTransition; callers do not wire presentation policy at this lower seam.
 @protocol DWNativeResizePicture <NSObject>
 - (BOOL)show;
 - (BOOL)setScreenRect:(CGRect)rect;
@@ -33,7 +34,6 @@ typedef struct {
 // and observations; this object owns only the temporary, static stretched image.
 // No native setter is admitted until the picture is visible AND hide is ACKed.
 @interface DWNativeResizePresentation : NSObject
-+ (DWResizeCapture)snapshotCapture;
 // Right/bottom-only drags do not need compensation or capture permission.
 + (BOOL)requiresBridgeForTransaction:(NSDictionary *)transaction;
 - (instancetype)initWithPresenter:(id<DWNativeResizePresenter>)presenter capture:(DWResizeCapture)capture;

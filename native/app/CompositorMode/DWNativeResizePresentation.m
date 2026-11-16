@@ -29,15 +29,6 @@ static CGRect DWResizePictureRect(CGRect rect) {
     if(![transaction[@"interactive"]boolValue])return NO;
     return ![@[@"right",@"bottom",@"bottom_right"]containsObject:transaction[@"edges"]?:NSNull.null];
 }
-+ (DWResizeCapture)snapshotCapture {
-    return ^DWJob(DWNativeHiddenRoot *root,BOOL (^valid)(void),void (^completion)(id<DWNativeResizePicture>,NSString *)){
-        DWNativeTransitionCapture *capture=[DWNativeTransitionCapture captureIdentity:root.identity nativeBounds:root.nativeBounds screenRect:root.screenRect validate:valid completion:^(DWNativeTransitionCaptureResult *result,NSString *failure){
-            DWNativeTransition *picture=result?[[DWNativeTransition alloc]initWithImage:result.image screenRect:DWResizePictureRect(result.screenRect)]:nil;
-            completion((id)picture,failure?:(!picture?@"snapshot panel unavailable":nil));
-        }];
-        return ^{[capture cancel];};
-    };
-}
 - (instancetype)initWithPresenter:(id<DWNativeResizePresenter>)presenter capture:(DWResizeCapture)capture {
     if((self=[super init])){_presenter=presenter;_capture=[capture copy];
         _clock=^{return CACurrentMediaTime();};

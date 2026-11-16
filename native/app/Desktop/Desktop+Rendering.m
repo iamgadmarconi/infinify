@@ -141,8 +141,7 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     [self nativeDescription:snapshot];return self.nativeViews.presentationSnapshot?:snapshot;
 }
 - (void)render {
-    [self.sizeTransition updatePresentation];
-    [self.sizeTransition updateNativeFill];
+    [self.sizeTransition willRender];
     NSDictionary *snapshot=[self visualSnapshot];
     NSDictionary *nativeSnapshot=[self nativeDescription:snapshot];
     NSDictionary *presentation=self.native?(self.nativeViews.presentationSnapshot?:snapshot):[self presentationSnapshot];
@@ -476,7 +475,7 @@ static BOOL screensHidden(void) {
     NSArray<NSString *> *refused=[self startKeys];self.canvasKeysOffered=YES;if(refused.count)self.statusText=summary(@"Shortcut unavailable",refused);[self armCorners:[self call:@{@"op":@"bindings"}]];
     // The status note names one: every chord macOS refused is named on stderr, as a reload names them.
     for(NSString *line in refused)[self say:[@"Shortcut unavailable: " stringByAppendingString:line]];
-    if(!self.sizeTransition)self.sizeTransition=[[DWSizeTransition alloc]initWithDesktop:self];[self configureNavigation];
+    if(!self.sizeTransition)self.sizeTransition=[[DWSizeTransition alloc]initWithHost:self];[self configureNavigation];
     // Capture overlays retain their Screen Recording gate. Authenticated native
     // presentation discovers metadata without asking for pictures or permission.
     // It says why; a more specific problem already in the resting status keeps its place there.

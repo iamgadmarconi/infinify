@@ -297,3 +297,8 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)refreshOutputUsableAreas;
 - (void)screensChanged:(NSNotification *)notification;
 @end
+
+// Existing shell categories collectively implement this adapter contract.
+// The declaration does not add a second forwarding implementation.
+@interface Desktop (SizeTransitionHost) <DWSizeTransitionHost>
+@end

@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Extracted from native/desktop/main.m at 37b27b1 and Desktop sizing categories.
 #import "DWSizeTransition.h"
-#import "Desktop+Private.h"
+#import "DWDesktopSupport.h"
+#import "LiveSource.h"
 #import "DWDebugTrace.h"
 #import "DWNativeFocus.h"
 #import "DWNativeFamily.h"
 #import "DWGeometryJSON.h"
 #import "DWNativeResizePresentation.h"
 @interface DWSizeTransition ()
-@property (weak) Desktop *desktop;
+@property (weak) id<DWSizeTransitionHost> desktop;
+@property (copy) DWSizeTransitionCapture capture;
+@property (weak) DWNativePresenter *acknowledgementPresenter;
 @property DWResizeCoordinator *resize;
 @property DWNativeResizePresentation *nativeResizePresentation;
 @property NSNumber *nativeResizeLiveTransaction;
@@ -19,18 +22,51 @@
 @property NSArray *nativeFillBackgroundTrace;
 @property NSMutableDictionary<NSNumber *,NSDictionary *> *nativeFillHistory;
 @property NSMutableSet<NSNumber *> *nativeFillRefusedTransactions;
-@property DWNativeResizeDriver *nativeResizeDriver;
+@property id<DWSizeTransitionResizeDriver> nativeResizeDriver;
 @property DWNativeHiddenRoot *nativeFillRoot;
-@property DWNativeTransitionCapture *nativeFillCapture;
-@property DWNativeTransition *nativeFillPicture;
+@property id<DWSizeTransitionCaptureRequest> nativeFillCapture;
+@property id<DWSizeTransitionPicture> nativeFillPicture;
 @property BOOL nativeFillHiding,nativeFillAnimating,nativeFillAnimated,nativeFillRevealing;
 @property CFTimeInterval nativeFillPresentationDeadline;
 @property BOOL nativeFillResuming;
 @end
 @implementation DWSizeTransition
-- (instancetype)initWithDesktop:(Desktop *)desktop {
-    if((self=[super init])){_desktop=desktop;[self configure];}
+- (instancetype)initWithHost:(id<DWSizeTransitionHost>)host {
+    DWSizeTransitionCapture capture=^id<DWSizeTransitionCaptureRequest>(DWNativeHiddenRoot *root,BOOL interactive,BOOL (^valid)(void),void (^completion)(DWSizeTransitionPictureFactory,NSString *)){
+        DWNativeTransitionCapture *request=[DWNativeTransitionCapture captureIdentity:root.identity nativeBounds:root.nativeBounds screenRect:root.screenRect validate:valid completion:^(DWNativeTransitionCaptureResult *result,NSString *failure){
+            CGRect rect=result.screenRect;
+            if(interactive){rect.origin.x=floor(rect.origin.x);rect.origin.y=floor(rect.origin.y);}
+            DWSizeTransitionPictureFactory picture=nil;
+            if(result)picture=^id<DWSizeTransitionPicture>{return (id)[[DWNativeTransition alloc]initWithImage:result.image screenRect:rect];};
+            completion(picture,failure);
+        }];
+        return (id)request;
+    };
+    DWNativeResizeDriver *driver=[DWNativeResizeDriver new];
+    // The independent native update lease must still balance after the host or
+    // transition owner goes away; never route this watchdog through a weak host.
+    driver.screenUpdates=^CGError(BOOL enabled){return DWNativeScreenUpdates(enabled);};
+    return [self initWithHost:host driver:driver capture:capture];
+}
+- (instancetype)initWithHost:(id<DWSizeTransitionHost>)host driver:(id<DWSizeTransitionResizeDriver>)driver capture:(DWSizeTransitionCapture)capture {
+    if((self=[super init])){_desktop=host;_nativeResizeDriver=driver;_capture=[capture copy];[self configure];}
     return self;
+}
+// A single subscription owns the presenter's slot. Routing is internal:
+// callers never compete to replace a resize callback with a Fill callback.
+- (void)observeAcknowledgementsFrom:(DWNativePresenter *)presenter {
+    if(self.acknowledgementPresenter==presenter)return;
+    self.acknowledgementPresenter.transitionFrameAcknowledged=nil;
+    self.acknowledgementPresenter=presenter;
+    __weak DWSizeTransition *weak=self;__weak DWNativePresenter *weakPresenter=presenter;
+    presenter.transitionFrameAcknowledged=^{
+        DWSizeTransition *d=weak;DWNativePresenter *pr=weakPresenter;
+        if(!d||d.desktop.cleaning||d.desktop.sessionInactive||d.desktop.native!=pr)return;
+        if(d.fillHandoff){[d.desktop render];return;}
+        DWNativeResizePresentation *picture=d.nativeResizePresentation;
+        if(!picture.active)return;
+        [picture update];if(!d.desktop.cleaning){[d.desktop render];[pr submit];}
+    };
 }
 - (NSUInteger)obligations {return self.resize.obligations;}
 - (NSString *)failure {return self.resize.failure;}
@@ -41,12 +77,13 @@
 - (void)cancel {[self.resize cancel];}
 - (void)shutdown {[self.resize shutdown];}
 - (void)reap {[self.resize reap];}
-- (void)cancelPresentationForSessionDeparture {
-    self.nativeResizePresentation.retired=nil;
-    [self.nativeResizePresentation cancel];
+- (void)suspendPresentation {
+    self.nativeResizePresentation.retired=nil; // never admit the waiting next transaction during teardown
+    [self cancelPresentation];
 }
-- (void)cancelPresentation {[self.nativeResizePresentation cancel];}
-- (void)updatePresentation {[self.nativeResizePresentation update];}
+- (void)cancelPresentation {[self.nativeResizePresentation cancel];[self clearNativeFillPresentation];}
+- (void)observe {[self updateNativeFill];}
+- (void)willRender {[self.nativeResizePresentation update];[self updateNativeFill];}
 // The AX reply and later WindowServer family audit are separate observations.
 // AppKit may settle another native point between them. Use the audited root's
 // own frame for presentation; never change the controller's accepted AX size.
@@ -66,7 +103,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 // All initial interactive effects pass through coordinator admission, including
 // DesktopView's direct resize.request path and gesture requests (not consumeSize).
 - (void)prepareInteractiveResize:(NSDictionary *)effect ready:(void (^)(BOOL))ready {
-    NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
+    NSDictionary *snapshot=[self.desktop sizeTransitionSnapshot],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
     if(!self.desktop.native){ready(YES);return;}
     if(self.nativeResizePresentation.active){
         [self.nativeResizePresentation prepareEffect:effect ready:ready];return;
@@ -83,20 +120,19 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"])if(effectIdentity[key])nativeIdentity[key]=effectIdentity[key];
     // Attached families (e.g. Chrome with Find bar or status bubble) and runs
     // without Screen Recording keep the live resize path instead of stalling.
-    if(!CGPreflightScreenCaptureAccess()||(nativeIdentity.count==4&&[presenter hasAttachedChildrenForWindow:nativeIdentity])){
+    if(![self.desktop sizeTransitionCaptureAllowed]||(nativeIdentity.count==4&&[presenter hasAttachedChildrenForWindow:nativeIdentity])){
         self.nativeResizeLiveTransaction=effect[@"transaction"];ready(YES);return;
     }
     self.nativeResizeLiveTransaction=nil;
-    DWNativeResizePresentation *owner=[[DWNativeResizePresentation alloc]initWithPresenter:(id)presenter capture:DWNativeResizePresentation.snapshotCapture];
+    DWSizeTransitionCapture capture=self.capture;
+    DWNativeResizePresentation *owner=[[DWNativeResizePresentation alloc]initWithPresenter:(id)presenter capture:^DWJob(DWNativeHiddenRoot *root,BOOL (^valid)(void),void (^completion)(id<DWNativeResizePicture>,NSString *)){id<DWSizeTransitionCaptureRequest> request=capture(root,YES,valid,^(DWSizeTransitionPictureFactory makePicture,NSString *failure){id<DWSizeTransitionPicture> picture=makePicture?makePicture():nil;completion(picture,failure?:(!picture?@"snapshot panel unavailable":nil));});return ^{[request cancel];};}];
     self.nativeResizePresentation=owner;__weak DWSizeTransition *weak=self;__weak DWNativeResizePresentation *weakOwner=owner;__weak DWNativePresenter *weakPresenter=presenter;
-    presenter.transitionFrameAcknowledged=^{DWSizeTransition *d=weak;DWNativeResizePresentation *p=weakOwner;DWNativePresenter *pr=weakPresenter;
-        if(!d||d.desktop.cleaning||d.desktop.sessionInactive||d.desktop.native!=pr||d.fillHandoff||d.nativeResizePresentation!=p||!p.active)return;
-        [p update];if(!d.desktop.cleaning){[d.desktop render];[pr submit];}};
+    [self observeAcknowledgementsFrom:presenter];
     owner.state=^DWNativeResizePresentationState{
         DWSizeTransition *d=weak;DWNativeResizePresentation *p=weakOwner;NSDictionary *e=p.effect;
         if(!d||!e)return (DWNativeResizePresentationState){0};
-        NSDictionary *now=[d.desktop call:@{@"op":@"snapshot"}],*t=DWTyped(now[@"native_resize"],NSDictionary.class),*binding=nil,*outputNow=nil,*placement=nil;
-        LiveSource *source=d.desktop.sources[window];
+        NSDictionary *now=[d.desktop sizeTransitionSnapshot],*t=DWTyped(now[@"native_resize"],NSDictionary.class),*binding=nil,*outputNow=nil,*placement=nil;
+        LiveSource *source=[d.desktop sizeTransitionSource:window];
         for(NSDictionary *row in now[@"windows"])if([row[@"window"]isEqual:window]){binding=DWTyped(row[@"source"],NSDictionary.class);break;}
         for(NSDictionary *row in now[@"outputs"])if([row[@"id"]isEqual:output]){outputNow=row;break;}
         for(NSDictionary *row in [d.desktop presentationSnapshot][@"placements"])if([row[@"window"]isEqual:window]&&[row[@"output"]isEqual:output]){placement=row;break;}
@@ -117,10 +153,10 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         return (DWNativeResizePresentationState){.valid=valid,.finished=terminal,.restored=restored,.recoverable=recoverable,.drained=terminal&&![d.resize hasNativeWorkForTransaction:e[@"transaction"]],
             .screenRect=DWRectFromJSON(placement[@"screen_rect"]),.alpha=placement[@"alpha"]?[placement[@"alpha"]doubleValue]:1};
     };
-    owner.retired=^{DWSizeTransition *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.fillHandoff&&d.desktop.native==pr)pr.transitionFrameAcknowledged=nil;[d.resize retryAdmission];};
+    owner.retired=^{DWSizeTransition *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.fillHandoff&&d.desktop.native==pr)[d observeAcknowledgementsFrom:nil];[d.resize retryAdmission];};
     owner.render=^{DWSizeTransition *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.desktop.cleaning){[d.desktop render];if(d.desktop.native==pr)[pr submit];}};
     owner.failed=^(NSString *reason){DWSizeTransition *d=weak;if(!d)return;
-        NSDictionary *t=DWTyped([d.desktop call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
+        NSDictionary *t=DWTyped([d.desktop sizeTransitionSnapshot][@"native_resize"],NSDictionary.class);
         if([t[@"transaction"]isEqual:weakOwner.effect[@"transaction"]])[d.resize cancel];
         d.desktop.statusText=reason;fprintf(stderr,"%s\n",reason.UTF8String);[d.desktop render];};
     [owner prepareEffect:effect ready:ready];
@@ -128,16 +164,16 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 - (void)configure {
     if(self.resize)return;
     __weak DWSizeTransition *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.resize",DISPATCH_QUEUE_SERIAL);
-    DWNativeResizeDriver *driver=[DWNativeResizeDriver new];self.nativeResizeDriver=driver;
+    id<DWSizeTransitionResizeDriver> driver=self.nativeResizeDriver;
     driver.nativeFill=self.desktop.nativeDesktopMode&&self.desktop.native!=nil;
     driver.canPerform=^BOOL(NSDictionary *effect){
-        DWSizeTransition *d=weak;LiveSource *source=d.desktop.sources[effect[@"window"]];
+        DWSizeTransition *d=weak;LiveSource *source=[d.desktop sizeTransitionSource:effect[@"window"]];
         if(!d||d.desktop.cleaning||d.desktop.sessionInactive||[d.desktop nativeUnavailable])return NO;
         if(!source||source.detached||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return NO;
         if([effect[@"op"]isEqual:@"resize_native_window"]&&(source.nativeVisibilityWanted||source.nativeVisibilityWriting||source.nativeMinimized))return NO;
         // A worker may start after a newer handoff replaced its prepared read.
         // Only the controller's still-pending effect can enter native code.
-        NSDictionary *transaction=DWTyped([d.desktop call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
+        NSDictionary *transaction=DWTyped([d.desktop sizeTransitionSnapshot][@"native_resize"],NSDictionary.class);
         if([DWNativeResizePresentation requiresBridgeForTransaction:transaction]
             &&![d.nativeResizeLiveTransaction isEqual:effect[@"transaction"]]
             &&![d.nativeResizePresentation allowsEffect:effect])return NO;
@@ -148,23 +184,23 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         if(!held||d.nativeFillResuming||d.desktop.cleaning||d.desktop.sessionInactive||d.desktop.native.ended
             ||![held[@"transaction"]isEqual:effect[@"transaction"]]||![held[@"generation"]isEqual:effect[@"generation"]]
             ||!boundIdentity(held[@"identity"],effect[@"identity"]))return DWNativeFillPending;
-        if(![d nativeFillCurrent:held snapshot:[d.desktop call:@{@"op":@"snapshot"}]])return DWNativeFillPending;
+        if(![d nativeFillCurrent:held snapshot:[d.desktop sizeTransitionSnapshot]])return DWNativeFillPending;
         if([held[@"bridge_failed"]boolValue])return DWNativeFillUnsupportedGeometry;
         if(d.nativeFillRoot)return [d.desktop.native isTransitionHidden:d.nativeFillRoot]?DWNativeFillReadyForSnapshotFill:DWNativeFillPending;
         if(![d.desktop.native isWindowWithheld:held[@"identity"]])return DWNativeFillPending;
         // Fresh native/displayed geometry separates an aligned source, a
         // translation-only rebase, and unsupported scaling. Missing evidence
         // remains pending rather than authorizing an ordinary resize.
-        NSDictionary *who=held[@"identity"];LiveSource *source=d.desktop.sources[held[@"window"]];
+        NSDictionary *who=held[@"identity"];LiveSource *source=[d.desktop sizeTransitionSource:held[@"window"]];
         if(!source||source.detached||!boundIdentity(source.identity,who))return DWNativeFillPending;
         DWFocusIdentity target={.pid=[who[@"pid"]intValue],.window=[who[@"wid"]unsignedIntValue],.seconds=[who[@"birth_sec"]unsignedLongLongValue],.microseconds=[who[@"birth_usec"]unsignedLongLongValue]};
         CGRect native,displayed,after;
-        if(!dw_focus_owner(target,&native))return DWNativeFillPending;
-        NSDictionary *row=windowInfo(target.window);
+        if(![d.desktop sizeTransitionOwner:target bounds:&native])return DWNativeFillPending;
+        NSDictionary *row=[d.desktop sizeTransitionWindowInfo:target.window];
         if([row[(id)kCGWindowOwnerPID]intValue]!=target.pid||!row[(id)kCGWindowBounds]
             ||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)
             ||!isfinite(displayed.origin.x)||!isfinite(displayed.origin.y)||!isfinite(displayed.size.width)||!isfinite(displayed.size.height)
-            ||displayed.size.width<=0||displayed.size.height<=0||!dw_focus_owner(target,&after)||!CGRectEqualToRect(native,after))return DWNativeFillPending;
+            ||displayed.size.width<=0||displayed.size.height<=0||![d.desktop sizeTransitionOwner:target bounds:&after]||!CGRectEqualToRect(native,after))return DWNativeFillPending;
         BOOL aligned=fabs(native.origin.x-displayed.origin.x)<=1&&fabs(native.origin.y-displayed.origin.y)<=1
             &&fabs(native.size.width-displayed.size.width)<=1&&fabs(native.size.height-displayed.size.height)<=1;
         NSMutableDictionary *fresh=[held mutableCopy];fresh[@"native_baseline"]=DWRectJSON(native);fresh[@"displayed_baseline"]=DWRectJSON(displayed);d.fillHandoff=fresh.copy;
@@ -178,45 +214,44 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         if(d.nativeFillResuming||d.desktop.cleaning||d.desktop.sessionInactive||d.desktop.native.ended
             ||![held[@"transaction"]isEqual:effect[@"transaction"]]||![held[@"generation"]isEqual:effect[@"generation"]]
             ||!boundIdentity(held[@"identity"],effect[@"identity"]))return DWNativeFillPending;
-        if(![d nativeFillCurrent:held snapshot:[d.desktop call:@{@"op":@"snapshot"}]])return DWNativeFillPending;
+        if(![d nativeFillCurrent:held snapshot:[d.desktop sizeTransitionSnapshot]])return DWNativeFillPending;
         if([held[@"bridge_failed"]boolValue]||!d.nativeFillRoot)return DWNativeFillUnsupportedGeometry;
         // Keep the root hidden while qualified Restore clears AppKit's Fill
         // state, then corrects the exact saved frame after native settlement.
         // A frame setter alone leaves Fill active across display changes.
         return [d.desktop.native isTransitionHidden:d.nativeFillRoot]?DWNativeFillReady:DWNativeFillPending;
     };
-    driver.screenUpdates=^CGError(BOOL enabled){return DWNativeScreenUpdates(enabled);};
     driver.fillRebase=^DWNativeFillRebase *(NSDictionary *effect){
         DWSizeTransition *d=weak;NSDictionary *held=d.fillHandoff,*who=held[@"identity"];
-        BOOL (^valid)(void)=^BOOL{DWSizeTransition *current=weak;NSDictionary *now=current.fillHandoff;LiveSource *source=current.desktop.sources[effect[@"window"]];
+        BOOL (^valid)(void)=^BOOL{DWSizeTransition *current=weak;NSDictionary *now=current.fillHandoff;LiveSource *source=[current.desktop sizeTransitionSource:effect[@"window"]];
             return current&&!current.desktop.cleaning&&!current.desktop.sessionInactive&&!current.nativeFillResuming&&!current.desktop.native.ended
                 &&[now[@"transaction"]isEqual:effect[@"transaction"]]&&[now[@"generation"]isEqual:effect[@"generation"]]
                 &&boundIdentity(now[@"identity"],effect[@"identity"])&&source&&!source.detached&&boundIdentity(source.identity,who)
-                &&[current nativeFillCurrent:now snapshot:[current.desktop call:@{@"op":@"snapshot"}]];};
+                &&[current nativeFillCurrent:now snapshot:[current.desktop sizeTransitionSnapshot]];};
         BOOL current=valid(),canRebase=current&&[d.desktop.native canRebaseWindow:who];
         if(!current||!canRebase||!held[@"native_baseline"]||!held[@"displayed_baseline"]){
             if(DWDebugTrace())fprintf(stderr,"debug: native fill rebase refused window=#%s current=%d can_rebase=%d baselines=%d\n",[effect[@"window"]description].UTF8String,current,canRebase,held[@"native_baseline"]!=nil&&held[@"displayed_baseline"]!=nil);
             return nil;
         }
         // Re-audit the known root-only scope before taking an update hold.
-        NSString *familyWhy=nil;NSDictionary *family=DWNativeWindowFamily(who,&familyWhy);
+        NSString *familyWhy=nil;NSDictionary *family=[d.desktop sizeTransitionFamily:who why:&familyWhy];
         if([family[@"members"]count]!=1){
             if(DWDebugTrace())fprintf(stderr,"debug: native fill rebase refused window=#%s family_members=%lu reason=%s\n",[effect[@"window"]description].UTF8String,(unsigned long)[family[@"members"]count],familyWhy.UTF8String?:"family_not_root_only");
             return nil;
         }
         DWNativeFillRebase *plan=[DWNativeFillRebase new];plan.native=DWRectFromJSON(held[@"native_baseline"]);plan.displayed=DWRectFromJSON(held[@"displayed_baseline"]);
         plan.publish=^BOOL(CGRect observed,BOOL (^authorized)(void)){DWSizeTransition *current=weak;if(!valid())return NO;
-            NSDictionary *freshFamily=DWNativeWindowFamily(who,NULL);if([freshFamily[@"members"]count]!=1||!authorized())return NO;
+            NSDictionary *freshFamily=[weak.desktop sizeTransitionFamily:who why:nil];if([freshFamily[@"members"]count]!=1||!authorized())return NO;
             if(![current.desktop.native rebaseWindow:who bounds:observed])return NO;
-            current.desktop.sources[effect[@"window"]].router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
+            [current.desktop sizeTransitionSource:effect[@"window"]].router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
             [current.desktop render];return YES;};
         plan.ready=^BOOL{DWSizeTransition *current=weak;if(!valid())return NO;[current.desktop render];
             if(![current.desktop.native isWindowRebased:who])return NO;
             DWFocusIdentity target={.pid=[who[@"pid"]intValue],.window=[who[@"wid"]unsignedIntValue],.seconds=[who[@"birth_sec"]unsignedLongLongValue],.microseconds=[who[@"birth_usec"]unsignedLongLongValue]};
-            CGRect native,displayed,after;NSDictionary *row=windowInfo(target.window);
-            return dw_focus_owner(target,&native)&&[row[(id)kCGWindowOwnerPID]intValue]==target.pid&&row[(id)kCGWindowBounds]
+            CGRect native,displayed,after;NSDictionary *row=[current.desktop sizeTransitionWindowInfo:target.window];
+            return [current.desktop sizeTransitionOwner:target bounds:&native]&&[row[(id)kCGWindowOwnerPID]intValue]==target.pid&&row[(id)kCGWindowBounds]
                 &&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)
-                &&dw_focus_owner(target,&after)&&CGRectEqualToRect(native,after)
+                &&[current.desktop sizeTransitionOwner:target bounds:&after]&&CGRectEqualToRect(native,after)
                 &&fabs(native.origin.x-displayed.origin.x)<=1&&fabs(native.origin.y-displayed.origin.y)<=1
                 &&fabs(native.size.width-displayed.size.width)<=1&&fabs(native.size.height-displayed.size.height)<=1;};
         plan.cancel=^{DWSizeTransition *current=weak;if(valid()){[current.desktop.native cancelRebaseWindow:who];[current.desktop render];}};
@@ -231,7 +266,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         return !owner.active||[owner.effect[@"transaction"]isEqual:effect[@"transaction"]];};
     self.resize.prepare=^(NSDictionary *effect,void (^ready)(BOOL)){[weak prepareInteractiveResize:effect ready:ready];};
     // Removal checks run at idle on every observation: a scalar read of the live transaction, not a snapshot. A failed query answers NO and canRemove: asks the command path.
-    self.resize.removalAllowed=^BOOL(NSNumber *window,BOOL *allowed){DWSizeTransition *d=weak;uint8_t ok=0;if(!d.desktop.controller||!driftwm_desktop_resize_removal_allowed(d.desktop.controller,window==nil,window.unsignedLongLongValue,&ok))return NO;*allowed=ok!=0;return YES;};
+    self.resize.removalAllowed=^BOOL(NSNumber *window,BOOL *allowed){return [weak.desktop sizeTransitionRemovalAllowed:window allowed:allowed];};
 
     // Native readback (docs/crates/desktop/NATIVE_RESIZE.md): the size a window took is read back from it. Interactive
     // top/left native drags independently hold a snapshot until final placement ACK. App-owned Fill separately holds placement/input until
@@ -242,13 +277,13 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     // A resize grab whose pointer rests owes no effect and is no orphan: its press, or its swipe, ends it (-released:at:, gesture_end),
     // and a press or swipe whose end is lost is ended by -endLostInput.
     self.resize.deferred=^BOOL(NSDictionary *effect){DWSizeTransition *d=weak;NSDictionary *deferred=d.nativeRestoreDeferred;
-        return [deferred[@"effect"]isEqual:effect]&&[d nativeRestoreDeferredCurrent:deferred snapshot:[d.desktop call:@{@"op":@"snapshot"}]];};
-    self.resize.held=^BOOL(NSNumber *transaction){DWSizeTransition *d=weak;for(DesktopView *view in d.desktop.views)if(view.gesture==4&&[view.resizeTransaction isEqual:transaction])return YES;return d.desktop.gestureOwner&&d.desktop.gestureResize;};
+        return [deferred[@"effect"]isEqual:effect]&&[d nativeRestoreDeferredCurrent:deferred snapshot:[d.desktop sizeTransitionSnapshot]];};
+    self.resize.held=^BOOL(NSNumber *transaction){return [weak.desktop sizeTransitionHeld:transaction];};
     self.resize.changed=^{DWSizeTransition *d=weak;if(d.desktop.cleaning)return;if(d.resize.failure)d.desktop.statusText=d.resize.failure;
-        NSDictionary *transaction=DWTyped([d.desktop call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
+        NSDictionary *transaction=DWTyped([d.desktop sizeTransitionSnapshot][@"native_resize"],NSDictionary.class);
         if(transaction&&[d.resize canRemove:nil]&&!d.resize.obligations&&![d.resizeSavedTransaction isEqual:transaction[@"transaction"]]){d.resizeSavedTransaction=transaction[@"transaction"];
             if(DWDebugTrace())fprintf(stderr,"debug: size transaction %s of #%s ended phase=%s\n",[transaction[@"transaction"]description].UTF8String,[transaction[@"window"]description].UTF8String,((NSString *)DWTyped(transaction[@"phase"],NSString.class)).UTF8String?:"?");
-            LiveSource *source=d.desktop.sources[transaction[@"window"]];if(source&&!source.detached)[d.desktop track:source];[d.desktop saveScene];}
+            LiveSource *source=[d.desktop sizeTransitionSource:transaction[@"window"]];if(source&&!source.detached)[d.desktop track:source];[d.desktop saveScene];}
         [d updateNativeFill];[d.desktop render];};
     [self.desktop resizeCapability];
 }
@@ -257,7 +292,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 // window that still owes a configure. A resize the pointer began holds the canvas until it settles, as does every uncertain one.
 - (BOOL)sizing {
     if(!self.resize||!self.sizeTransaction)return NO;
-    NSDictionary *transaction=DWTyped([self.desktop call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
+    NSDictionary *transaction=DWTyped([self.desktop sizeTransitionSnapshot][@"native_resize"],NSDictionary.class);
     return [transaction[@"transaction"]isEqual:self.sizeTransaction]&&![transaction[@"uncertain_mutation"]boolValue];
 }
 // The resize coordinator's commands. The native result of a sizing action's transaction is answered with that action's
@@ -279,15 +314,15 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         // at this accepted completion, before consume: can render or queue another
         // effect. The router and presenter have separate caches; always bind the
         // accepted observation, once per readback, even if the router is current.
-        for(NSDictionary *window in [self.desktop call:@{@"op":@"snapshot"}][@"windows"]){
-            NSDictionary *source=DWTyped(window[@"source"],NSDictionary.class);LiveSource *live=self.desktop.sources[window[@"window"]];
+        for(NSDictionary *window in [self.desktop sizeTransitionSnapshot][@"windows"]){
+            NSDictionary *source=DWTyped(window[@"source"],NSDictionary.class);LiveSource *live=[self.desktop sizeTransitionSource:window[@"window"]];
             if(!live||live.detached||!boundIdentity(live.identity,command[@"identity"])||!boundIdentity(live.identity,source[@"identity"])||![source[@"generation"]isEqual:command[@"generation"]]||![source[@"observation_known"]boolValue])continue;
             CGRect observed=DWRectFromJSON(source[@"observed_rect"]),prior=CGRectZero;
             if(!CGRectEqualToRect(observed,DWRectFromJSON(result[@"actual_ax"])))break;
             if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)live.router.bounds,&prior)||!CGRectEqualToRect(prior,observed))live.router.bounds=CFBridgingRelease(CGRectCreateDictionaryRepresentation(observed));
             CGRect native=DWRectFromJSON(result[@"actual_cg"]);
             if(self.desktop.native.familiesNeeded){
-                NSDictionary *family=DWNativeWindowFamily(live.identity,NULL)?:@{};
+                NSDictionary *family=[self.desktop sizeTransitionFamily:live.identity why:nil]?:@{};
                 native=DWResizePresentationNativeBounds(family,live.identity,native);
                 [self.desktop.native bound:live.identity bounds:native family:family];
             }else [self.desktop.native bound:live.identity bounds:native];
@@ -319,14 +354,14 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     if(!self.desktop.nativeDesktopMode||!self.desktop.native||self.desktop.native.ended||self.desktop.cleaning||self.desktop.sessionInactive
         ||self.fillHandoff||self.resize.obligations||![effect[@"op"]isEqual:@"observe_resize_source"]
         ||[self.nativeFillRefusedTransactions containsObject:effect[@"transaction"]])return NO;
-    NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
+    NSDictionary *snapshot=[self.desktop sizeTransitionSnapshot],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
     if(![transaction[@"pending_effect"]isEqual:effect]||[transaction[@"interactive"]boolValue]
         ||[transaction[@"baseline_observed"]boolValue]||[transaction[@"cancelled"]boolValue]||[transaction[@"uncertain_mutation"]boolValue])return NO;
     for(NSDictionary *view in snapshot[@"outputs"])if([DWTyped(view[@"fullscreen"],NSDictionary.class)[@"window"]isEqual:effect[@"window"]])return NO;
     NSDictionary *prior=self.nativeFillHistory[effect[@"window"]];
     BOOL remembered=boundIdentity(prior[@"identity"],effect[@"identity"])&&[prior[@"generation"]isEqual:effect[@"generation"]];
     if(!remembered&&![self.nativeResizeDriver hasNativeFillForEffect:effect])return NO;
-    LiveSource *source=self.desktop.sources[effect[@"window"]];NSNumber *output=[self.desktop.nativeViews desiredOwnerForWindow:effect[@"window"]];
+    LiveSource *source=[self.desktop sizeTransitionSource:effect[@"window"]];NSNumber *output=[self.desktop.nativeViews desiredOwnerForWindow:effect[@"window"]];
     NSDictionary *view=nil;for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){view=row;break;}
     NSDictionary *flight=DWTyped(DWTyped(DWTyped(snapshot[@"navigation"],NSDictionary.class)[@"flights"],NSDictionary.class)[output.stringValue],NSDictionary.class);
     NSDictionary *camera=DWTyped(flight[@"camera_target"],NSDictionary.class);NSNumber *zoom=DWTyped(flight[@"zoom_target"],NSNumber.class);
@@ -344,7 +379,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     return YES;
 }
 - (BOOL)nativeRestoreDeferredCurrent:(NSDictionary *)deferred snapshot:(NSDictionary *)snapshot {
-    NSDictionary *effect=deferred[@"effect"];LiveSource *source=self.desktop.sources[effect[@"window"]];
+    NSDictionary *effect=deferred[@"effect"];LiveSource *source=[self.desktop sizeTransitionSource:effect[@"window"]];
     if(!deferred||self.desktop.cleaning||DWStopSignal||self.desktop.sessionInactive||self.desktop.native.ended||deferred[@"presenter"]!=self.desktop.native
         ||[deferred[@"session"]unsignedLongLongValue]!=self.desktop.nativeSessionEpoch||!source||source.detached||source.nativeMouseOwnership
         ||source.nativeVisibilityWanted||![source.identity isEqual:deferred[@"identity"]]||!boundIdentity(source.identity,effect[@"identity"])
@@ -371,7 +406,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 }
 - (void)updateDeferredNativeRestore {
     NSDictionary *deferred=self.nativeRestoreDeferred;if(!deferred)return;
-    NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}];
+    NSDictionary *snapshot=[self.desktop sizeTransitionSnapshot];
     if(![self nativeRestoreDeferredCurrent:deferred snapshot:snapshot]){[self retireDeferredNativeRestore];return;}
     if(DWTyped(DWTyped(DWTyped(snapshot[@"navigation"],NSDictionary.class)[@"flights"],NSDictionary.class)[[deferred[@"output"]description]],NSDictionary.class))return;
     // Only the existing preparation allowance starts after the valid flight
@@ -385,7 +420,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         ||!CGRectEqualToRect(receipt.requestedViewport,DWRectFromJSON(deferred[@"screen_bounds"]))||![self.desktop.native isAcknowledgedPlacementCurrent:receipt])return;
     // presentationSnapshot may reconcile ownership. Recheck the saved action
     // after that reconciliation, before acquiring any native placement hold.
-    if(![self nativeRestoreDeferredCurrent:deferred snapshot:[self.desktop call:@{@"op":@"snapshot"}]]){[self retireDeferredNativeRestore];return;}
+    if(![self nativeRestoreDeferredCurrent:deferred snapshot:[self.desktop sizeTransitionSnapshot]]){[self retireDeferredNativeRestore];return;}
     // Same main turn: acquire the normal capture/placement handoff, retire the
     // wait, then admit the original baseline once with ordinary deadlines.
     [self prepareNativeFill:effect];
@@ -404,15 +439,15 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     // when its already queued worker next consults readiness.
     if(self.fillHandoff&&!self.nativeFillResuming){if(!self.nativeFillRefusedTransactions)self.nativeFillRefusedTransactions=[NSMutableSet set];[self.nativeFillRefusedTransactions addObject:self.fillHandoff[@"transaction"]];}
     // Invalidate the callbacks before cancellation can synchronously complete.
-    DWNativeTransitionCapture *capture=self.nativeFillCapture;DWNativeTransition *picture=self.nativeFillPicture;
-    DWNativePresenter *presenter=self.fillHandoff[@"presenter"];presenter.transitionFrameAcknowledged=nil;
+    id<DWSizeTransitionCaptureRequest> capture=self.nativeFillCapture;id<DWSizeTransitionPicture> picture=self.nativeFillPicture;
+    if(self.fillHandoff[@"presenter"]==self.acknowledgementPresenter)[self observeAcknowledgementsFrom:nil];
     self.fillHandoff=nil;self.nativeFillCapture=nil;self.nativeFillPicture=nil;self.nativeFillRoot=nil;self.desktop.nativeViewSnapshot=nil;self.nativeFillBackgroundTrace=nil;
     self.nativeFillResuming=NO;self.nativeFillHiding=NO;self.nativeFillAnimating=NO;self.nativeFillAnimated=NO;self.nativeFillRevealing=NO;self.nativeFillPresentationDeadline=0;
     self.nativeResizeDriver.fillPreparationTimeout=.75;self.resize.timeout=3;
     [capture cancel];[picture cancel];
 }
 - (BOOL)nativeFillCurrent:(NSDictionary *)held snapshot:(NSDictionary *)snapshot {
-    LiveSource *source=self.desktop.sources[held[@"window"]];
+    LiveSource *source=[self.desktop sizeTransitionSource:held[@"window"]];
     if(!held||self.desktop.cleaning||self.desktop.sessionInactive||self.desktop.native.ended||held[@"presenter"]!=self.desktop.native
         ||[held[@"session"]unsignedLongLongValue]!=self.desktop.nativeSessionEpoch||!source||source.detached||source.nativeVisibilityWanted||!boundIdentity(source.identity,held[@"identity"]))return NO;
     NSDictionary *binding=nil,*view=nil;
@@ -424,19 +459,19 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 }
 - (void)prepareNativeFill:(NSDictionary *)effect {
     if(!self.desktop.nativeDesktopMode||!self.desktop.native||self.desktop.native.ended||self.desktop.cleaning||self.desktop.sessionInactive||self.fillHandoff)return;
-    NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
+    NSDictionary *snapshot=[self.desktop sizeTransitionSnapshot],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
     if(![transaction[@"transaction"]isEqual:effect[@"transaction"]]||[transaction[@"interactive"]boolValue])return;
     BOOL fullscreen=NO;for(NSDictionary *output in snapshot[@"outputs"]){NSDictionary *entry=DWTyped(output[@"fullscreen"],NSDictionary.class);if([entry[@"window"]isEqual:effect[@"window"]])fullscreen=YES;}
     NSDictionary *prior=self.nativeFillHistory[effect[@"window"]];
     BOOL remembered=boundIdentity(prior[@"identity"],effect[@"identity"])&&[prior[@"generation"]isEqual:effect[@"generation"]];
     BOOL restoring=!fullscreen&&([self.nativeResizeDriver hasNativeFillForEffect:effect]||remembered);
-    LiveSource *source=self.desktop.sources[effect[@"window"]];if((!fullscreen&&!restoring)||!source||source.detached||source.nativeVisibilityWanted||source.nativeMinimized||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return;
+    LiveSource *source=[self.desktop sizeTransitionSource:effect[@"window"]];if((!fullscreen&&!restoring)||!source||source.detached||source.nativeVisibilityWanted||source.nativeMinimized||source.nativeMouseOwnership||!boundIdentity(source.identity,effect[@"identity"]))return;
     NSNumber *output=[self.desktop.nativeViews desiredOwnerForWindow:source.logical];NSDictionary *view=nil,*binding=nil;
     for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){view=row;break;}
     for(NSDictionary *row in snapshot[@"windows"])if([row[@"window"]isEqual:source.logical]){binding=DWTyped(row[@"source"],NSDictionary.class);break;}
     if(!view||!boundIdentity(binding[@"identity"],source.identity)||![binding[@"generation"]isEqual:effect[@"generation"]])return;
-    NSDictionary *window=windowInfo(source.router.wid);CGRect native=CGRectZero,displayed=CGRectZero;
-    BOOL geometry=DWNativeBounds(source.router.wid,&native)&&[window[(id)kCGWindowBounds]isKindOfClass:NSDictionary.class]
+    NSDictionary *window=[self.desktop sizeTransitionWindowInfo:source.router.wid];CGRect native=CGRectZero,displayed=CGRectZero;
+    BOOL geometry=[self.desktop sizeTransitionNativeBounds:source.router.wid bounds:&native]&&[window[(id)kCGWindowBounds]isKindOfClass:NSDictionary.class]
         &&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)window[(id)kCGWindowBounds],&displayed);
     // Infinify owns this transition at every zoom. A covered direct resize
     // avoids starting AppKit Fill and later waiting for its Unfill animation.
@@ -447,10 +482,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     else if(root){if(!self.nativeFillHistory)self.nativeFillHistory=[NSMutableDictionary dictionary];self.nativeFillHistory[source.logical]=@{@"identity":source.identity.copy,@"generation":effect[@"generation"]};}
     self.nativeFillRoot=root;self.nativeFillHiding=NO;self.nativeFillAnimating=NO;self.nativeFillAnimated=NO;self.nativeFillRevealing=NO;self.nativeFillPresentationDeadline=0;
     self.fillHandoff=@{@"window":effect[@"window"],@"transaction":effect[@"transaction"],@"identity":source.identity.copy,@"generation":effect[@"generation"],@"restoring":@(restoring),@"presenter":self.desktop.native,@"session":@(self.desktop.nativeSessionEpoch),@"output":output,@"camera":view[@"camera"],@"zoom":view[@"zoom"],@"screen_bounds":view[@"screen_bounds"],@"background":root&&!restoring?(self.desktop.nativeOwnerSnapshot?:@{}):@{}};self.nativeFillResuming=NO;
-    __weak DWSizeTransition *handoffDesktop=self;__weak DWNativePresenter *handoffPresenter=self.desktop.native;NSNumber *handoffTransaction=effect[@"transaction"];
-    self.desktop.native.transitionFrameAcknowledged=^{DWSizeTransition *d=handoffDesktop;
-        if(!d||d.desktop.cleaning||d.desktop.sessionInactive||d.desktop.native!=handoffPresenter||![d.fillHandoff[@"transaction"]isEqual:handoffTransaction])return;
-        [d.desktop render];};
+    [self observeAcknowledgementsFrom:self.desktop.native];
     self.nativeResizeDriver.fillPreparationTimeout=root?2.5:.75;self.resize.timeout=root?7:3;
     [self.desktop cancelNativeHoverForWindow:nil];[self.desktop cancelCapturedInputForWindow:nil];self.desktop.nativeViewSnapshot=nil;
     if(DWDebugTrace())fprintf(stderr,"debug: native fill handoff window=#%s native=%g,%g %gx%g displayed=%g,%g %gx%g snapshot=%d restore=%d\n",source.logical.description.UTF8String,native.origin.x,native.origin.y,native.size.width,native.size.height,displayed.origin.x,displayed.origin.y,displayed.size.width,displayed.size.height,root!=nil,restoring);
@@ -458,23 +490,23 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         __weak DWSizeTransition *weak=self;NSDictionary *held=self.fillHandoff;
         BOOL (^valid)(void)=^BOOL{DWSizeTransition *d=weak;return d&&d.nativeFillRoot==root&&!d.nativeFillResuming
             &&[d.fillHandoff[@"transaction"]isEqual:held[@"transaction"]]
-            &&[d nativeFillCurrent:held snapshot:[d.desktop call:@{@"op":@"snapshot"}]];};
+            &&[d nativeFillCurrent:held snapshot:[d.desktop sizeTransitionSnapshot]];};
         // Snapshot preparation can occupy main longer than the ordinary
         // setter admission budget. Only this exact, read-only baseline may
         // wait for it; its effect, session and handoff are checked again then.
         [self.nativeResizeDriver prepareBaseline:effect validate:^BOOL{
             DWSizeTransition *d=weak;if(!valid())return NO;
-            NSDictionary *current=DWTyped([d.desktop call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
+            NSDictionary *current=DWTyped([d.desktop sizeTransitionSnapshot][@"native_resize"],NSDictionary.class);
             return ![current[@"cancelled"]boolValue]&&[current[@"pending_effect"]isEqual:effect]
                 &&![d.nativeFillRefusedTransactions containsObject:effect[@"transaction"]];
         }];
-        self.nativeFillCapture=[DWNativeTransitionCapture captureIdentity:root.identity nativeBounds:root.nativeBounds screenRect:root.screenRect validate:valid completion:^(DWNativeTransitionCaptureResult *result,NSString *failure){
+        self.nativeFillCapture=self.capture(root,NO,valid,^(DWSizeTransitionPictureFactory makePicture,NSString *failure){
             DWSizeTransition *d=weak;if(!valid())return;d.nativeFillCapture=nil;
-            DWNativeTransition *picture=result?[[DWNativeTransition alloc]initWithImage:result.image screenRect:result.screenRect]:nil;
+            id<DWSizeTransitionPicture> picture=makePicture?makePicture():nil;
             if(picture&&[picture show]){d.nativeFillPicture=picture;[d updateNativeFill];[d.desktop render];}
             else {NSMutableDictionary *failed=[d.fillHandoff mutableCopy];failed[@"bridge_failed"]=@YES;d.fillHandoff=failed;
                 if(DWDebugTrace())fprintf(stderr,"debug: native transition capture refused window=#%s reason=%s\n",[held[@"window"]description].UTF8String,(failure?:@"snapshot panel unavailable").UTF8String);}
-        }];
+        });
     }
 }
 - (void)interruptFillForVisibility:(LiveSource *)source {
@@ -490,9 +522,9 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 - (void)updateNativeFill {
     [self updateDeferredNativeRestore];
     NSDictionary *held=self.fillHandoff;if(!held)return;
-    LiveSource *visibilitySource=self.desktop.sources[held[@"window"]];
+    LiveSource *visibilitySource=[self.desktop sizeTransitionSource:held[@"window"]];
     if(visibilitySource.nativeVisibilityWanted){[self interruptFillForVisibility:visibilitySource];return;}
-    NSDictionary *snapshot=[self.desktop call:@{@"op":@"snapshot"}],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
+    NSDictionary *snapshot=[self.desktop sizeTransitionSnapshot],*transaction=DWTyped(snapshot[@"native_resize"],NSDictionary.class);
     BOOL gone=![self nativeFillCurrent:held snapshot:snapshot];
     BOOL finished=![transaction[@"transaction"]isEqual:held[@"transaction"]]||([self.resize canRemove:held[@"window"]]&&!self.resize.obligations);
     // A canvas transition can need no native setter (the app was already
@@ -523,7 +555,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
                     DWNativeHiddenRoot *root=self.nativeFillRoot;self.nativeFillAnimating=YES;__weak DWSizeTransition *weak=self;
                     NSMutableDictionary *frozen=[self.fillHandoff mutableCopy];frozen[@"target"]=DWRectJSON(target);self.fillHandoff=frozen.copy;
                     void (^reveal)(BOOL)=^(BOOL completed){DWSizeTransition *d=weak;if(!d||d.nativeFillRoot!=root||d.nativeFillResuming)return;
-                        NSDictionary *now=[d.desktop call:@{@"op":@"snapshot"}];BOOL targetMatches=NO;
+                        NSDictionary *now=[d.desktop sizeTransitionSnapshot];BOOL targetMatches=NO;
                         for(NSDictionary *item in [d.desktop presentationSnapshot][@"placements"])if([item[@"window"]isEqual:held[@"window"]]&&[item[@"output"]isEqual:held[@"output"]]&&CGRectEqualToRect(DWRectFromJSON(item[@"screen_rect"]),target))targetMatches=YES;
                         BOOL current=[d nativeFillCurrent:held snapshot:now];
                         if(!completed||!targetMatches||!current){if(DWDebugTrace())fprintf(stderr,"debug: native transition completion refused window=#%s completed=%d target=%d current=%d\n",[held[@"window"]description].UTF8String,completed,targetMatches,current);d.nativeFillPresentationDeadline=CACurrentMediaTime();return;}
@@ -585,7 +617,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     for(NSDictionary *row in placements)if(row[@"window"])[placed addObject:row[@"window"]];
     NSUInteger excluded=0,changedSource=0,changedWindow=0,retained=0;
     for(NSDictionary *placement in prior[@"placements"]){
-        NSNumber *window=placement[@"window"];NSDictionary *old=before[window],*current=now[window],*source=DWTyped(current[@"source"],NSDictionary.class);LiveSource *live=self.desktop.sources[window];
+        NSNumber *window=placement[@"window"];NSDictionary *old=before[window],*current=now[window],*source=DWTyped(current[@"source"],NSDictionary.class);LiveSource *live=[self.desktop sizeTransitionSource:window];
         if(!window||[window isEqual:held[@"window"]]||[placed containsObject:window]||![placement[@"output"]isEqual:held[@"output"]]){excluded++;continue;}
         if(!old||!current||!live||live.detached||live.nativeMouseOwnership||!boundIdentity(source[@"identity"],live.identity)
             ||![source isEqual:placement[@"source"]]){changedSource++;continue;}

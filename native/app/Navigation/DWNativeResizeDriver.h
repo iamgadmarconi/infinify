@@ -21,7 +21,7 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 @property (copy) BOOL (^ready)(void);
 @property (copy) void (^cancel)(void);
 @end
-@interface DWNativeResizeDriver : NSObject <DWResizeDriver>
+@protocol DWSizeTransitionResizeDriver <DWResizeDriver>
 // Desktop native presentation elects a guarded Fill. The main-thread gate must
 // confirm that the helper has acknowledged withholding the entire native family.
 // ReadyForSnapshotFill selects direct sizing behind the prepared picture;
@@ -57,4 +57,7 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 @property (copy) CGError (^screenUpdates)(BOOL enabled);
 // Readback resizing keeps the adapter's fresh identity checks before and after every native call.
 @property (copy) void (^didPerform)(NSDictionary *effect, NSDictionary *result);
+@end
+
+@interface DWNativeResizeDriver : NSObject <DWSizeTransitionResizeDriver>
 @end

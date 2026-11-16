@@ -130,7 +130,7 @@
 - (void)poll {
     [self.session poll]; // blocked startup/early wake retries before the inactive early return
     [self updateNativeMouseOwners];
-    [self.sizeTransition updateNativeFill];
+    [self.sizeTransition observe];
     [self updateNativeVisibility];
     if(self.cleaning||self.sessionInactive)return;
     [self resumeNative];

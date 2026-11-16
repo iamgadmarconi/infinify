@@ -1,10 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
-@class Desktop, LiveSource;
+#import "DWSizeTransitionHost.h"
+@class LiveSource;
 // Main-thread owner of native size work and its optical handoff. Callers submit
 // controller effects; capture/hide admission and final-placement ACK stay inside.
+// Host must outlive this owner (held weakly); driver/capture are retained. Capture
+// completes asynchronously on main. Every effect is revalidated before native
+// work; refusal follows the unchanged controller-result/failure path. Native
+// cancellation drains work already started; it cannot retract an AX setter.
+// No caller waits/polls for capture, hide, animation or reveal. observe/willRender
+// are existing shell observation/render events, not readiness authorization.
 @interface DWSizeTransition : NSObject
-- (instancetype)initWithDesktop:(Desktop *)desktop;
+- (instancetype)initWithHost:(id<DWSizeTransitionHost>)host;
+// The injected adapters sit behind the same interface as production. No
+// caller configures coordinator/driver readiness callbacks or picture phases.
+- (instancetype)initWithHost:(id<DWSizeTransitionHost>)host
+                      driver:(id<DWSizeTransitionResizeDriver>)driver
+                     capture:(DWSizeTransitionCapture)capture;
 // Nil without a Fill/Restore handoff. Immutable identity/output/background
 // facts used by input refusal; callers must not retain them as authorization.
 @property (readonly) NSDictionary *fillHandoff;
@@ -14,16 +26,17 @@
 - (NSNumber *)busyWindow;
 - (NSDictionary *)request:(NSDictionary *)command;
 - (void)consume:(NSDictionary *)reply;
+// Returns the sizing effect (or nil), preserving the action reply continuation.
 - (NSDictionary *)consumeSize:(NSDictionary *)reply;
 - (BOOL)sizing;
 - (void)cancel;
 - (void)shutdown;
 - (void)reap;
-- (void)clearNativeFillPresentation;
-- (void)updateNativeFill;
 - (void)interruptFillForVisibility:(LiveSource *)source;
 - (NSDictionary *)nativeFillBackground:(NSDictionary *)snapshot;
-- (void)cancelPresentationForSessionDeparture;
+// Before changing session/outputs, retire pictures without admitting successors.
+- (void)suspendPresentation;
 - (void)cancelPresentation;
-- (void)updatePresentation;
+- (void)observe;
+- (void)willRender;
 @end
