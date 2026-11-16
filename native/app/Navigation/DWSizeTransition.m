@@ -15,6 +15,13 @@ static BOOL DWSizeBoundIdentity(NSDictionary *bound,DWIdentity *named) {
         &&[bound[@"pid"]isEqual:named.pid]&&[bound[@"birth_sec"]isEqual:named.birthSeconds]
         &&[bound[@"birth_usec"]isEqual:named.birthMicroseconds]&&[bound[@"wid"]isEqual:named.wid];
 }
+static BOOL DWSizeControllerBoundToNativeIdentity(DWIdentity *bound,NSDictionary *named) {
+    return bound&&named&&!DWTyped(named[@"owner"],NSNumber.class)
+        &&DWTyped(named[@"pid"],NSNumber.class)&&DWTyped(named[@"birth_sec"],NSNumber.class)
+        &&DWTyped(named[@"birth_usec"],NSNumber.class)&&DWTyped(named[@"wid"],NSNumber.class)
+        &&[bound.pid isEqual:named[@"pid"]]&&[bound.birthSeconds isEqual:named[@"birth_sec"]]
+        &&[bound.birthMicroseconds isEqual:named[@"birth_usec"]]&&[bound.wid isEqual:named[@"wid"]];
+}
 static BOOL DWSizeBoundTypedIdentity(DWIdentity *bound,DWIdentity *named) {
     return bound&&named&&!named.owner&&named.pid&&named.birthSeconds&&named.birthMicroseconds&&named.wid
         &&[bound.pid isEqual:named.pid]&&[bound.birthSeconds isEqual:named.birthSeconds]
@@ -460,7 +467,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     if(!held||self.desktop.cleaning||self.desktop.sessionInactive||self.desktop.native.ended||held[@"presenter"]!=self.desktop.native
         ||[held[@"session"]unsignedLongLongValue]!=self.desktop.nativeSessionEpoch||!source||source.detached||source.nativeVisibilityWanted||!boundIdentity(source.identity,held[@"identity"]))return NO;
     DWSource *binding=[snapshot windowWithID:held[@"window"]].source;DWOutput *view=[snapshot outputWithID:held[@"output"]];
-    return DWSizeBoundIdentity(held[@"identity"],binding.identity)&&[binding.generation isEqual:held[@"generation"]]
+    return DWSizeControllerBoundToNativeIdentity(binding.identity,held[@"identity"])&&[binding.generation isEqual:held[@"generation"]]
         &&[[self.desktop.nativeViews desiredOwnerForWindow:held[@"window"]]isEqual:held[@"output"]]
         &&[view hasSamePoseAsOutput:held[@"view"]];
 }
@@ -475,7 +482,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     LiveSource *source=[self.desktop sizeTransitionSource:effect.window];if((!fullscreen&&!restoring)||!source||source.detached||source.nativeVisibilityWanted||source.nativeMinimized||source.nativeMouseOwnership||!DWSizeBoundIdentity(source.identity,effect.identity))return;
     NSNumber *output=[self.desktop.nativeViews desiredOwnerForWindow:source.logical];DWOutput *view=[snapshot outputWithID:output];
     DWSource *binding=[snapshot windowWithID:source.logical].source;
-    if(!view||!DWSizeBoundIdentity(source.identity,binding.identity)||![binding.generation isEqual:effect.generation])return;
+    if(!view||!DWSizeControllerBoundToNativeIdentity(binding.identity,source.identity)||![binding.generation isEqual:effect.generation])return;
     NSDictionary *window=[self.desktop sizeTransitionWindowInfo:source.router.wid];CGRect native=CGRectZero,displayed=CGRectZero;
     BOOL geometry=[self.desktop sizeTransitionNativeBounds:source.router.wid bounds:&native]&&[window[(id)kCGWindowBounds]isKindOfClass:NSDictionary.class]
         &&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)window[(id)kCGWindowBounds],&displayed);
@@ -595,7 +602,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     if(gone){if(!self.nativeFillRefusedTransactions)self.nativeFillRefusedTransactions=[NSMutableSet set];[self.nativeFillRefusedTransactions addObject:held[@"transaction"]];[self clearNativeFillPresentation];return;}
     if(self.nativeFillResuming){
         NSNumber *output=[self.desktop.nativeViews desiredOwnerForWindow:held[@"window"]];
-        NSNumber *generation=nil;for(DWWindow *window in snapshot.windows)if([window.window isEqual:held[@"window"]]&&DWSizeBoundIdentity(held[@"identity"],window.source.identity))generation=window.source.generation;
+        NSNumber *generation=nil;for(DWWindow *window in snapshot.windows)if([window.window isEqual:held[@"window"]]&&DWSizeControllerBoundToNativeIdentity(window.source.identity,held[@"identity"]))generation=window.source.generation;
         DWNativeAppliedPlacement *placed=[self.desktop.native acknowledgedPlacementForWindow:held[@"window"] identity:held[@"identity"] generation:generation output:output];
         if(placed||!output||!generation){[self clearNativeFillPresentation];
             if(DWDebugTrace())fprintf(stderr,"debug: native fill handoff resumed window=#%s sequence=%llu\n",[held[@"window"]description].UTF8String,(unsigned long long)placed.sequence);}
