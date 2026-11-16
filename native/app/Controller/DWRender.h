@@ -9,7 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) DWRenderChrome *chrome;
 @property(nonatomic,readonly,nullable) DWRenderOutline *outline;
 @property(nonatomic,readonly,nullable) DWRenderEffects *effects;
-@property(nonatomic,readonly,nullable) NSArray *errors;
+@property(nonatomic,readonly,nullable) NSArray<NSString *> *errors;
 
 @end
 NS_ASSUME_NONNULL_END

@@ -57,7 +57,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *adopted;
 @property(nonatomic,readonly,nullable) NSNumber *background;
 @property(nonatomic,readonly,nullable) NSNumber *focusOnOpenSuppressed;
-@property(nonatomic,readonly,nullable) NSArray *changedOutputs;
+@property(nonatomic,readonly,nullable) NSArray<NSNumber *> *changedOutputs;
 @property(nonatomic,readonly,nullable) DWNavigation *navigation;
 @property(nonatomic,readonly,nullable) NSString *error;
 @property(nonatomic,readonly,nullable) NSString *message;
@@ -65,7 +65,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) DWBinding *binding;
 @property(nonatomic,readonly,nullable) NSNumber *passed;
 @property(nonatomic,readonly,nullable) NSNumber *enabled;
-@property(nonatomic,readonly,nullable) NSArray *fingers;
+@property(nonatomic,readonly,nullable) NSArray<NSNumber *> *fingers;
 @property(nonatomic,readonly,nullable) NSNumber *clockOnly;
 @property(nonatomic,readonly,nullable) NSNumber *needsPointer;
 @property(nonatomic,readonly,nullable) NSNumber *stateEvent;
@@ -90,8 +90,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *moved;
 @property(nonatomic,readonly,nullable) NSString *path;
 @property(nonatomic,readonly,nullable) NSNumber *exists;
-@property(nonatomic,readonly,nullable) NSArray *warnings;
-@property(nonatomic,readonly,nullable) NSArray *errors;
+@property(nonatomic,readonly,nullable) NSArray<NSString *> *warnings;
+@property(nonatomic,readonly,nullable) NSArray<NSString *> *errors;
 @property(nonatomic,readonly,nullable) NSString *superModifier;
 @property(nonatomic,readonly,nullable) NSNumber *layoutIndependent;
 @property(nonatomic,readonly,nullable) NSNumber *repeatDelayMilliseconds;
