@@ -56,6 +56,7 @@ pub(crate) struct FocusPolicy {
     filter: bool,
     focus_allowed: bool,
     initial_observation_done: bool,
+    family_observation: Option<(Binding, SourceIdentity)>,
     background: Option<Background>,
     correction: Option<Correction>,
     switch_held: bool,
@@ -80,6 +81,7 @@ pub(crate) enum FocusFact {
         protect: bool,
     },
     ClearBackground,
+    ClearFamily,
     CancelBackground,
     Answer {
         effect_id: u64,
@@ -151,6 +153,7 @@ impl Controller {
                 return Ok(json!({"unsolicited":!authorized,"cancel_work":cancel}));
             }
             FocusFact::ClearBackground => self.clear_background(),
+            FocusFact::ClearFamily => self.focus.policy.family_observation = None,
             FocusFact::CancelBackground => {
                 let cancel = self.cancel_background();
                 return Ok(json!({"cancel_work":cancel}));
@@ -329,6 +332,7 @@ pub(crate) enum ObservationReceipt {
     Activated {
         binding: Binding,
         family: bool,
+        actual: SourceIdentity,
     },
     Restore {
         target: Binding,
@@ -691,7 +695,14 @@ impl Controller {
         reply: Option<Value>,
     ) -> Result<Value, Error> {
         match context {
-            ObservationReceipt::Activated { binding, family } => {
+            ObservationReceipt::Activated {
+                binding,
+                family,
+                actual,
+            } => {
+                if family && reply.is_some() {
+                    self.focus.policy.family_observation = Some((binding.clone(), actual));
+                }
                 if let Some(effect) = reply
                     .as_ref()
                     .and_then(|r| r.get("effect"))
@@ -869,6 +880,7 @@ impl Controller {
             }
             Some(b)
         } else {
+            self.focus.policy.family_observation = None;
             self.sources
                 .iter()
                 .find(|(_, s)| s.identity == actual)
@@ -913,8 +925,20 @@ impl Controller {
                 captured_epoch: true,
             }]));
         }
-        // Old snapshot.focus.logical was absent: family dedup never fired.
-        // Do not silently enable it using the internal logical marker.
+        // Read the internal logical marker: the snapshot never exported it,
+        // which made the former native family-observation dedup unreachable.
+        if is_family
+            && self
+                .focus
+                .policy
+                .family_observation
+                .as_ref()
+                .is_some_and(|(b, a)| Some(b) == binding.as_ref() && *a == actual)
+            && self.focus.logical == binding.as_ref().map(|b| b.window)
+            && self.focus.pending_effect.is_none()
+        {
+            return Ok(steps(vec![]));
+        }
         if !is_family
             && binding.as_ref().is_some_and(|b| {
                 self.focus
@@ -1003,6 +1027,7 @@ impl Controller {
                 receipt: Some(ObservationReceipt::Activated {
                     binding: b,
                     family: is_family,
+                    actual,
                 }),
             });
         } else {

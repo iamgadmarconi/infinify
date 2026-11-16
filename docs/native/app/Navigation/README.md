@@ -501,6 +501,13 @@ and relays the returned `unsolicited` value unchanged. Consumption survives
 attach failure. `perform:` reports the full arrival reply before focus delivery,
 so `Desktop+Windows.m` no longer installs protection itself.
 
+Repeated observations of the same family child now deduplicate in policy
+against the controller's internal logical-focus marker (the old native check
+read an unexported snapshot key and never fired). They send no commands or
+notifications. A non-family observation or shutdown clears the remembered
+child. Panning alone does not, root focus changes defeat the condition, and a
+new sheet's different observed identity is not deduplicated.
+
 ### Native focus is followed
 
 When Accessibility access exists, the shell reads which window the frontmost

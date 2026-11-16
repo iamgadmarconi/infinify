@@ -63,6 +63,7 @@ The rule relocation (old coordinator methods below are in
 | Observation epoch precedes focus/camera command; pending effects answered against captured epoch; nil fact reproduces nil-snapshot fall-through (cancel click, advance, `focus_lost`, changed) | coordinator `observe` | `observe_owner_focus`, `observation_receipt`; native six-step dispatch |
 | Restore sends `focus` before epoch advance; only widened window is one in-process receipt call between focus and `perform:`'s advance (formerly assignments); no-effect fall-through retains consumed budget | coordinator restore/protection helpers | `plan_correction`, `observation_receipt`, `perform_reply` |
 | Normal/rule placement, focus-on-open, fullscreen/utility exceptions | `lifecycle.rs` spawn/arrival settlement | `spawn`, `arrival`, `settle_arrival` (adoption search stays in lifecycle) |
+| Owner-approved fix: repeated family observation produces no steps when binding, element and internal logical focus agree and no effect is pending | unreachable native `focus[@"logical"]` check | `observe_owner_focus_from`, `ObservationReceipt::Activated`, `ClearFamily` |
 | Activation no-pan uncertainty, clipped reveal, cycle/click rules and configured zoom | `window_actions.rs::activate` | `activate`, `activation_zoom` |
 
 
@@ -241,7 +242,11 @@ establish only these controller contracts: they do not show that an effect
 focuses a window, that a native focus change is observed, or that a modifier
 release reaches `end_focus_cycle`.
 
-Known behaviour deliberately retained: the former native family-observation
-deduplication checked `snapshot.focus.logical`, which the snapshot does not
-export. Repeated child observations are therefore not newly deduplicated here;
-using the controller's internal logical marker would be a separate bug fix.
+Owner-approved behaviour correction, separate from the refactor: native
+family-observation deduplication used to check `snapshot.focus.logical`, which
+is not exported. Policy now reads the internal `focus.logical`: an identical
+family binding and observed element, with logical focus on that root and no
+pending effect, returns no steps. Non-family observations and shutdown clear
+the remembered observation. Camera motion alone does not: panning must not
+re-follow the same sheet on the next poll. Losing logical focus defeats the
+condition; a new sheet's different observed identity defeats it too.
