@@ -56,7 +56,6 @@ pub(crate) struct FocusPolicy {
     filter: bool,
     focus_allowed: bool,
     initial_observation_done: bool,
-    family_observation: Option<(Binding, SourceIdentity)>,
     background: Option<Background>,
     correction: Option<Correction>,
     switch_held: bool,
@@ -91,6 +90,10 @@ pub(crate) enum FocusFact {
         bundle: Option<String>,
         event_at: u64,
         activated: bool,
+    },
+    ObservationReceipt {
+        context: ObservationReceipt,
+        reply: Option<Value>,
     },
     Observation {
         actual: SourceIdentity,
@@ -226,11 +229,21 @@ impl Controller {
                     && let Some(target) = self
                         .confirmed_live_binding()
                         .filter(|b| b.identity.pid != process.pid)
-                    && let Some(reply) =
-                        self.start_correction(now, target, process.pid, None, event_at, true)?
+                    && let Some(reply) = self.plan_correction(
+                        now,
+                        target,
+                        process.pid,
+                        None,
+                        event_at,
+                        true,
+                        RestoreFailure::None,
+                    )?
                 {
-                    return Ok(reply);
+                    return Ok(steps(reply));
                 }
+            }
+            FocusFact::ObservationReceipt { context, reply } => {
+                return self.observation_receipt(now, context, reply);
             }
             FocusFact::Observation {
                 actual,
@@ -285,6 +298,96 @@ impl Controller {
         }
         Ok(json!({}))
     }
+}
+
+/// Closed decisions for the existing native driver adapter, not a command
+/// language. Send is synchronous; only its first result can request a receipt.
+#[derive(Clone, Debug, serde::Serialize, Deserialize)]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub(crate) enum ObservationStep {
+    CancelClick,
+    Advance {
+        release_hold: bool,
+    },
+    Send {
+        command: Value,
+        receipt: Option<ObservationReceipt>,
+    },
+    Answer {
+        effect: Value,
+        logical: bool,
+        captured_epoch: bool,
+    },
+    PerformReply {
+        correction: Value,
+    },
+    Changed,
+}
+#[derive(Clone, Debug, serde::Serialize, Deserialize)]
+#[serde(tag = "receipt", rename_all = "snake_case")]
+pub(crate) enum ObservationReceipt {
+    Activated {
+        binding: Binding,
+        family: bool,
+    },
+    Restore {
+        target: Binding,
+        observed: Option<SourceIdentity>,
+        intruder_pid: i32,
+        started_at: u64,
+        made_at: u64,
+        failure: Box<RestoreFailure>,
+    },
+}
+#[derive(Clone, Debug, serde::Serialize, Deserialize)]
+#[serde(tag = "failure", rename_all = "snake_case")]
+pub(crate) enum RestoreFailure {
+    None,
+    Reject {
+        focus_was_set: bool,
+    },
+    Arrival {
+        actual: SourceIdentity,
+        family: Option<Binding>,
+        event_at: u64,
+        output: Option<crate::OutputId>,
+    },
+}
+fn steps(steps: Vec<ObservationStep>) -> Value {
+    json!({"steps":steps})
+}
+fn send(command: Value) -> ObservationStep {
+    ObservationStep::Send {
+        command,
+        receipt: None,
+    }
+}
+fn advance() -> ObservationStep {
+    ObservationStep::Advance {
+        release_hold: false,
+    }
+}
+fn cancellation(cancel: bool) -> Vec<ObservationStep> {
+    if cancel {
+        vec![
+            ObservationStep::CancelClick,
+            ObservationStep::Advance { release_hold: true },
+            send(json!({"op":"cancel_focus_cycle"})),
+        ]
+    } else {
+        vec![]
+    }
+}
+fn reject_observation(focus_was_set: bool) -> Vec<ObservationStep> {
+    let mut result = vec![ObservationStep::CancelClick, advance()];
+    if focus_was_set {
+        result.push(send(json!({"op":"focus_lost"})));
+        result.push(ObservationStep::Changed);
+    }
+    result
+}
+fn binding_command(op: &str, binding: &Binding) -> Value {
+    json!({"op":op,"window":binding.window,"identity":binding.identity,"generation":binding.generation})
 }
 
 struct IntentQuery {
@@ -428,12 +531,6 @@ impl Controller {
         }
         Ok(json!({"authorized":authorized,"cancel_background":cancel}))
     }
-    fn policy_command(&mut self, command: crate::Command) -> Result<Value, Error> {
-        self.execute(crate::Request {
-            version: crate::ABI_VERSION,
-            command,
-        })
-    }
     fn binding_live(&self, b: &Binding) -> bool {
         self.sources
             .get(&b.window)
@@ -472,10 +569,6 @@ impl Controller {
             .as_ref()
             .is_some_and(|c| self.focus.pending_effect.as_ref() == Some(&c.effect));
         self.clear_background();
-        if correcting {
-            // Native cancelFocus also withdraws the worker epoch and held cycle.
-            let _ = self.policy_command(crate::Command::CancelFocusCycle {});
-        }
         correcting
     }
     fn preserve_arrival(&mut self, now: u64, reply: &Value) {
@@ -535,7 +628,10 @@ impl Controller {
         b.deadline = deadline;
         b.arrivals.insert(arrival.window, (arrival, deadline));
     }
-    fn start_correction(
+    // Only private bookkeeping happens here. The returned focus command is
+    // sent before perform:'s epoch advance, as in the original adapter.
+    #[allow(clippy::too_many_arguments)]
+    fn plan_correction(
         &mut self,
         now: u64,
         target: Binding,
@@ -543,7 +639,8 @@ impl Controller {
         observed: Option<SourceIdentity>,
         started_at: u64,
         limited: bool,
-    ) -> Result<Option<Value>, Error> {
+        failure: RestoreFailure,
+    ) -> Result<Option<Vec<ObservationStep>>, Error> {
         if !self.focus.policy.focus_allowed || pid <= 0 {
             return Ok(None);
         }
@@ -562,7 +659,7 @@ impl Controller {
         if self.focus.policy.correction.as_ref().is_some_and(|c| {
             c.target == target && self.focus.pending_effect.as_ref() == Some(&c.effect)
         }) {
-            return Ok(Some(json!({"handled":true})));
+            return Ok(Some(vec![]));
         }
         if limited {
             let entry = self.focus.policy.restores.entry(pid).or_insert(Restore {
@@ -573,47 +670,121 @@ impl Controller {
             entry.count += 1;
             entry.failed = false;
         }
-        let reply = match self.policy_command(crate::Command::Focus {
-            window: target.window,
-        }) {
-            Ok(reply) => reply,
-            Err(_) => return Ok(None),
-        };
-        let Some(effect) = self
-            .focus
-            .pending_effect
-            .clone()
-            .filter(|_| reply["effect"].is_object())
-        else {
-            return Ok(None);
-        };
-        self.focus.policy.correction = Some(Correction {
-            target: target.clone(),
-            effect,
+        let command = json!({"op":"focus","window":target.window});
+        let receipt = ObservationReceipt::Restore {
+            target,
             observed,
             intruder_pid: pid,
-            started_at: if started_at != 0 { started_at } else { now },
-        });
-        let deadline = now.wrapping_add(1_500_000_000);
-        let background = self
-            .focus
-            .policy
-            .background
-            .get_or_insert_with(|| Background {
-                target: target.clone(),
-                output: None,
-                deadline,
-                arrivals: BTreeMap::new(),
-            });
-        background.target = target;
-        background.deadline = deadline;
-        Ok(Some(json!({"handled":true,"reply":reply,"changed":true})))
+            started_at,
+            made_at: now,
+            failure: Box::new(failure),
+        };
+        Ok(Some(vec![ObservationStep::Send {
+            command,
+            receipt: Some(receipt),
+        }]))
+    }
+    fn observation_receipt(
+        &mut self,
+        now: u64,
+        context: ObservationReceipt,
+        reply: Option<Value>,
+    ) -> Result<Value, Error> {
+        match context {
+            ObservationReceipt::Activated { binding, family } => {
+                if let Some(effect) = reply
+                    .as_ref()
+                    .and_then(|r| r.get("effect"))
+                    .filter(|e| e.is_object())
+                {
+                    return Ok(steps(vec![ObservationStep::Answer {
+                        effect: effect.clone(),
+                        logical: family,
+                        captured_epoch: false,
+                    }]));
+                }
+                if reply.is_none() && !family {
+                    return Ok(steps(vec![send(binding_command(
+                        "observe_focus",
+                        &binding,
+                    ))]));
+                }
+                Ok(steps(vec![]))
+            }
+            ObservationReceipt::Restore {
+                target,
+                observed,
+                intruder_pid,
+                started_at,
+                made_at,
+                failure,
+            } => {
+                let effect = reply
+                    .as_ref()
+                    .and_then(|r| r.get("effect"))
+                    .filter(|e| e.is_object())
+                    .and(self.focus.pending_effect.clone());
+                if let Some(effect) = effect {
+                    let arrival = matches!(*failure, RestoreFailure::Arrival { .. });
+                    let started_at = if arrival {
+                        now
+                    } else if started_at == 0 {
+                        made_at
+                    } else {
+                        started_at
+                    };
+                    self.focus.policy.correction = Some(Correction {
+                        target: target.clone(),
+                        effect,
+                        observed: observed.clone(),
+                        intruder_pid,
+                        started_at,
+                    });
+                    let deadline =
+                        (if arrival { now } else { made_at }).wrapping_add(1_500_000_000);
+                    let background =
+                        self.focus
+                            .policy
+                            .background
+                            .get_or_insert_with(|| Background {
+                                target: target.clone(),
+                                output: None,
+                                deadline,
+                                arrivals: BTreeMap::new(),
+                            });
+                    background.target = target;
+                    background.deadline = deadline;
+                    let correction = json!({"correction":true,"observed":observed,"intruder_pid":intruder_pid,"started_at":started_at});
+                    return Ok(steps(vec![
+                        ObservationStep::PerformReply { correction },
+                        ObservationStep::Changed,
+                    ]));
+                }
+                match *failure {
+                    RestoreFailure::None => Ok(steps(vec![])),
+                    RestoreFailure::Reject { focus_was_set } => {
+                        self.focus.policy.confirmed_process = None;
+                        Ok(steps(reject_observation(focus_was_set)))
+                    }
+                    RestoreFailure::Arrival {
+                        actual,
+                        family,
+                        event_at,
+                        output,
+                    } => {
+                        self.clear_background();
+                        self.observe_owner_focus_from(now, actual, family, event_at, output, true)
+                    }
+                }
+            }
+        }
     }
     fn observe_arrival(
         &mut self,
         now: u64,
         binding: Option<&Binding>,
-    ) -> Result<Option<Value>, Error> {
+        failure: RestoreFailure,
+    ) -> Result<Option<Vec<ObservationStep>>, Error> {
         let Some(background) = self.focus.policy.background.clone() else {
             return Ok(None);
         };
@@ -650,24 +821,21 @@ impl Controller {
         }
         if let Some(c) = &self.focus.policy.correction {
             if self.focus.pending_effect.as_ref() == Some(&c.effect) {
-                return Ok(Some(json!({"handled":true})));
+                return Ok(Some(vec![]));
             }
             self.clear_background();
             return Ok(None);
         }
         let arrival = binding.expect("entry has exact binding");
-        let reply = self.start_correction(
+        self.plan_correction(
             now,
             background.target,
             arrival.identity.pid,
             Some(arrival.identity.clone()),
-            now,
+            0,
             false,
-        )?;
-        if reply.is_none() {
-            self.clear_background();
-        }
-        Ok(reply)
+            failure,
+        )
     }
     fn authorize_owner(&mut self, now: u64, query: IntentQuery) -> Result<(bool, bool), Error> {
         let reply = self.classify_process(now, query)?;
@@ -683,15 +851,24 @@ impl Controller {
         event_at: u64,
         output: Option<crate::OutputId>,
     ) -> Result<Value, Error> {
-        use crate::{Command, window_actions::ActivationCause};
+        self.observe_owner_focus_from(now, actual, family, event_at, output, false)
+    }
+    fn observe_owner_focus_from(
+        &mut self,
+        now: u64,
+        actual: SourceIdentity,
+        family: Option<Binding>,
+        event_at: u64,
+        output: Option<crate::OutputId>,
+        skip_arrival: bool,
+    ) -> Result<Value, Error> {
         let is_family = family.is_some();
-        let binding = if let Some(b) = family {
+        let binding = if let Some(b) = family.clone() {
             if now.wrapping_sub(event_at) > 100_000_000 || !self.binding_live(&b) {
-                return Ok(json!({}));
+                return Ok(steps(vec![]));
             }
             Some(b)
         } else {
-            self.focus.policy.family_observation = None;
             self.sources
                 .iter()
                 .find(|(_, s)| s.identity == actual)
@@ -704,19 +881,24 @@ impl Controller {
                 plain == actual
             })
         {
-            return Ok(json!({}));
+            return Ok(steps(vec![]));
         }
         if !is_family
             && self.focus.policy.background.is_some()
             && now.wrapping_sub(event_at) > 100_000_000
         {
-            return Ok(json!({}));
+            return Ok(steps(vec![]));
         }
-        if !is_family
-            && now.wrapping_sub(event_at) <= 100_000_000
-            && let Some(reply) = self.observe_arrival(now, binding.as_ref())?
-        {
-            return Ok(reply);
+        if !skip_arrival && !is_family && now.wrapping_sub(event_at) <= 100_000_000 {
+            let failure = RestoreFailure::Arrival {
+                actual: actual.clone(),
+                family: family.clone(),
+                event_at,
+                output,
+            };
+            if let Some(result) = self.observe_arrival(now, binding.as_ref(), failure)? {
+                return Ok(steps(result));
+            }
         }
         if let Some(b) = &binding
             && self
@@ -725,39 +907,14 @@ impl Controller {
                 .as_ref()
                 .is_some_and(|e| Binding::of(e) == *b)
         {
-            let e = self.focus.pending_effect.clone().expect("pending");
-            self.clear_background();
-            if is_family {
-                self.policy_command(Command::FocusLogical {
-                    effect_id: e.effect_id,
-                    window: e.window,
-                    identity: e.identity,
-                    generation: e.generation,
-                })?;
-            } else {
-                self.focus.policy.confirmed_process = Some(Process::from(&e.identity));
-                self.policy_command(Command::FocusResult {
-                    effect_id: e.effect_id,
-                    window: e.window,
-                    identity: e.identity,
-                    generation: e.generation,
-                    success: true,
-                })?;
-            }
-            return Ok(json!({"advance":true,"changed":true}));
+            return Ok(steps(vec![ObservationStep::Answer {
+                effect: json!(self.focus.pending_effect),
+                logical: is_family,
+                captured_epoch: true,
+            }]));
         }
-        if is_family
-            && self
-                .focus
-                .policy
-                .family_observation
-                .as_ref()
-                .is_some_and(|(b, a)| Some(b) == binding.as_ref() && *a == actual)
-            && self.focus.logical == binding.as_ref().map(|b| b.window)
-            && self.focus.pending_effect.is_none()
-        {
-            return Ok(json!({}));
-        }
+        // Old snapshot.focus.logical was absent: family dedup never fired.
+        // Do not silently enable it using the internal logical marker.
         if !is_family
             && binding.as_ref().is_some_and(|b| {
                 self.focus
@@ -767,15 +924,15 @@ impl Controller {
             })
         {
             self.focus.policy.confirmed_process = Some(Process::from(&actual));
-            return Ok(json!({}));
+            return Ok(steps(vec![]));
         }
         if binding.is_none()
             && self.focus.observed_native.is_none()
             && self.focus.pending_effect.is_none()
         {
-            return Ok(json!({}));
+            return Ok(steps(vec![]));
         }
-        let mut cancel_work = false;
+        let mut prefix = vec![];
         if self.focus.policy.filter
             && let Some(b) = &binding
         {
@@ -787,13 +944,13 @@ impl Controller {
                 && (self.scene.focused() == Some(b.window)
                     || (first && self.scene.focused().is_none()))
             {
-                self.policy_command(Command::ObserveFocus {
-                    window: b.window,
-                    identity: b.identity.clone(),
-                    generation: b.generation,
-                })?;
                 self.focus.policy.confirmed_process = Some(Process::from(&b.identity));
-                return Ok(json!({"advance":true,"changed":true}));
+                return Ok(steps(vec![
+                    ObservationStep::CancelClick,
+                    advance(),
+                    send(binding_command("observe_focus", b)),
+                    ObservationStep::Changed,
+                ]));
             }
             let (solicited, cancel) = if self.scene.focused() == Some(b.window) {
                 (true, false)
@@ -810,91 +967,52 @@ impl Controller {
                     },
                 )?
             };
-            cancel_work = cancel;
+            prefix = cancellation(cancel);
             if !solicited {
+                let focus_was_set =
+                    self.focus.observed_native.is_some() || self.focus.pending_effect.is_some();
                 if let Some(target) = self
                     .confirmed_live_binding()
                     .filter(|t| t.window != b.window)
-                    && let Some(reply) = self.start_correction(
+                    && let Some(result) = self.plan_correction(
                         now,
                         target,
                         actual.pid,
                         (!is_family).then_some(actual.clone()),
                         event_at,
                         true,
+                        RestoreFailure::Reject { focus_was_set },
                     )?
                 {
-                    return Ok(reply);
+                    prefix.extend(result);
+                    return Ok(steps(prefix));
                 }
                 self.focus.policy.confirmed_process = None;
-                let changed =
-                    self.focus.observed_native.is_some() || self.focus.pending_effect.is_some();
-                if changed {
-                    self.policy_command(Command::FocusLost {})?;
-                }
-                return Ok(json!({"advance":true,"changed":changed}));
+                prefix.extend(reject_observation(focus_was_set));
+                return Ok(steps(prefix));
             }
         }
-        let mut family_record = None;
+        prefix.extend([ObservationStep::CancelClick, advance()]);
         if let Some(b) = binding {
             self.focus.policy.confirmed_process = Some(Process::from(&b.identity));
-            let command = Command::Activate {
-                window: b.window,
-                output,
-                cause: if is_family {
-                    ActivationCause::NativeFamily
-                } else {
-                    ActivationCause::Native
-                },
-                identity: Some(b.identity.clone()),
-                generation: Some(b.generation),
-            };
-            match self.policy_command(command) {
-                Ok(reply) => {
-                    if reply["effect"].is_object()
-                        && let Some(e) = self.focus.pending_effect.clone()
-                    {
-                        self.clear_background();
-                        if is_family {
-                            self.policy_command(Command::FocusLogical {
-                                effect_id: e.effect_id,
-                                window: e.window,
-                                identity: e.identity,
-                                generation: e.generation,
-                            })?;
-                        } else {
-                            self.policy_command(Command::FocusResult {
-                                effect_id: e.effect_id,
-                                window: e.window,
-                                identity: e.identity,
-                                generation: e.generation,
-                                success: true,
-                            })?;
-                        }
-                    }
-                    if is_family {
-                        family_record = Some((b, actual));
-                    }
-                }
-                Err(_) if !is_family => {
-                    let _ = self.policy_command(Command::ObserveFocus {
-                        window: b.window,
-                        identity: b.identity,
-                        generation: b.generation,
-                    });
-                }
-                Err(_) => {}
-            }
+            let mut command = binding_command("activate", &b);
+            command["cause"] = json!(if is_family { "native_family" } else { "native" });
+            command["output"] = json!(output);
+            prefix.push(ObservationStep::Send {
+                command,
+                receipt: Some(ObservationReceipt::Activated {
+                    binding: b,
+                    family: is_family,
+                }),
+            });
         } else {
             if self.focus.policy.confirmed_process.as_ref() != Some(&Process::from(&actual)) {
                 self.focus.policy.confirmed_process = None;
             }
-            self.policy_command(Command::FocusLost {})?;
+            prefix.push(send(json!({"op":"focus_lost"})));
         }
-        if let Some(record) = family_record {
-            self.focus.policy.family_observation = Some(record);
-        }
-        Ok(json!({"advance":true,"changed":true,"cancel_work":cancel_work}))
+        prefix.push(ObservationStep::Changed);
+        Ok(steps(prefix))
     }
 }
 

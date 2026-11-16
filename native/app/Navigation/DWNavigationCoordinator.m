@@ -64,8 +64,12 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 }
 - (void)perform:(NSDictionary *)reply {
     if(!self.enabled||self.closed||!reply)return;
-    NSDictionary *effect=[focusEffect(reply) copy];
     NSDictionary *decision=[self policy:@{@"kind":@"reply",@"reply":reply,@"protect":@(self.arrivalProtection&&self.arrivalProtection())}];
+    [self perform:reply decision:decision];
+}
+- (void)perform:(NSDictionary *)reply decision:(NSDictionary *)decision {
+    if(!self.enabled||self.closed||!reply)return;
+    NSDictionary *effect=[focusEffect(reply) copy];
     if(effect||reply[@"effect"])[self cancelNativeClick];
     if(!effect){
         // Focus moved to something without a source, or was cleared: the request in flight is no longer the controller's.
@@ -112,7 +116,7 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
 - (void)cancelBackgroundArrival {
     if(self.closed)return;
     NSDictionary *decision=[self policy:@{@"kind":@"cancel_background"}];
-    if([decision[@"cancel_work"]boolValue]){[self cancelNativeClick];[self advance];self.held=0;}
+    [self consumePolicy:decision];
 }
 - (NSDictionary *)policy:(NSDictionary *)fact {
     return self.command(@{@"op":@"focus_policy",@"timestamp_ns":@(self.clock()),@"filter":@(self.filterUnsolicitedActivations),@"focus_allowed":@(self.focusAllowed),@"fact":fact});
@@ -158,10 +162,35 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
     [self application:pid birth:birth bundle:bundle activated:YES at:at];
 }
 - (void)consumePolicy:(NSDictionary *)decision {
-    if([decision[@"cancel_work"]boolValue]){self.held=0;[self cancelNativeClick];[self advance];}
+    if([decision[@"cancel_work"]boolValue]){[self cancelNativeClick];[self advance];self.held=0;self.command(@{@"op":@"cancel_focus_cycle"});}
     if([decision[@"advance"]boolValue]){[self cancelNativeClick];[self advance];}
     if([decision[@"reply"]isKindOfClass:NSDictionary.class])[self perform:decision[@"reply"]];
     if([decision[@"changed"]boolValue]&&self.changed)self.changed();
+    [self observationSteps:decision[@"steps"] capturedEpoch:self.epoch receivedReply:nil];
+}
+// Six fixed driver actions. Branch selection and ordering are entirely policy
+// decisions. A send's receipt is synchronous, on this same main-queue turn.
+- (void)observationSteps:(NSArray *)steps capturedEpoch:(uint64_t)epoch receivedReply:(NSDictionary *)received {
+    for(NSDictionary *step in steps){
+        NSString *kind=step[@"step"];
+        if([kind isEqual:@"cancel_click"])[self cancelNativeClick];
+        else if([kind isEqual:@"advance"]){[self advance];if([step[@"release_hold"]boolValue])self.held=0;}
+        else if([kind isEqual:@"send"]){
+            NSDictionary *reply=self.command(step[@"command"]);
+            if([step[@"receipt"]isKindOfClass:NSDictionary.class]){
+                NSDictionary *decision=[self policy:@{@"kind":@"observation_receipt",@"context":step[@"receipt"],@"reply":reply?:NSNull.null}];
+                [self observationSteps:decision[@"steps"] capturedEpoch:epoch receivedReply:reply];
+            }
+        }else if([kind isEqual:@"answer"]){
+            uint64_t answerEpoch=[step[@"captured_epoch"]boolValue]?epoch:self.epoch;
+            if([step[@"logical"]boolValue])[self answer:step[@"effect"] epoch:answerEpoch with:@{@"op":@"focus_logical"}];
+            else [self complete:step[@"effect"] epoch:answerEpoch success:YES];
+        }else if([kind isEqual:@"perform_reply"]){
+            // The receipt installed this exact immutable correction context.
+            // Do not call policy before the advance inside perform:decision:.
+            [self perform:received decision:step[@"correction"]];
+        }else if([kind isEqual:@"changed"]){if(self.changed)self.changed();}
+    }
 }
 - (void)hold:(NSUInteger)modifiers { self.held=modifiers; }
 - (BOOL)poll:(NSUInteger)down {
@@ -240,7 +269,8 @@ static NSDictionary *focusEffect(NSDictionary *reply) {
             if([self observeNativeClick:match snapshot:snapshot])return;
         }
         NSDictionary *decision=[self policy:@{@"kind":@"observation",@"actual":actual,@"family":family?:NSNull.null,@"event_at":@(observedAt),@"output":(self.output?self.output():nil)?:NSNull.null}];
-        [self consumePolicy:decision];
+        if(!decision)decision=@{@"steps":@[@{@"step":@"cancel_click"},@{@"step":@"advance",@"release_hold":@NO},@{@"step":@"send",@"command":@{@"op":@"focus_lost"},@"receipt":NSNull.null},@{@"step":@"changed"}]};
+        [self observationSteps:decision[@"steps"] capturedEpoch:epoch receivedReply:nil];
     });});
 }
 - (BOOL)frame {

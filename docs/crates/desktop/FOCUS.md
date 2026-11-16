@@ -15,7 +15,17 @@ logical window, launch intent, application launch/activation, window arrival,
 native observation, returned focus work and its answer. Delayed application and
 observation facts retain their event timestamp as well as the supplied read
 timestamp. Replies contain decisions (`unsolicited`, `cancel_work`, `observe`,
-`advance`, `changed`) and, when required, the ordinary effect/navigation reply.
+`advance`, `changed`) or an ordered list of six driver steps: cancel click,
+advance epoch, send command, answer/complete an effect (captured or current
+epoch), perform the received reply, and changed. Ordinary observation facts
+change policy-private state only; focus, MRU and camera change in the returned
+command after the driver epoch was advanced. Its synchronous receipt selects
+effect completion or the unchanged `observe_focus` fallback. A restore instead
+sends `focus` before the advance; its receipt installs correction facts and the
+adapter passes the same received reply object into `perform:` without another
+policy call before its advance. Normally at most one receipt is used. Only the
+old background-arrival failure followed by an ordinary restore can use two,
+both on the same main-queue turn.
 Bindings always include the exact identity and generation. Unknown bindings
 do not authorize camera motion. Parse/refused-command failures retain the
 existing command error path; a refused arrival fact means unauthorized, exactly
@@ -31,7 +41,8 @@ the returned `unsolicited` unchanged. It creates no pending-decision table.
 An attach failure does not undo consumption. `perform:` installs protection
 from the complete arrival reply before dispatching its focus work. Follow-up
 for the typed-controller seam: **make arrival one typed call**, preserving this
-non-transactional failure order.
+non-transactional failure order. Also fold observation fact, command and receipt
+into one call once that seam can cancel the driver's epoch from inside it.
 
 The rule relocation (old coordinator methods below are in
 `native/app/Navigation/DWNavigationCoordinator.m`):
@@ -46,9 +57,11 @@ The rule relocation (old coordinator methods below are in
 | Process activation 4 s, attach 15 s; delayed facts check event or read time; PID reuse rejected | `authorizeProcess:` | `classify_process` |
 | Intent consumed before attach; survives attach failure; driver epoch invalidated first | `Desktop+Windows.m` plus `consumeAttachIntentForPID:` | `WindowArrived`, `classify_process`; coordinator `attach:` relays cancellation then attaches |
 | Consumed process attach authorization capped at now + 1.5 s; bundle consumed on authorization | `authorizeProcess:` | `classify_process` |
-| Restore at most twice per PID per 5 s, age strictly greater than 5 s expires; failure stops retries | `startCorrectionTo:`, `complete:`, `pruneIntentsAt:` | `start_correction`, `Answer`, `prune` |
-| Background cohorts, exact bindings, 1.5 s lifetime, input cancellation, family deduplication | native protection/observe methods | `preserve_arrival`, `cancel_background`, `observe_owner_focus` |
+| Restore at most twice per PID per 5 s, age strictly greater than 5 s expires; failure stops retries | `startCorrectionTo:`, `complete:`, `pruneIntentsAt:` | `plan_correction`, `observation_receipt`, `Answer`, `prune` |
+| Background cohorts, exact bindings, 1.5 s lifetime, input cancellation, family observations | native protection/observe methods | `preserve_arrival`, `cancel_background`, `observe_owner_focus` |
 | Sibling placement else immediately outside viewport; stack below focused; suppress focus/navigation | `lifecycle.rs` unsolicited placement and settlement | `unsolicited_spawn`, `settle_arrival` |
+| Observation epoch precedes focus/camera command; pending effects answered against captured epoch; nil fact reproduces nil-snapshot fall-through (cancel click, advance, `focus_lost`, changed) | coordinator `observe` | `observe_owner_focus`, `observation_receipt`; native six-step dispatch |
+| Restore sends `focus` before epoch advance; only widened window is one in-process receipt call between focus and `perform:`'s advance (formerly assignments); no-effect fall-through retains consumed budget | coordinator restore/protection helpers | `plan_correction`, `observation_receipt`, `perform_reply` |
 | Normal/rule placement, focus-on-open, fullscreen/utility exceptions | `lifecycle.rs` spawn/arrival settlement | `spawn`, `arrival`, `settle_arrival` (adoption search stays in lifecycle) |
 | Activation no-pan uncertainty, clipped reveal, cycle/click rules and configured zoom | `window_actions.rs::activate` | `activate`, `activation_zoom` |
 
@@ -227,3 +240,8 @@ identities, results and observations through the actual exported C ABI and
 establish only these controller contracts: they do not show that an effect
 focuses a window, that a native focus change is observed, or that a modifier
 release reaches `end_focus_cycle`.
+
+Known behaviour deliberately retained: the former native family-observation
+deduplication checked `snapshot.focus.logical`, which the snapshot does not
+export. Repeated child observations are therefore not newly deduplicated here;
+using the controller's internal logical marker would be a separate bug fix.
