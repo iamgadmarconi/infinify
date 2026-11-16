@@ -47,6 +47,7 @@ typedef NS_ENUM(NSInteger,DWPressStage) { DWPressSession, DWPressAnnotated };
 - (NSDictionary *)releaseTitleAt:(CGPoint)point view:(DesktopView *)view;
 @property (readonly) DesktopView *gestureView;
 - (void)forgetNativeMouseOwner;
+- (void)displayTopologyChanged;
 @property (readonly) NSDictionary *decorationPress;
 @property (readonly) NSNumber *buttonHover;
 - (void)refreshNativeButtons:(LiveSource *)source;

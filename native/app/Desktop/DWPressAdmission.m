@@ -109,8 +109,19 @@ static NSString *decorationRegionVerdict(NSDictionary *title,CGPoint local){
     return [NSString stringWithFormat:@"outside title=%g,%g,%g,%g",region.origin.x,region.origin.y,region.size.width,region.size.height];
 }
 
+// The published NSDictionary is an immutable view, not a copy: the native watch
+// compares record identity. Only admission creates and mutates the backing record.
+static NSMutableDictionary *mutableMouseOwnership(LiveSource *source) {
+    return (NSMutableDictionary *)source.nativeMouseOwnership;
+}
 static uint64_t DWClickRevertToken;
 @implementation DWPressAdmission
+- (void)displayTopologyChanged {
+    for(LiveSource *source in self.desktop.sources.allValues){
+        NSMutableDictionary *held=mutableMouseOwnership(source);
+        if(held){held[@"topology_changed"]=@YES;[held removeObjectForKey:@"stable_since"];}
+    }
+}
 - (void)forgetNativeMouseOwner {
     self.nativeMouseOwner=nil;
     for(LiveSource *source in self.desktop.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.desktop.observationEpoch;}
@@ -728,7 +739,7 @@ static uint64_t DWClickRevertToken;
 - (void)nativeMouseOwnershipChanged:(CGEventRef)event buttons:(NSIndexSet *)buttons {
     LiveSource *source=self.nativeMouseOwner;CFTimeInterval now=[self.nativeLookup mediaTime];
     if(source.nativeMouseOwnership){
-        NSMutableDictionary *held=source.nativeMouseOwnership;
+        NSMutableDictionary *held=mutableMouseOwnership(source);
         if(!event){held[@"click_possible"]=@NO;[self.desktop.navigation cancelNativeClick];}
         else {
             CGEventType type=CGEventGetType(event);
@@ -778,7 +789,7 @@ static uint64_t DWClickRevertToken;
     for(NSDictionary *row in snapshot[@"placements"])if([row[@"window"]isEqual:source.logical]&&[row[@"output"]isEqual:output]){planned=DWTyped(row[@"screen_rect"],NSDictionary.class);break;}
     NSDictionary *binding=DWTyped(record[@"source"],NSDictionary.class);double zoom=[view[@"zoom"]doubleValue];
     if(source.nativeMouseOwnership){
-        NSMutableDictionary *held=source.nativeMouseOwnership;held[@"buttons"]=buttons;[held removeObjectForKey:@"released"];self.nativeMouseOwner=source;
+        NSMutableDictionary *held=mutableMouseOwnership(source);held[@"buttons"]=buttons;[held removeObjectForKey:@"released"];self.nativeMouseOwner=source;
         BOOL root=wid==source.router.wid&&boundIdentity(source.identity,binding[@"identity"])&&[binding[@"generation"]isEqual:held[@"generation"]]
             &&[view[@"camera"]isEqual:held[@"camera"]]&&[view[@"zoom"]isEqual:held[@"zoom"]]&&[view[@"screen_bounds"]isEqual:held[@"screen_bounds"]]
             &&CGRectContainsPoint(DWRectFromJSON(view[@"screen_bounds"]),CGEventGetLocation(event));
@@ -797,10 +808,10 @@ static uint64_t DWClickRevertToken;
         @"initial_native":DWRectJSON(initialNative),@"initial_screen":DWRectJSON(initialScreen)}mutableCopy];
     // Where the controller draws the window. The window list's bounds are not always the drawn rectangle (a Finder window drawn at half
     // size from its own top-left corner read back as its native frame in the guest, so no takeover ever saw a transformed window).
-    if(planned)source.nativeMouseOwnership[@"planned_screen"]=planned;
+    if(planned)mutableMouseOwnership(source)[@"planned_screen"]=planned;
     NSDictionary *clickBinding=@{@"window":source.logical,@"identity":binding[@"identity"],@"generation":binding[@"generation"]};
     BOOL root=wid==source.router.wid&&CGRectContainsPoint(DWRectFromJSON(view[@"screen_bounds"]),CGEventGetLocation(event));
-    source.nativeMouseOwnership[@"click_binding"]=clickBinding;source.nativeMouseOwnership[@"click_start"]=pointJSON(CGEventGetLocation(event));source.nativeMouseOwnership[@"click_possible"]=@(root);source.nativeMouseOwnership[@"root"]=@(root);
+    mutableMouseOwnership(source)[@"click_binding"]=clickBinding;mutableMouseOwnership(source)[@"click_start"]=pointJSON(CGEventGetLocation(event));mutableMouseOwnership(source)[@"click_possible"]=@(root);mutableMouseOwnership(source)[@"root"]=@(root);
     if(root)[self.desktop.navigation beginNativeClick:clickBinding output:output];
     source.observationToken=++self.desktop.observationEpoch;self.nativeMouseOwner=source;[self watchNativePress:source];
     [self.desktop cancelNativeHoverForWindow:source.logical];self.desktop.nativeViewSnapshot=nil;
@@ -822,7 +833,7 @@ static uint64_t DWClickRevertToken;
 // after the down, for the rest of the press), so it is not worth waiting for pointer motion. The press stays the canvas's own as an
 // unmoved title press: a motion past the click slop moves the window by the pointer, a release is the title click (focus) and moves nothing.
 - (BOOL)takeOverNativeDrag:(LiveSource *)source at:(CGPoint)point early:(BOOL)early {
-    NSMutableDictionary *held=source.nativeMouseOwnership;
+    NSMutableDictionary *held=mutableMouseOwnership(source);
     // INFINIFY_DEBUG: why a drag packet of a native press was not taken over, once per reason and press.
     BOOL (^no)(const char *)=^BOOL(const char *reason){
         if(DWDebugTrace()&&held&&![held[@"takeover_refused"]isEqual:@(reason)]){held[@"takeover_refused"]=@(reason);fprintf(stderr,"debug: native takeover declined window=#%s reason=%s\n",source.logical.description.UTF8String,reason);}
@@ -875,10 +886,10 @@ static uint64_t DWClickRevertToken;
 // calls performWindowDragWithEvent: at the down and WindowServer moves the native frame then. Nothing on the event tap sees that, so the
 // press is watched at 4 ms while the button is down, and takes over as soon as the origin moves with the pointer still at rest.
 - (void)watchNativePress:(LiveSource *)source {
-    NSMutableDictionary *held=source.nativeMouseOwnership;if(!held||[(NSTimer *)held[@"watch"]isValid])return;
+    NSMutableDictionary *held=mutableMouseOwnership(source);if(!held||[(NSTimer *)held[@"watch"]isValid])return;
     __weak Desktop *weak=self.desktop;__weak LiveSource *weakSource=source;
     NSTimer *timer=[NSTimer timerWithTimeInterval:.004 repeats:YES block:^(NSTimer *tick){
-        Desktop *desktop=weak;LiveSource *owner=weakSource;NSMutableDictionary *current=owner.nativeMouseOwnership;
+        Desktop *desktop=weak;LiveSource *owner=weakSource;NSMutableDictionary *current=mutableMouseOwnership(owner);
         if(!desktop||!owner||current!=held||current[@"watch"]!=tick||[current[@"taken"]boolValue]||[current[@"early_tried"]boolValue]||desktop.pressAdmission.nativeMouseOwner!=owner
             ||![self.nativeLookup physicalButton:kCGMouseButtonLeft]){[tick invalidate];return;}
         CGEventRef here=CGEventCreate(NULL);CGPoint point=here?CGEventGetLocation(here):CGPointZero;if(here)CFRelease(here);
@@ -902,7 +913,7 @@ static uint64_t DWClickRevertToken;
     if(self.desktop.cleaning||self.desktop.sessionInactive||!self.desktop.native||self.desktop.native.ended)return;
     CFTimeInterval now=[self.nativeLookup mediaTime];
     for(LiveSource *source in self.desktop.sources.allValues.copy){
-        NSMutableDictionary *held=source.nativeMouseOwnership;if(!held)continue;
+        NSMutableDictionary *held=mutableMouseOwnership(source);if(!held)continue;
         if([held[@"session"]unsignedLongLongValue]!=self.desktop.nativeSessionEpoch){
             [(NSTimer *)held[@"watch"]invalidate];source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.desktop.observationEpoch;
             if(self.nativeMouseOwner==source)self.nativeMouseOwner=nil;continue;
@@ -949,7 +960,7 @@ static uint64_t DWClickRevertToken;
             __weak Desktop *weak=self.desktop;__weak LiveSource *weakSource=source;CGRect from=native;NSString *logical=source.logical.description;
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{@autoreleasepool{
                 DWResizeResult result=[self.nativeLookup reposition:target from:from to:first.origin deadline:[self.nativeLookup monotonicSeconds]+.4];
-                dispatch_async(dispatch_get_main_queue(),^{Desktop *desktop=weak;LiveSource *owner=weakSource;NSMutableDictionary *current=owner.nativeMouseOwnership;
+                dispatch_async(dispatch_get_main_queue(),^{Desktop *desktop=weak;LiveSource *owner=weakSource;NSMutableDictionary *current=mutableMouseOwnership(owner);
                     if(DWDebugTrace())fprintf(stderr,"debug: native click move revert window=#%s outcome=%s ax_error=%d from=%g,%g to=%g,%g now=%g,%g\n",logical.UTF8String,dw_resize_outcome_name(result.outcome),result.ax_error,from.origin.x,from.origin.y,first.origin.x,first.origin.y,result.actual_cg.origin.x,result.actual_cg.origin.y);
                     if(!desktop||!current||![current[@"revert_token"]isEqual:token])return;
                     BOOL back=result.outcome==DWResizeApplied&&result.observed&&fabs(result.actual_cg.origin.x-first.origin.x)<=1&&fabs(result.actual_cg.origin.y-first.origin.y)<=1;
