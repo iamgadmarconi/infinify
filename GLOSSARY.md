@@ -17,3 +17,9 @@ _Avoid_: Snap point, snap target, candidate (a candidate is the one stop current
 **Break cooldown**:
 The interval after a moving edge breaks away from a stop during which that same stop cannot hold it again; it ends once the edge has left the stop's reach and the stop is no longer the nearest one.
 _Avoid_: Hysteresis, debounce
+
+### Native windows
+
+**Size transition**:
+One change of a window's native size together with the still picture that stands in for the window while it changes, from the request until the window's final placement on screen is confirmed.
+_Avoid_: Fill handoff, resize presentation, snapshot bridge, resize animation
