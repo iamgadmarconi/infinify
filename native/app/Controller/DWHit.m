@@ -19,4 +19,7 @@
 - (NSNumber *)pick { return DWNumber(self.rawDictionary[@"pick"]); }
 - (NSNumber *)nativeMember { return DWNumber(self.rawDictionary[@"native_member"]); }
 - (DWIdentity *)rootIdentity { return [self cachedProjection:@"rootIdentity" make:^id{return DWProject(DWIdentity.class,self.rawDictionary[@"root_identity"]);}]; }
+- (DWHit *)hitWithPick:(BOOL)pick {
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"pick"]=@(pick);return DWProject(self.class,d);
+}
 @end

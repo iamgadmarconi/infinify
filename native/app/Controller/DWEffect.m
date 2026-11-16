@@ -14,6 +14,7 @@
     if([op isEqual:@"exec"])return DWEffectExec;if([op isEqual:@"launch"])return DWEffectLaunch;
     if([op isEqual:@"close_window"])return DWEffectCloseWindow;
     if([op isEqual:@"set_minimized"])return DWEffectSetMinimized;
+    if([op isEqual:@"subscribe"])return DWEffectSubscribe;
     if([op isEqual:@"screenshot"])return DWEffectScreenshot;return DWEffectUnknown;
 }
 @end

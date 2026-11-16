@@ -108,5 +108,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSString *failure;
 @property(nonatomic,readonly,nullable) NSString *note;
 @property(nonatomic,readonly,nullable) DWGestureAction *fired;
+- (DWControllerReply *)replyWithNullEffectAndForward:(nullable NSNumber *)forward;
+@property(nonatomic,readonly) BOOL hasReplyOKValue;
+@property(nonatomic,readonly,nullable) NSString *visibility;
+@property(nonatomic,readonly,nullable) NSNumber *changed;
+- (DWControllerReply *)replyForLifecycleFollow;
++ (DWControllerReply *)lifecycleFollowReply:(nullable DWControllerReply *)reply;
 @end
 NS_ASSUME_NONNULL_END

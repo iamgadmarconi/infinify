@@ -23,5 +23,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *pick;
 @property(nonatomic,readonly,nullable) NSNumber *nativeMember;
 @property(nonatomic,readonly,nullable) DWIdentity *rootIdentity;
+- (DWHit *)hitWithPick:(BOOL)pick;
 @end
 NS_ASSUME_NONNULL_END

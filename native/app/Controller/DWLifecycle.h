@@ -8,5 +8,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSArray<NSNumber *> *standins;
 @property(nonatomic,readonly,nullable) NSNumber *settled;
 @property(nonatomic,readonly,nullable) NSArray<NSNumber *> *held;
+- (BOOL)hasMarkForWindow:(NSNumber *)window;
 @end
 NS_ASSUME_NONNULL_END

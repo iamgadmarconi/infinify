@@ -83,4 +83,16 @@
 - (NSString *)failure { return DWString(self.rawDictionary[@"failure"]); }
 - (NSString *)note { return DWString(self.rawDictionary[@"note"]); }
 - (DWGestureAction *)fired { return [self cachedProjection:@"fired" make:^id{return DWProject(DWGestureAction.class,self.rawDictionary[@"fired"]);}]; }
+- (DWControllerReply *)replyWithNullEffectAndForward:(NSNumber *)forward {
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"effect"]=NSNull.null;if(forward)d[@"forward"]=forward;return DWProject(self.class,d);
+}
+- (BOOL)hasReplyOKValue { return DWDictionary(self.rawDictionary[@"reply"])[@"Ok"]!=nil; }
+- (NSString *)visibility { return DWString(self.rawDictionary[@"visibility"]); }
+- (NSNumber *)changed { return DWNumber(self.rawDictionary[@"changed"]); }
+- (DWControllerReply *)replyForLifecycleFollow { return [self.class lifecycleFollowReply:self]; }
++ (DWControllerReply *)lifecycleFollowReply:(DWControllerReply *)reply {
+    NSMutableDictionary *d=[reply.rawDictionary mutableCopy]?:[NSMutableDictionary dictionary];
+    if(!DWDictionary(d[@"effect"]))[d removeObjectForKey:@"effect"];
+    [d removeObjectForKey:@"effects"];return DWProject(self,d);
+}
 @end
