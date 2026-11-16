@@ -69,14 +69,22 @@ impl AxisState {
             if retreat >= resistance || overshoot >= resistance {
                 self.cooldown = Some(snap.snapped);
                 self.snap = None;
+                if let Some(snapped) = candidate
+                    && snapped != snap.snapped
+                {
+                    self.snap = Some(AxisSnap {
+                        snapped,
+                        engaged: natural,
+                    });
+                    return snapped;
+                }
                 return natural;
             }
             return snap.snapped;
         }
-        if self
-            .cooldown
-            .is_some_and(|position| (natural - position).abs() > threshold)
-        {
+        if self.cooldown.is_some_and(|position| {
+            (natural - position).abs() > threshold && candidate != Some(position)
+        }) {
             self.cooldown = None;
         }
         if self.cooldown.is_none()

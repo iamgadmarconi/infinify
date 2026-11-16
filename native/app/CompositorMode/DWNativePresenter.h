@@ -140,6 +140,7 @@
 // Capture may occur while initially withheld. Hide preserves the acknowledged
 // matrix first; only its alpha-zero ACK permits neutralization. Both neutral
 // and subsequent omission ACKs must settle before the caller mutates the app.
+- (BOOL)hasAttachedChildrenForWindow:(NSDictionary *)identity;
 - (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity;
 - (BOOL)hideTransition:(DWNativeHiddenRoot *)transition;
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition;

@@ -48,6 +48,11 @@
     if(!NSThread.isMainThread||![_withheld[identity[@"wid"]]isEqual:identity])return;
     [_rebases removeObjectForKey:identity[@"wid"]];[_rebased removeObject:identity[@"wid"]];[self requireFreshPlacementAcknowledgement];
 }
+- (BOOL)hasAttachedChildrenForWindow:(NSDictionary *)identity {
+    if(!NSThread.isMainThread||self.ended)return NO;
+    NSNumber *wid=identity[@"wid"];DWNativeWindow *root=wid?_windows[wid]:nil;
+    return root&&root->familyKnown&&root->root==wid.unsignedIntValue&&[DWNativePlacementIdentity(root->identity)isEqual:identity]&&_families[wid].count>1;
+}
 - (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity {
     if(!NSThread.isMainThread||self.ended||!(_info.caps&DW2_CAP_ALPHA))return nil;
     NSNumber *wid=identity[@"wid"];DWNativeWindow *root=_windows[wid];

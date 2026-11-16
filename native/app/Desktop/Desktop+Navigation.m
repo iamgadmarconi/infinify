@@ -47,13 +47,26 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         [self.nativeResizePresentation prepareEffect:effect ready:ready];return;
     }
     if(![DWNativeResizePresentation requiresBridgeForTransaction:transaction]){ready(YES);return;}
+    if([self.nativeResizeLiveTransaction isEqual:effect[@"transaction"]]){ready(YES);return;}
     if(self.nativeFillHandoff||self.cleaning||self.sessionInactive||self.native.ended){ready(NO);return;}
     NSNumber *window=effect[@"window"],*output=[self.nativeViews desiredOwnerForWindow:window];
     NSDictionary *view=nil;for(NSDictionary *row in snapshot[@"outputs"])if([row[@"id"]isEqual:output]){view=row;break;}
     if(!view){ready(NO);return;}
     DWNativePresenter *presenter=self.native;uint64_t session=self.nativeSessionEpoch;
+    NSDictionary *effectIdentity=DWTyped(effect[@"identity"],NSDictionary.class);
+    NSMutableDictionary *nativeIdentity=[NSMutableDictionary dictionary];
+    for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"])if(effectIdentity[key])nativeIdentity[key]=effectIdentity[key];
+    // Attached families (e.g. Chrome with Find bar or status bubble) and runs
+    // without Screen Recording keep the live resize path instead of stalling.
+    if(!CGPreflightScreenCaptureAccess()||(nativeIdentity.count==4&&[presenter hasAttachedChildrenForWindow:nativeIdentity])){
+        self.nativeResizeLiveTransaction=effect[@"transaction"];ready(YES);return;
+    }
+    self.nativeResizeLiveTransaction=nil;
     DWNativeResizePresentation *owner=[[DWNativeResizePresentation alloc]initWithPresenter:(id)presenter capture:DWNativeResizePresentation.snapshotCapture];
-    self.nativeResizePresentation=owner;__weak Desktop *weak=self;__weak DWNativeResizePresentation *weakOwner=owner;
+    self.nativeResizePresentation=owner;__weak Desktop *weak=self;__weak DWNativeResizePresentation *weakOwner=owner;__weak DWNativePresenter *weakPresenter=presenter;
+    presenter.transitionFrameAcknowledged=^{Desktop *d=weak;DWNativeResizePresentation *p=weakOwner;DWNativePresenter *pr=weakPresenter;
+        if(!d||d.cleaning||d.sessionInactive||d.native!=pr||d.nativeFillHandoff||d.nativeResizePresentation!=p||!p.active)return;
+        [p update];if(!d.cleaning){[d render];[pr submit];}};
     owner.state=^DWNativeResizePresentationState{
         Desktop *d=weak;DWNativeResizePresentation *p=weakOwner;NSDictionary *e=p.effect;
         if(!d||!e)return (DWNativeResizePresentationState){0};
@@ -79,8 +92,8 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         return (DWNativeResizePresentationState){.valid=valid,.finished=terminal,.restored=restored,.recoverable=recoverable,.drained=terminal&&![d.resize hasNativeWorkForTransaction:e[@"transaction"]],
             .screenRect=DWRectFromJSON(placement[@"screen_rect"]),.alpha=placement[@"alpha"]?[placement[@"alpha"]doubleValue]:1};
     };
-    owner.retired=^{[weak.resize retryAdmission];};
-    owner.render=^{Desktop *d=weak;if(d&&!d.cleaning)[d render];};
+    owner.retired=^{Desktop *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.nativeFillHandoff&&d.native==pr)pr.transitionFrameAcknowledged=nil;[d.resize retryAdmission];};
+    owner.render=^{Desktop *d=weak;DWNativePresenter *pr=weakPresenter;if(d&&!d.cleaning){[d render];if(d.native==pr)[pr submit];}};
     owner.failed=^(NSString *reason){Desktop *d=weak;if(!d)return;
         NSDictionary *t=DWTyped([d call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
         if([t[@"transaction"]isEqual:weakOwner.effect[@"transaction"]])[d.resize cancel];
@@ -100,7 +113,9 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         // A worker may start after a newer handoff replaced its prepared read.
         // Only the controller's still-pending effect can enter native code.
         NSDictionary *transaction=DWTyped([d call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
-        if([DWNativeResizePresentation requiresBridgeForTransaction:transaction]&&![d.nativeResizePresentation allowsEffect:effect])return NO;
+        if([DWNativeResizePresentation requiresBridgeForTransaction:transaction]
+            &&![d.nativeResizeLiveTransaction isEqual:effect[@"transaction"]]
+            &&![d.nativeResizePresentation allowsEffect:effect])return NO;
         return [transaction[@"pending_effect"]isEqual:effect];
     };
     driver.fillReady=^DWNativeFillReadiness(NSDictionary *effect){

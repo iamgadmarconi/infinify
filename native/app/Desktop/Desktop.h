@@ -44,6 +44,7 @@
 @property DWCanvasCursor *canvasCursor;
 @property DWResizeCoordinator *resize;
 @property DWNativeResizePresentation *nativeResizePresentation;
+@property NSNumber *nativeResizeLiveTransaction;
 @property NSNumber *resizeSavedTransaction;
 // Every normal run: DriftWM's sizing actions (grow-window, shrink-window, fit-window, fit-window-snapped, fill-window, IPC
 // resize), a rule's size and fullscreen are size transactions the controller begins and continues by itself.

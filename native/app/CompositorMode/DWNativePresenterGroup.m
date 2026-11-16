@@ -53,6 +53,7 @@
 - (BOOL)rebaseWindow:(NSDictionary *)identity bounds:(CGRect)native { return !self.ended&&[self.owners[identity[@"pid"]]rebaseWindow:identity bounds:native]; }
 - (BOOL)isWindowRebased:(NSDictionary *)identity { return !self.ended&&[self.owners[identity[@"pid"]]isWindowRebased:identity]; }
 - (void)cancelRebaseWindow:(NSDictionary *)identity { [self.owners[identity[@"pid"]]cancelRebaseWindow:identity]; }
+- (BOOL)hasAttachedChildrenForWindow:(NSDictionary *)identity { return !self.ended&&[self.owners[identity[@"pid"]]hasAttachedChildrenForWindow:identity]; }
 - (DWNativeHiddenRoot *)beginTransitionForWindow:(NSDictionary *)identity { return self.ended?nil:[self.owners[identity[@"pid"]]beginTransitionForWindow:identity]; }
 - (BOOL)hideTransition:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]hideTransition:transition]; }
 - (BOOL)isTransitionHidden:(DWNativeHiddenRoot *)transition { return !self.ended&&[self.owners[transition.identity[@"pid"]]isTransitionHidden:transition]; }

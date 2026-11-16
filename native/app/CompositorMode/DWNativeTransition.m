@@ -190,7 +190,7 @@ static BOOL captureRootCurrent(NSDictionary *identity,CGRect native,CGRect scree
 }
 - (void)enumerate {
     [self tracePhase:"enumerate"];
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content,NSError *error){
         [self tracePhase:"enumeration_completed"];
         dispatch_async(dispatch_get_main_queue(),^{if(![self callerCurrent])return;
             if(error||!content){[self complete:nil failure:error.localizedDescription?:@"Native transition capture has no window list"];return;}self->_content=content;[self captureWhenReady];});

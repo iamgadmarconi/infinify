@@ -89,7 +89,7 @@ static CGRect DWResizePictureRect(CGRect rect) {
     _cancelCapture=_capture(_root,valid,^(id<DWNativeResizePicture> picture,NSString *failure){
         DWNativeResizePresentation *s=weak;if(!s||s->_epoch!=epoch||!s.active||s->_recovering){[picture cancel];return;}
         if(!valid()||!picture||![picture show]){[picture cancel];[s abort:[@"Resize cancelled: " stringByAppendingString:failure?:@"snapshot unavailable or binding changed"]];return;}
-        s->_picture=picture;[s update];
+        s->_picture=picture;[s update];if(s.render)s.render();
     });
 }
 - (void)tick:(NSUInteger)epoch {

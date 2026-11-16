@@ -414,7 +414,9 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     // is out. A transaction that takes no more motion has ended by itself (its window will not be resized, closed, or stopped answering):
     // nothing more is sent for this press, which stays swallowed until its button lifts, as upstream's grab outlives a dead client.
     if(self.gesture==4){
-        if(self.resizeTransaction){NSString *status=self.desktop.statusText;
+        if(self.resizeTransaction){
+            if(CGPointEqualToPoint(p,self.lastPoint))return;
+            NSString *status=self.desktop.statusText;
             if([self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}]){
                 // Success is consumed synchronously: resize.changed has already
                 // described the current scene and arranged its frame flush.
@@ -476,7 +478,8 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     if(self.gesture==4&&self.resizeTransaction){NSString *status=self.desktop.statusText;
         // The release may be farther than the last drag event. Keep its final
         // pointer position before draining the request, through the same grab.
-        [self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
+        // A stationary click or unmoved release must never trigger a snap proposal.
+        if(!CGPointEqualToPoint(p,self.lastPoint))[self.desktop.resize request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
         if(![self.desktop.resize request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}])self.desktop.statusText=status;}
     self.resizeTransaction=nil;if(self.heldPress)self.heldReleased=YES;else [self releasePressed];
     // Upstream resolve_click_navigate follows delivery. A click still waiting for
