@@ -22,10 +22,11 @@ the one-entry on-demand title cache live in admission, not the AX lookup.
 `LiveSource` still carries published chrome observations and their source-revision
 tokens so discovery can invalidate them. Its native-drag ownership record remains
 a published per-window fact, written/reset by admission and read by visibility,
-navigation, Fill, rendering and tracking; display-topology handling still stamps
-the existing `topology_changed`/`stable_since` facts in that record. Session reset
-keeps its existing timer lifetime: the next watch tick observes the cleared record
-and invalidates itself. This is structural, not new live proof.
+navigation, Fill, rendering and tracking through an immutable dictionary view.
+Display-topology handling asks admission to stamp the existing
+`topology_changed`/`stable_since` facts without copying or replacing that record.
+Session reset immediately invalidates its watch timer before dropping the record.
+Neither change is new live proof.
 
 ## Capture and rendering performance
 
