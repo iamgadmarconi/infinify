@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+#import "DWScene.h"
 #import <CoreGraphics/CoreGraphics.h>
 #import "DWNativeWindowServer.h"
 #import "DWNativeResize.h"
@@ -161,7 +162,7 @@
 // family; normal and parked records restore any journalled original sublevel.
 // Pin/unpin changes require a fresh whole-family ACK even at unchanged geometry.
 // A pin request without the negotiated capability ends/restores that session.
-- (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities;
+- (void)describe:(DWScene *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities;
 // Hands the described frame to the library's writer thread if it differs from the
 // last one handed over, or a window's own frame changed since. Never waits.
 - (void)submit;

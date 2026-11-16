@@ -65,7 +65,7 @@
     [super setTransitionFrameAcknowledged:callback];
     for(DWNativePresenter *session in self.sessions)session.transitionFrameAcknowledged=callback;
 }
-- (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
+- (void)describe:(DWScene *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
     if(self.ended)return;
     for(DWNativePresenter *session in self.sessions){NSMutableDictionary *owned=[NSMutableDictionary dictionary];
         for(NSNumber *logical in identities)if(self.owners[identities[logical][@"pid"]]==session)owned[logical]=identities[logical];

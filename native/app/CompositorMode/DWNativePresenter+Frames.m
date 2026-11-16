@@ -7,44 +7,39 @@
 // helper's, asked for through its socket.
 // Split from native/desktop/native-presenter.m (37b27b1): describing and submitting frames.
 #import "DWNativePresenter+Private.h"
+#import "DWScene.h"
 #import "DWGeometryJSON.h"
 #import "DWNativeDisplaySpace.h"
 #import <AppKit/AppKit.h>
 #import <float.h>
 
-static CGRect DWNativeJSONRect(id value) {
-    if(![value isKindOfClass:NSDictionary.class])return CGRectNull;
-    NSDictionary *origin=value[@"origin"],*size=value[@"size"];
-    if(![origin isKindOfClass:NSDictionary.class]||![size isKindOfClass:NSDictionary.class])return CGRectNull;
-    for(id n in @[origin[@"x"]?:NSNull.null,origin[@"y"]?:NSNull.null,size[@"width"]?:NSNull.null,size[@"height"]?:NSNull.null])if(![n isKindOfClass:NSNumber.class])return CGRectNull;
-    CGRect r=CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
-    return DWFiniteRect(r)?r:CGRectNull;
-}
-static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
-    if(![value isKindOfClass:NSDictionary.class])return NO;
-    id owner=value[@"owner"];if(owner&&owner!=NSNull.null)return NO;
-    for(NSString *key in @[@"pid",@"wid",@"birth_sec",@"birth_usec"])if(![value[key]isEqual:identity[key]])return NO;
-    return YES;
+// Keep the presenter's existing finite/positive native geometry policy.
+static CGRect DWNativeSceneRect(CGRect rect) { return DWFiniteRect(rect)?rect:CGRectNull; }
+static BOOL DWNativePlacementSourceMatches(DWIdentity *value,NSDictionary *identity) {
+    if(!value)return NO;
+    if(value.ownerPresence!=DWValueAbsent&&value.ownerPresence!=DWValueNull)return NO;
+    return [value.pid isEqual:identity[@"pid"]]&&[value.wid isEqual:identity[@"wid"]]
+        &&[value.birthSeconds isEqual:identity[@"birth_sec"]]&&[value.birthMicroseconds isEqual:identity[@"birth_usec"]];
 }
 @implementation DWNativePresenter (Frames)
-- (void)describe:(NSDictionary *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
+- (void)describe:(DWScene *)snapshot bound:(NSDictionary<NSNumber *,NSDictionary *> *)identities {
     atomic_store(&_turned,uptime());
     if(self.ended)return;
     if(!_info.max_records){fprintf(stderr,"Infinify: native presentation ended: helper record limit is zero; restoring all windows\n");[self finish];return;}
-    if(![snapshot[@"outputs"]isKindOfClass:NSArray.class]||![snapshot[@"outputs"]count]){[self invalidatePlacementReadiness];_desiredPlacements=@{};_described=NO;return;}
+    if(!snapshot.outputs.count){[self invalidatePlacementReadiness];_desiredPlacements=@{};_described=NO;return;}
     // One placement per window: where it is shown on several outputs, the one that shows most of it. A transform has one target.
-    NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *shown=[NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *,DWPlacement *> *placed=[NSMutableDictionary dictionary];NSMutableDictionary<NSNumber *,NSNumber *> *shown=[NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber *,NSValue *> *viewports=[NSMutableDictionary dictionary];
     BOOL spaceFrames=_desktopWide&&(_info.caps&DW2_CAP_SPACE);
     NSMutableDictionary<NSNumber *,NSNumber *> *outputSpaces=[NSMutableDictionary dictionary],*windowSpaces=[NSMutableDictionary dictionary];
-    for(NSDictionary *output in snapshot[@"outputs"]){CGRect viewport=DWNativeJSONRect(output[@"screen_bounds"]);NSNumber *identifier=output[@"id"];
+    for(DWOutput *output in snapshot.outputs){CGRect viewport=DWNativeSceneRect(output.screenBoundsOrNull);NSNumber *identifier=output.identifier;
         if([identifier isKindOfClass:NSNumber.class]&&!CGRectIsNull(viewport)){
             viewports[identifier]=[NSValue valueWithRect:NSRectFromCGRect(viewport)];
             if(spaceFrames)outputSpaces[identifier]=@(DWNativePresentationDisplaySpace(viewport));
         }}
-    for(NSDictionary *p in snapshot[@"placements"]){
-        NSNumber *logical=p[@"window"];NSDictionary *clip=p[@"clip_rect"][@"size"];if(!logical||!identities[logical])continue;
-        double area=[clip[@"width"]doubleValue]*[clip[@"height"]doubleValue];if(placed[logical]&&area<=shown[logical].doubleValue)continue;
+    for(DWPlacement *p in snapshot.placements){
+        NSNumber *logical=p.window;if(!logical||!identities[logical])continue;
+        double area=p.nativePresentationClipArea;if(placed[logical]&&area<=shown[logical].doubleValue)continue;
         placed[logical]=p;shown[logical]=@(area);
     }
     // Beyond every display, by a translation alone: the window keeps its size and is drawn nowhere. 256 points clear of the far
@@ -59,12 +54,12 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
     NSMutableDictionary<NSNumber *,DWNativePlacementDescription *> *desired=[NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber *,NSMutableData *> *memberData=[NSMutableDictionary dictionary];NSMutableSet<NSNumber *> *parking=[NSMutableSet set];
     for(NSNumber *logical in placed){
-        NSDictionary *p=placed[logical],*source=[p[@"source"]isKindOfClass:NSDictionary.class]?p[@"source"]:nil;
-        uint64_t identifier=0,generation=0,output=0;CGRect screen=DWNativeJSONRect(p[@"screen_rect"]),clip=DWNativeJSONRect(p[@"clip_rect"]);
-        NSValue *viewport=viewports[p[@"output"]];DWNativeWindow *root=_windows[identities[logical][@"wid"]];
-        if(!root||_withheld[@(root->root)]||!root->familyKnown||![DWNativePlacementIdentity(root->identity)isEqual:identities[logical]]||!DWNativePlacementSourceMatches(source[@"identity"],identities[logical])
-            ||![source[@"observation_known"]isEqual:@YES]||!DWNativePlacementInteger(logical,&identifier)
-            ||!DWNativePlacementInteger(source[@"generation"],&generation)||!DWNativePlacementInteger(p[@"output"],&output)
+        DWPlacement *p=placed[logical];DWSource *source=p.source;
+        uint64_t identifier=0,generation=0,output=0;CGRect screen=DWNativeSceneRect(p?p.screenRectOrNull:CGRectNull),clip=DWNativeSceneRect(p?p.clipRectOrNull:CGRectNull);
+        NSValue *viewport=viewports[p.output];DWNativeWindow *root=_windows[identities[logical][@"wid"]];
+        if(!root||_withheld[@(root->root)]||!root->familyKnown||![DWNativePlacementIdentity(root->identity)isEqual:identities[logical]]||!DWNativePlacementSourceMatches(source.identity,identities[logical])
+            ||![source.observationKnown isEqual:@YES]||!DWNativePlacementInteger(logical,&identifier)
+            ||!DWNativePlacementInteger(source.generation,&generation)||!DWNativePlacementInteger(p.output,&output)
             ||!viewport||CGRectIsNull(screen)||CGRectIsNull(clip)||screen.size.width<1||screen.size.height<1)continue;
         DWNativePlacementDescription *description=[DWNativePlacementDescription new];
         description->binding=(DWNativePlacementBinding){.identity=root->identity,.window=identifier,.generation=generation,.output=output,
@@ -74,21 +69,21 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
     // An omitted placement still has a controller source binding. Retain a
     // separate kind of ACK correspondence for its complete parked family;
     // never manufacture an output/placement receipt for that backing source.
-    for(NSDictionary *row in snapshot[@"windows"]){
-        if(![row isKindOfClass:NSDictionary.class])continue;
-        NSNumber *logical=row[@"window"];NSDictionary *identity=logical?identities[logical]:nil,*source=[row[@"source"]isKindOfClass:NSDictionary.class]?row[@"source"]:nil;
+    for(DWWindow *row in snapshot.windows){
+        if(![row isKindOfClass:DWWindow.class])continue;
+        NSNumber *logical=row.window;NSDictionary *identity=logical?identities[logical]:nil;DWSource *source=row.source;
         DWNativeWindow *root=identity?_windows[identity[@"wid"]]:nil;uint64_t identifier=0,generation=0;
         if(!root||placed[logical]||desired[logical]||root->root!=root->identity.wid||!root->familyKnown||_withheld[@(root->root)]
-            ||![DWNativePlacementIdentity(root->identity)isEqual:identity]||!DWNativePlacementSourceMatches(source[@"identity"],identity)
-            ||![source[@"observation_known"]isEqual:@YES]||!DWFiniteRect(root->bounds)||!CGRectEqualToRect(DWNativeJSONRect(source[@"observed_rect"]),root->bounds)
-            ||!DWNativePlacementInteger(logical,&identifier)||!identifier||!DWNativePlacementInteger(source[@"generation"],&generation)||!generation)continue;
+            ||![DWNativePlacementIdentity(root->identity)isEqual:identity]||!DWNativePlacementSourceMatches(source.identity,identity)
+            ||![source.observationKnown isEqual:@YES]||!DWFiniteRect(root->bounds)||!CGRectEqualToRect(DWNativeSceneRect(source?source.observedRectOrNull:CGRectNull),root->bounds)
+            ||!DWNativePlacementInteger(logical,&identifier)||!identifier||!DWNativePlacementInteger(source.generation,&generation)||!generation)continue;
         DWNativePlacementDescription *description=[DWNativePlacementDescription new];description->parked=YES;
         description->binding=(DWNativePlacementBinding){.identity=root->identity,.window=identifier,.generation=generation,.revision=_placementRevision};
         desired[logical]=description;memberData[logical]=[NSMutableData data];
     }
     // In the order of the window numbers: the same scene is then the same bytes, and is not sent twice.
     for(NSNumber *wid in [logicals.allKeys sortedArrayUsingSelector:@selector(compare:)]){
-        DWNativeWindow *window=_windows[wid];NSDictionary *p=placed[logicals[wid]];CGSize own=window->bounds.size;
+        DWNativeWindow *window=_windows[wid];DWPlacement *p=placed[logicals[wid]];CGSize own=window->bounds.size;
         if(_withheld[@(window->root)]){
             DWNativeHiddenRoot *transition=_transitions[wid];
             if(transition&&[self transitionCurrent:transition]&&(transition->phase==1||transition->phase==2||transition->phase==4||transition->phase==5)){
@@ -100,12 +95,12 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
         }
         window->logical=logicals[wid];
         struct dw2_record record={.id=window->identity,.m={1,0,0,1,-parkX,-parkY}};
-        NSDictionary *origin=p[@"screen_rect"][@"origin"],*size=p[@"screen_rect"][@"size"];
-        double sx=[origin[@"x"]doubleValue],sy=[origin[@"y"]doubleValue],sw=[size[@"width"]doubleValue],sh=[size[@"height"]doubleValue];
+        CGRect site=p?p.nativePresentationRect:CGRectZero;
+        double sx=site.origin.x,sy=site.origin.y,sw=site.size.width,sh=site.size.height;
         DWNativeWindow *root=_windows[@(window->root)];CGSize rootSize=root?root->bounds.size:own;BOOL nativePlaced=NO;
         if(p&&sw>=1&&sh>=1&&own.width>0&&own.height>0&&rootSize.width>0&&rootSize.height>0){
             // Screen to window-local (DWHelperProtocol.h): the window's own width and height are drawn across the placement's.
-            uint64_t targetSpace=spaceFrames?[outputSpaces[p[@"output"]]unsignedLongLongValue]:0;
+            uint64_t targetSpace=spaceFrames?[outputSpaces[p.output]unsignedLongLongValue]:0;
             double mx=rootSize.width/sw,my=rootSize.height/sh;
             double dx=root?window->bounds.origin.x-root->bounds.origin.x:0,dy=root?window->bounds.origin.y-root->bounds.origin.y:0;
             double m[6]={mx,0,0,my,-sx*mx-dx,-sy*my-dy};
@@ -122,7 +117,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
             if(sound){
                 memcpy(record.m,m,sizeof(m));nativePlaced=YES;
                 if(targetSpace&&spaceSound)windowSpaces[wid]=@(targetSpace);
-                NSValue *viewport=viewports[p[@"output"]];DWNativeClipGeometry geometry={0};
+                NSValue *viewport=viewports[p.output];DWNativeClipGeometry geometry={0};
                 if(viewport&&root&&DWNativeClipPlacement(window->bounds,root->bounds,CGRectMake(sx,sy,sw,sh),NSRectToCGRect(viewport.rectValue),&geometry)&&geometry.required){
                     NSString *key=[NSString stringWithFormat:@"clip:%d:%llu:%llu:%u",window->identity.pid,(unsigned long long)window->identity.birth_sec,(unsigned long long)window->identity.birth_usec,window->identity.wid];
                     if(![_said containsObject:key]){[_said addObject:key];fprintf(stderr,"Infinify: native window %u of process %d needs display clipping; the helper cannot restore original native regions yet, so its transformed content may extend outside the selected output\n",window->identity.wid,window->identity.pid);}
@@ -140,7 +135,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
         // Alpha is sent for a window from the first frame its opacity is not 1, and from then on always, 1 included: a window whose
         // alpha nobody asked to change is never written, and the helper journals no alpha for it. The one exception is a window the
         // helper's arrival veil holds: the helper lifts that alpha itself with the first frame, and puts it back only while it still reads 0.
-        double opacity=[p[@"opacity"]isKindOfClass:NSNumber.class]?fmax(0,fmin(1,[p[@"opacity"]doubleValue])):1;
+        double opacity=p.opacity?fmax(0,fmin(1,p.opacity.doubleValue)):1;
         if(p&&opacity!=1&&(_info.caps&DW2_CAP_ALPHA))window->alpha=YES;
         if(window->alpha){record.flags=DW2_RECORD_HAS_ALPHA;record.alpha=(float)opacity;}
         DWNativePlacementDescription *description=desired[logicals[wid]];
@@ -159,12 +154,12 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
     for(NSNumber *logical in desired.allKeys){
         DWNativePlacementDescription *description=desired[logical];NSMutableData *data=memberData[logical];
         if(!data.length){[desired removeObjectForKey:logical];continue;}
-        NSDictionary *placement=placed[logical];
+        DWPlacement *placement=placed[logical];
         // Apply the pin policy only after every member has a valid placement.
         // Parking, hidden transitions and ordinary frames omit the bit, asking
         // the helper to restore the journalled sublevel without changing focus.
-        if(!description->parked&&[placement[@"pinned"]isEqual:@YES]
-            &&(![placement[@"opacity"]isKindOfClass:NSNumber.class]||[placement[@"opacity"]doubleValue]>0)){
+        if(!description->parked&&[placement.pinned isEqual:@YES]
+            &&(!placement.opacity||placement.opacity.doubleValue>0)){
             DWNativePlacementMember *members=data.mutableBytes;struct dw2_record *records=_records.mutableBytes;
             for(NSUInteger i=0;i<data.length/sizeof(*members);i++){
                 members[i].record.flags|=DW2_RECORD_PINNED;
@@ -235,11 +230,8 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
             NSString *key=candidates[i].flags&DW2_RECORD_RESTORE?[NSString stringWithFormat:@"restore:%u",candidates[i].id.wid]:[NSString stringWithFormat:@"window:%@",order[i]];
             if(!groups[key])groups[key]=[NSMutableIndexSet indexSet];[groups[key]addIndex:i];
         }
-        NSDictionary *focus=[snapshot[@"focus"]isKindOfClass:NSDictionary.class]?snapshot[@"focus"]:@{};
-        NSDictionary *resize=[snapshot[@"native_resize"]isKindOfClass:NSDictionary.class]?snapshot[@"native_resize"]:@{};
-        NSDictionary *effect=[resize[@"pending_effect"]isKindOfClass:NSDictionary.class]?resize[@"pending_effect"]:@{};
-        NSNumber *intent=[focus[@"intent"]isKindOfClass:NSNumber.class]?focus[@"intent"]:nil;
-        NSNumber *enter=[effect[@"window"]isKindOfClass:NSNumber.class]?effect[@"window"]:nil;
+        NSNumber *intent=snapshot.focus.intent;
+        NSNumber *enter=snapshot.nativeResize.pendingEffect.window;
         NSMutableDictionary<NSString *,NSArray<NSNumber *> *> *ranks=[NSMutableDictionary dictionary];
         for(NSString *key in groups){
             NSIndexSet *group=groups[key];NSNumber *logical=order[group.firstIndex];BOOL restore=NO,changed=NO,withheld=NO;
@@ -253,7 +245,7 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
             if(focused&&group.count>limit){fprintf(stderr,"Infinify: native presentation ended: focused/enter window family %s exceeds helper record limit %lu; restoring all windows\n",logical.description.UTF8String,(unsigned long)limit);[self finish];return;}
             // A matching last frame does not demote parking or a withheld phase.
             NSUInteger tier=focused?0:(restore||changed||withheld||[parking containsObject:logical]?1:2);double distance=restore?-1:DBL_MAX;
-            CGRect r=DWNativeJSONRect(placed[logical][@"screen_rect"]);
+            CGRect r=DWNativeSceneRect(placed[logical]?placed[logical].screenRectOrNull:CGRectNull);
             if(!restore&&!CGRectIsNull(r))for(NSValue *value in viewports.objectEnumerator){CGRect v=NSRectToCGRect(value.rectValue);
                 double dx=fmax(0,fmax(CGRectGetMinX(v)-CGRectGetMaxX(r),CGRectGetMinX(r)-CGRectGetMaxX(v)));
                 double dy=fmax(0,fmax(CGRectGetMinY(v)-CGRectGetMaxY(r),CGRectGetMinY(r)-CGRectGetMaxY(v)));
