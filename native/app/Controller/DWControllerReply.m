@@ -81,4 +81,6 @@
     NSMutableDictionary *d=[self.rawDictionary mutableCopy];[d removeObjectForKey:@"effect"];return DWProject(self.class,d);
 }
 - (NSString *)failure { return DWString(self.rawDictionary[@"failure"]); }
+- (NSString *)note { return DWString(self.rawDictionary[@"note"]); }
+- (DWGestureAction *)fired { return [self cachedProjection:@"fired" make:^id{return DWProject(DWGestureAction.class,self.rawDictionary[@"fired"]);}]; }
 @end

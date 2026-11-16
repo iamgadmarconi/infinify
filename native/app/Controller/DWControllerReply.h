@@ -47,6 +47,7 @@
 #import "DWScreenshotRegionTarget.h"
 #import "DWScreenshotTarget.h"
 #import "DWRGBA.h"
+#import "DWGestureAction.h"
 NS_ASSUME_NONNULL_BEGIN
 @interface DWControllerReply : DWControllerValue
 @property(nonatomic,readonly,nullable) NSNumber *dirty;
@@ -105,5 +106,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSArray<DWHotCornerSettings *> *hotCorners;
 - (DWControllerReply *)replyWithoutEffect;
 @property(nonatomic,readonly,nullable) NSString *failure;
+@property(nonatomic,readonly,nullable) NSString *note;
+@property(nonatomic,readonly,nullable) DWGestureAction *fired;
 @end
 NS_ASSUME_NONNULL_END

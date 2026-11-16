@@ -10,5 +10,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable DWNavigationContext *)contextForOutput:(NSNumber *)output;
 @property(nonatomic,readonly) NSUInteger flightCount;
 - (nullable DWFlight *)flightForOutput:(NSNumber *)output;
+@property(nonatomic,readonly,nullable) NSNumber *targetZoom;
+@property(nonatomic,readonly) CGPoint targetCamera;
+@property(nonatomic,readonly,nullable) NSNumber *output;
+@property(nonatomic,readonly,nullable) NSNumber *generation;
+@property(nonatomic,readonly) BOOL hasHomeReturns;
+@property(nonatomic,readonly) BOOL hasOverviewReturns;
+- (BOOL)hasHomeReturnForOutput:(NSNumber *)output;
+- (BOOL)hasOverviewReturnForOutput:(NSNumber *)output;
 @end
 NS_ASSUME_NONNULL_END

@@ -47,6 +47,7 @@
 #import "DWScreenshotRegionTarget.h"
 #import "DWScreenshotTarget.h"
 #import "DWRGBA.h"
+#import "DWGestureAction.h"
 NS_ASSUME_NONNULL_BEGIN
 @interface DWScene : DWControllerValue
 @property(nonatomic,readonly,nullable) DWFocus *focus;

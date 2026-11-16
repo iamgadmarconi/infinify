@@ -11,4 +11,12 @@
 - (DWFlight *)flightForOutput:(NSNumber *)output {
     return [self cachedProjection:[@"flight/" stringByAppendingString:output.stringValue] make:^id{return DWProject(DWFlight.class,DWDictionary(self.rawDictionary[@"flights"])[output.stringValue]);}];
 }
+- (NSNumber *)targetZoom { return DWNumber(self.rawDictionary[@"target_zoom"]); }
+- (CGPoint)targetCamera { return DWScenePoint(self.rawDictionary[@"target_camera"]); }
+- (NSNumber *)output { return DWNumber(self.rawDictionary[@"output"]); }
+- (NSNumber *)generation { return DWNumber(self.rawDictionary[@"generation"]); }
+- (BOOL)hasHomeReturns { return DWDictionary(self.rawDictionary[@"home_returns"])!=nil; }
+- (BOOL)hasOverviewReturns { return DWDictionary(self.rawDictionary[@"overview_returns"])!=nil; }
+- (BOOL)hasHomeReturnForOutput:(NSNumber *)output { return DWDictionary(self.rawDictionary[@"home_returns"])[output.stringValue]!=nil; }
+- (BOOL)hasOverviewReturnForOutput:(NSNumber *)output { return DWDictionary(self.rawDictionary[@"overview_returns"])[output.stringValue]!=nil; }
 @end

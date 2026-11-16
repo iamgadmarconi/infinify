@@ -38,7 +38,7 @@ DWValuePresence DWPresence(id value,Class type) {
 // without retaining old snapshots. No decoded tree is traversed on construction.
 id DWProject(Class type,id dictionary) {
     if(type==DWScreenshotTarget.class&&DWString(dictionary))dictionary=@{@"unit":dictionary};
-    dictionary=DWDictionary(dictionary);if(!dictionary)return nil;
+    dictionary=[DWDictionary(dictionary)copy];if(!dictionary)return nil;
     static NSMapTable *values;static dispatch_once_t once;
     dispatch_once(&once,^{values=[NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];});
     NSMapTable *classes=[values objectForKey:dictionary];
