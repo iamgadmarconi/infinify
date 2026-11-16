@@ -624,7 +624,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         if(!window||[window isEqual:held[@"window"]]||[placed containsObject:window]||![placement.output isEqual:held[@"output"]]){excluded++;continue;}
         if(!old||!current||!live||live.detached||live.nativeMouseOwnership||!DWSizeBoundIdentity(live.identity,source.identity)
             ||![source isEqual:placement.source]){changedSource++;continue;}
-        BOOL pinned=placement.pinned.boolValue&&old.isPinned;
+        BOOL pinned=placement.pinned.boolValue&&old.pinned!=nil;
         if([old hasSameSizeTransitionBindingAsWindow:current ignoringWorldRect:pinned]){[placements addObject:placement];[placed addObject:window];retained++;}else changedWindow++;
     }
     trace(@"projected",@{@"prior":@(prior.placements.count),@"current":@(snapshot.placements.count),@"retained":@(retained),@"excluded":@(excluded),@"changed_source":@(changedSource),@"changed_window":@(changedWindow)});

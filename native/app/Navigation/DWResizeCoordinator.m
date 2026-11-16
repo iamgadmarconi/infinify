@@ -52,6 +52,9 @@
         if([self.heldAdmission isEqual:e])self.heldAdmission=nil;
         NSNumber *key=e.effectID;uint64_t effectID=key.unsignedLongLongValue;if(effectID<=self.lastAdmittedEffectID)return;
         self.lastAdmittedEffectID=effectID;
+        // Build the sole lazy nested effect view on main before sharing this
+        // immutable value with the AX worker. All other driver getters are pure.
+        (void)e.identity;
         // Registration precedes dispatch; cancellation can never retract this obligation.
         DWResizeOperation *operation=[[DWResizeOperation alloc]initWithEffect:e];self.pending[key]=operation;
         // An effect answered for while it waited for the worker (the watchdog's answer) is not performed: its setter would ask a size

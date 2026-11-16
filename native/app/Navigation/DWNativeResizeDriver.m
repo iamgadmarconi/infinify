@@ -91,7 +91,7 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
     if(!validate||!(effect.kind==DWEffectObserveResizeSource)||(effect.requestedPresence==DWValuePresent))return;
     // Controller effects are immutable decoded values, including their nested
     // identity and geometry. Retaining the value pins the complete effect.
-    DWSizeEffect *pinned=[effect copy];
+    DWSizeEffect *pinned=[effect copy];(void)pinned.identity; // preproject on main before the worker reads it
     DWPreparedBaselineAdmission *prepared=[DWPreparedBaselineAdmission new];
     prepared.effect=pinned;prepared.validate=validate;prepared.deadline=deadline;
     @synchronized(self){self.preparedBaseline=prepared;}
