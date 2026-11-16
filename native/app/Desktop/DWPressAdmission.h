@@ -1,9 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <AppKit/AppKit.h>
-@class Desktop, DesktopView, LiveSource;
+#import "DWNativeResize.h"
+@class Desktop, DesktopView, LiveSource, DWNativeAppliedPlacement, DWNativePresenter;
 // Internal seams: real macOS/scene adapters in production, in-memory adapters
 // in later interface tests. Failure is nil/NO, never a guessed native recipient.
 @protocol DWPressNativeLookup <NSObject>
+- (BOOL)trusted;
+- (BOOL)scope:(NSDictionary *)scope contains:(pid_t)pid;
+- (BOOL)physicalButton:(CGMouseButton)button;
+- (NSUInteger)pressedButtons;
+- (BOOL)foreignRecipient:(CGEventRef)event;
+- (NSTimeInterval)uptime;
+- (CFTimeInterval)mediaTime;
+- (double)monotonicSeconds;
+- (CGWindowID)windowAt:(CGPoint)point;
+- (BOOL)parent:(NSDictionary *)identity result:(uint32_t *)parent;
+- (BOOL)member:(NSDictionary *)member belongsTo:(NSDictionary *)root;
+- (BOOL)placement:(DWNativeAppliedPlacement *)placement presenter:(DWNativePresenter *)presenter recipient:(NSDictionary *)recipient at:(CGPoint)point;
+- (BOOL)endNativeDragAt:(CGPoint)point tag:(int64_t)tag;
+- (DWResizeResult)reposition:(DWResizeIdentity)identity from:(CGRect)from to:(CGPoint)origin deadline:(double)deadline;
 - (NSDictionary *)buttons:(NSDictionary *)identity;
 - (NSDictionary *)recipient:(CGPoint)point;
 - (NSArray *)windows:(CGWindowID)window;
@@ -24,7 +39,7 @@ typedef NS_ENUM(NSInteger,DWPressStage) { DWPressSession, DWPressAnnotated };
 @interface DWPressAdmission : NSObject
 - (instancetype)initWithDesktop:(Desktop *)desktop scene:(id<DWPressSceneLookup>)scene native:(id<DWPressNativeLookup>)native;
 - (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output view:(DesktopView *)view;
-- (void)press:(NSEvent *)event button:(NSInteger)button hit:(NSDictionary *)hit at:(CGPoint)point output:(NSNumber *)output view:(DesktopView *)view;
+- (void)mouseDown:(NSEvent *)event view:(DesktopView *)view;
 - (BOOL)prepareDrag:(NSEvent *)event at:(CGPoint)point view:(DesktopView *)view;
 - (void)noteRelease:(NSEvent *)event view:(DesktopView *)view;
 - (NSDictionary *)releaseTitleAt:(CGPoint)point view:(DesktopView *)view;

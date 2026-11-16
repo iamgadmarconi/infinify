@@ -2,9 +2,10 @@
 // Private implementation of press admission: physical pairs and cancellation tombstones.
 // Event taps borrow packets and apply NULL/pass results; no native resources live here.
 #import <Foundation/Foundation.h>
+#import "DWPressAdmission.h"
 #import <CoreGraphics/CoreGraphics.h>
 @interface DWPressPairing : NSObject
-- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent cancelled:(void (^)(void))cancelled;
+- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent nativeLookup:(id<DWPressNativeLookup>)native cancelled:(void (^)(void))cancelled;
 @property (readonly) BOOL hasEarlyMousePress;
 @property (copy) void (^dockControl)(CGEventRef event);
 @property (copy) void (^nativeMouseOwnershipChanged)(CGEventRef event,NSIndexSet *buttons);

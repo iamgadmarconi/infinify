@@ -8,11 +8,12 @@ How the shell captures windows and draws them to its panels: capture streams, ex
 traffic-light admission, Fill refusal pairs, native drag takeover and title click
 slop. `DWPressPairing` is its private physical-pair implementation; `DWNativeInput`
 only installs taps and applies its pass/drop result. `DesktopView` hands AppKit
-presses and title motion/release bookkeeping to the same module; resize execution
+presses as raw events, and title motion/release bookkeeping, to the same module; resize execution
 and controller gesture updates remain with their existing hosts.
 
 Its internal seams accept `DWPressNativeLookup` (the real WindowServer/AX adapter,
-`DWPressNativeAdapter`) and `DWPressSceneLookup` (renderer-ordered hits, mouse
+`DWPressNativeAdapter`, including physical button state, clocks and the existing
+native takeover/reposition effects) and `DWPressSceneLookup` (renderer-ordered hits, mouse
 bindings and unchanged JSON controller calls, `DWPressSceneAdapter`). Missing
 evidence refuses admission; a swallowed down keeps its tail even after logical
 cancellation. Session admission precedes annotated admission on the main thread.

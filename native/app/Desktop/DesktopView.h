@@ -45,8 +45,6 @@
 // Only for a freshly validated native child recipient outside its root's tile.
 // This supplies the root's binding context, never synthetic app input.
 @property NSDictionary *nativeFamilyHit;
-// Only a positively identified native root drag region installs this intent.
-// It keeps the binding/output of the swallowed physical pair, never app input.
 @property CFTimeInterval lastScrollPan; // last finger scroll that panned, 0 for none
 @property BOOL clearsFocus; // a pan begun on empty canvas that has not moved 5 points yet: released so, it unfocuses
 @property NSNumber *clickWindow; // the window an unbound press focused: released within 5 points, it is a completed click
@@ -54,7 +52,7 @@
 @property NSTimeInterval scrollPanTime; // event time of that scroll's last pan, 0 once a press has ended it
 @property NSTimeInterval lastDragPan; // event time of the last timed pan under this drag pan's button, its own or a scroll's; 0 for none
 @property CFTimeInterval liftSeen; // when the gesture's button was first read as up while its gesture is still held; 0 while it is down
-@property CFTimeInterval takenOverAt; // a native window drag taken over (-[Desktop takeOverNativeDrag:event:]): when; 0 for any other gesture
+@property CFTimeInterval takenOverAt; // a native window drag taken over (DWPressAdmission): when; 0 for any other gesture
 // --debug-pointer: a press the DebugPointer request made is down, with no physical button behind it; the timer ends one its test abandoned.
 @property BOOL injected;
 @property NSTimer *injectedTimer;
@@ -68,6 +66,7 @@
 - (NSNumber *)outputAt:(CGPoint)p;
 - (NSNumber *)actionOutput;
 - (BOOL)forward:(CGEventRef)event at:(CGPoint)p output:(NSNumber *)output;
+- (void)deliverHeld;
 @end
 @interface DesktopView ()
 @property DWPointerHover *hover;

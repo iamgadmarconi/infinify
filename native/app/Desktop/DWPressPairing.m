@@ -6,19 +6,8 @@
 #import "DWNativeTabletRouter.h"
 #import <AppKit/AppKit.h>
 #include <unistd.h>
-// A native-recipient decision only authorizes leaving the original packet
-// alone. It never grants scope or permission to post to that process/window.
-// Our own panel's unclaimed down must still reach AppKit: AppKit may then admit
-// a captured pointer grab whose tails belong to the existing consumer.
-static BOOL DWForeignMouseRecipient(CGEventRef event) {
-    if(CGEventGetIntegerValueField(event,kCGEventSourceUnixProcessID)==getpid())return NO;
-    int64_t window=CGEventGetIntegerValueField(event,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
-    if(!window)window=CGEventGetIntegerValueField(event,kCGMouseEventWindowUnderMousePointer);
-    if(window>0&&window<=INT32_MAX)return [NSApp windowWithWindowNumber:(NSInteger)window]==nil;
-    int64_t pid=CGEventGetIntegerValueField(event,kCGEventTargetUnixProcessID);
-    return pid>0&&pid!=getpid();
-}
 @implementation DWPressPairing {
+    id<DWPressNativeLookup> _native;
     BOOL (^_consume)(CGEventType,CGEventRef);
     BOOL (^_earlyConsume)(CGEventType,CGEventRef);
     BOOL (^_ignoreEvent)(CGEventRef);
@@ -29,8 +18,8 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     NSUInteger _lifecycleEpoch,_cancellationEpoch;
     NSTimeInterval _earlyLastPacket;
 }
-- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent cancelled:(void (^)(void))cancelled {
-    if((self=[super init])){_consume=[consume copy];_earlyConsume=[earlyConsume copy];_ignoreEvent=[ignoreEvent copy];_cancelled=[cancelled copy];_capturedButtons=[NSMutableIndexSet indexSet];_nativeButtons=[NSMutableIndexSet indexSet];_earlyCompanionButtons=[NSMutableIndexSet indexSet];}
+- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent nativeLookup:(id<DWPressNativeLookup>)native cancelled:(void (^)(void))cancelled {
+    if((self=[super init])){_native=native;_consume=[consume copy];_earlyConsume=[earlyConsume copy];_ignoreEvent=[ignoreEvent copy];_cancelled=[cancelled copy];_capturedButtons=[NSMutableIndexSet indexSet];_nativeButtons=[NSMutableIndexSet indexSet];_earlyCompanionButtons=[NSMutableIndexSet indexSet];}
     return self;
 }
 - (BOOL)hasEarlyMousePress { return _earlyCaptured&&!_earlyCancelled&&!_stopped; }
@@ -46,13 +35,13 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     NSInteger button=CGEventGetIntegerValueField(event,kCGMouseEventButtonNumber);if(button<0||button>=32)return NO;
     if(down){
         NSUInteger lifecycle=_lifecycleEpoch;
-        BOOL primaryHeld=_earlyCaptured&&CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,kCGMouseButtonLeft);
+        BOOL primaryHeld=_earlyCaptured&&[_native physicalButton:kCGMouseButtonLeft];
         if(button!=0&&_earlyCaptured&&!primaryHeld&&!_earlyCancelled){
             _earlyCancelled=YES;_cancellationEpoch++;void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
             if(_stopped||_lifecycleEpoch!=lifecycle)return NO;
         }
         BOOL held=NO;for(NSUInteger other=_earlyCompanionButtons.firstIndex;other!=NSNotFound;other=[_earlyCompanionButtons indexGreaterThanIndex:other])
-            if(other!=(NSUInteger)button&&CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,(CGMouseButton)other)){held=YES;break;}
+            if(other!=(NSUInteger)button&&[_native physicalButton:(CGMouseButton)other]){held=YES;break;}
         if((primaryHeld&&button!=0)||held){
             if(button==0&&_earlyCaptured){_earlyCaptured=NO;_earlyCancelled=NO;void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();}
             if(_stopped||_lifecycleEpoch!=lifecycle)return NO;
@@ -76,8 +65,8 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     if(changed)changed(event,_nativeButtons.copy);
 }
 - (void)cancelIdleEarlyMousePress {
-    if(!self.hasEarlyMousePress||NSProcessInfo.processInfo.systemUptime-_earlyLastPacket<30
-        ||CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,kCGMouseButtonLeft))return;
+    if(!self.hasEarlyMousePress||[_native uptime]-_earlyLastPacket<30
+        ||[_native physicalButton:kCGMouseButtonLeft])return;
     _earlyCancelled=YES;_cancellationEpoch++;
     void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();
 }
@@ -116,7 +105,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
             // keeps only a tombstone for a down which was actually claimed.
             if(_lifecycleEpoch!=lifecycle||_stopped)return event;
             _earlyCaptured=taken;_earlyCancelled=taken&&_cancellationEpoch!=cancellation;
-            if(taken)_earlyLastPacket=NSProcessInfo.processInfo.systemUptime;
+            if(taken)_earlyLastPacket=[_native uptime];
             // A nested cancellation may precede the consumer's final gesture
             // installation. Cancel that final state as well as owning its tails.
             if(_earlyCancelled){void (^cancelled)(void)=_cancelled;if(cancelled)cancelled();}
@@ -125,7 +114,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
         if(!_earlyCaptured)return event;
         // Logical cancellation never gives an app a tail without its down.
         // Tagged synthetic packets cannot retire this physical reservation.
-        if(!_earlyCancelled){_earlyLastPacket=NSProcessInfo.processInfo.systemUptime;BOOL (^consume)(CGEventType,CGEventRef)=_consume;if(consume)consume(type,event);}
+        if(!_earlyCancelled){_earlyLastPacket=[_native uptime];BOOL (^consume)(CGEventType,CGEventRef)=_consume;if(consume)consume(type,event);}
         if(type==kCGEventLeftMouseUp){_earlyCaptured=NO;_earlyCancelled=NO;}
         return NULL;
     } @finally {_earlyHandling=NO;}
@@ -138,7 +127,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
         // reserved so a second button cannot begin a competing canvas action.
         for(NSUInteger button=_nativeButtons.firstIndex;button!=NSNotFound;){
             NSUInteger next=[_nativeButtons indexGreaterThanIndex:button];
-            if(!CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,(CGMouseButton)button))[_nativeButtons removeIndex:button];
+            if(![_native physicalButton:(CGMouseButton)button])[_nativeButtons removeIndex:button];
             button=next;
         }
         if(native)[self notifyNativeMouse:NULL];
@@ -210,7 +199,7 @@ static BOOL DWForeignMouseRecipient(CGEventRef event) {
     }
     BOOL taken=consume&&consume(type,event);
     if(down&&taken&&validButton)[_capturedButtons addIndex:(NSUInteger)button];
-    if(down&&!taken&&validButton&&DWForeignMouseRecipient(event)){[_nativeButtons addIndex:(NSUInteger)button];[self notifyNativeMouse:event];}
+    if(down&&!taken&&validButton&&[_native foreignRecipient:event]){[_nativeButtons addIndex:(NSUInteger)button];[self notifyNativeMouse:event];}
     if(up&&captured)[_capturedButtons removeIndex:(NSUInteger)button];
     // Cancellation may have ended the canvas grab while the physical button was
     // still down. Its remaining drag/release must not start input in an app which

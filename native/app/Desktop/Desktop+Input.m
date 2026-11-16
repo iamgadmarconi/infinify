@@ -2,6 +2,7 @@
 // Desktop input taps: the native input tap, its configuration and cancellation, lost input.
 // Split from native/desktop/main.m at 37b27b1, moved verbatim.
 #import "Desktop+Private.h"
+#import "DWPressNativeAdapter.h"
 #import <unistd.h>
 #import "DWDebugTrace.h"
 #import "DWDockControl.h"
@@ -28,7 +29,7 @@
         if([weak.postingTags containsObject:@(tag)])return YES;
         for(LiveSource *source in weak.sources.allValues)if(source.router.tag==tag)return YES;
         return NO;
-    } cancelled:^{[weak cancelCapturedInputForWindow:nil];[weak cancelNativeInput];}];
+    } nativeLookup:[DWPressNativeAdapter new] cancelled:^{[weak cancelCapturedInputForWindow:nil];[weak cancelNativeInput];}];
     input.nativeMouseOwnershipChanged=^(CGEventRef event,NSIndexSet *buttons){[weak nativeMouseOwnershipChanged:event buttons:buttons];};
     // INFINIFY_DEBUG: a Dock-control packet that gets as far as this tap was dropped by neither session tap; say so (the line is rate-limited like the others).
     if(DWDebugTrace())input.dockControl=^(CGEventRef event){Desktop *d=weak;char detail[96];snprintf(detail,sizeof detail,"reached the annotated tap undropped; multitouch_delivering=%d dock_tap_running=%d",(int)d.multitouch.delivering,(int)d.dockTap.running);DWDockControlTrace("annotated-tap",event,DWDockControlClassify(event,NULL,NULL),DWDockControlPass,"reached-annotated-tap",detail);};

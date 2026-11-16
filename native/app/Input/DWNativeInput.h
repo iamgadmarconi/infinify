@@ -3,6 +3,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import "DWDockControl.h"
 @class NSEvent,DWTrackpadTouchFrame;
+@protocol DWPressNativeLookup;
 // The mouse buttons down now, bit n for button n, as WindowServer's HID system state has them: what the hardware and any HID-level post say, so the tagged
 // release a taken-over window drag posts clears it (measured in the guest: HID and AppKit's combined state both read up from that release on, while the
 // press this tap tracked from events was still "native" until the physical release). It does not depend on any release having reached a tap.
@@ -38,6 +39,7 @@ CGEventMask DWNativeInputAnnotatedMask(void);
 // buttons cannot start another owner until the physical chrome pair is released.
                    earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume
                     ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent
+                   nativeLookup:(id<DWPressNativeLookup>)native
                       cancelled:(void (^)(void))cancelled;
 // The session tap's owned pair is authoritative even when suppression means
 // AppKit's combined-session button state never sees the down.

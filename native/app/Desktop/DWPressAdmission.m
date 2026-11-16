@@ -125,14 +125,14 @@ static uint64_t DWClickRevertToken;
     if(rows.count!=1)return decorationDragMiss(identity,point,"window_list_changed");NSDictionary *row=rows[0];CGRect displayed;
     if([row[(id)kCGWindowOwnerPID]intValue]!=[identity[@"pid"]intValue]||![row[(id)kCGWindowIsOnscreen]boolValue]||[row[(id)kCGWindowAlpha]doubleValue]<=0
         ||!row[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)||CGRectIsEmpty(displayed)||!CGRectContainsPoint(displayed,point))return decorationDragMiss(identity,point,"not_in_displayed_window");
-    CFTimeInterval now=CACurrentMediaTime();
+    CFTimeInterval now=[self.nativeLookup mediaTime];
     BOOL usable=report&&[report[@"identity"]isEqual:identity]&&now-[report[@"sampled_at"]doubleValue]<=.5&&CGRectEqualToRect(own,DWRectFromJSON(report[@"native_bounds"]));
     if(!usable&&self.onDemandButtons&&[self.onDemandButtons[@"identity"]isEqual:identity]&&now-[self.onDemandButtons[@"sampled_at"]doubleValue]<=.5&&CGRectEqualToRect(own,DWRectFromJSON(self.onDemandButtons[@"native_bounds"]))){
         report=self.onDemandButtons;usable=YES;
     }
     if(!usable){
         NSDictionary *fresh=[self.nativeLookup buttons:identity];
-        if(fresh){self.onDemandButtons=fresh;report=fresh;usable=[report[@"identity"]isEqual:identity]&&CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]<=.5;}
+        if(fresh){self.onDemandButtons=fresh;report=fresh;usable=[report[@"identity"]isEqual:identity]&&[self.nativeLookup mediaTime]-[report[@"sampled_at"]doubleValue]<=.5;}
     }
     if(!usable)return decorationDragMiss(identity,point,"stale_report");
     CGRect cached=DWRectFromJSON(report[@"native_bounds"]);
@@ -160,8 +160,8 @@ static uint64_t DWClickRevertToken;
     return self;
 }
 - (void)refreshNativeButtons:(LiveSource *)source {
-    CFTimeInterval now=CACurrentMediaTime();
-    if(self.desktop.cleaning||self.desktop.sessionInactive||self.desktop.native.ended||!source||source.detached||source.nativeVisibilityHeld||source.nativeButtonsReading||source.nativeButtonsNext>now||!AXIsProcessTrusted()||!DWInScope(self.desktop.scope,source.router.pid))return;
+    CFTimeInterval now=[self.nativeLookup mediaTime];
+    if(self.desktop.cleaning||self.desktop.sessionInactive||self.desktop.native.ended||!source||source.detached||source.nativeVisibilityHeld||source.nativeButtonsReading||source.nativeButtonsNext>now||![self.nativeLookup trusted]||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid])return;
     source.nativeButtonsReading=YES;source.nativeButtonsNext=now+.2;
     if(!self.nativeButtonQueue)self.nativeButtonQueue=dispatch_queue_create("org.infinify.native-decorations",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0));
     // Routine, unchanged window observations must not starve an AX chrome read.
@@ -170,12 +170,12 @@ static uint64_t DWClickRevertToken;
     dispatch_async(self.nativeButtonQueue,^{@autoreleasepool{
         NSDictionary *report=[self.nativeLookup buttons:identity];
         dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;source.nativeButtonsReading=NO;
-            if(!d||d.cleaning||d.sessionInactive||d.native.ended||d.nativeSessionEpoch!=session||d.sources[source.logical]!=source||source.detached||source.nativeButtonsRevision!=revision||![source.identity isEqual:identity]||!DWInScope(d.scope,source.router.pid))return;
+            if(!d||d.cleaning||d.sessionInactive||d.native.ended||d.nativeSessionEpoch!=session||d.sources[source.logical]!=source||source.detached||source.nativeButtonsRevision!=revision||![source.identity isEqual:identity]||![self.nativeLookup scope:d.scope contains:source.router.pid])return;
             NSDictionary *current=source.nativeButtons;CGRect native=CGRectZero;BOOL nativeCurrent=NO;
             if((!report||[report[@"title_incomplete"]boolValue])&&current){
                 nativeCurrent=[self.nativeLookup owner:identity bounds:&native];
             }
-            source.nativeButtons=DWNativeButtonsAfterRefresh(report,current,identity,CACurrentMediaTime(),nativeCurrent,native);
+            source.nativeButtons=DWNativeButtonsAfterRefresh(report,current,identity,[self.nativeLookup mediaTime],nativeCurrent,native);
             source.nativeButtonsMoveCandidate=nil;
             if(DWDebugTrace()){
                 NSString *reason=DWTyped(source.nativeButtons[@"title_reason"],NSString.class)?:report?@"stale_report":@"report_unavailable";
@@ -190,26 +190,26 @@ static uint64_t DWClickRevertToken;
     }});
 }
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point {
-    if(![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth]||!DWInScope(self.desktop.scope,source.router.pid))return NO;
-    if(self.desktop.native.familiesNeeded){uint32_t parent=0;if(!DWNativeWindowParent(source.identity,&parent)||parent)return NO;}
+    if(![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth]||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid])return NO;
+    if(self.desktop.native.familiesNeeded){uint32_t parent=0;if(![self.nativeLookup parent:source.identity result:&parent]||parent)return NO;}
     NSDictionary *info=[self.nativeLookup windowInfo:source.router.wid];CGRect displayed=CGRectZero,own=CGRectZero;
     if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||![info[(id)kCGWindowIsOnscreen]boolValue]||[info[(id)kCGWindowAlpha]doubleValue]<=0
         ||!info[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&displayed)
         ||!CGRectContainsPoint(displayed,point)||![self.nativeLookup bounds:source.router.wid result:&own])return NO;
-    if(!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime){
+    if(!source.nativeButtons||[self.nativeLookup mediaTime]-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime){
         NSDictionary *fresh=[self.nativeLookup buttons:source.identity];
         if(fresh)source.nativeButtons=fresh;
     }
-    if(!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime)return NO;
+    if(!source.nativeButtons||[self.nativeLookup mediaTime]-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime)return NO;
     return DWNativeDecorationHit(source.nativeButtons,source.identity,own,displayed,point);
 }
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output {
-    if(!DWCapturedInputAvailable(source)||!source.pixels||(self.desktop.native&&![self.desktop.nativeViews replica:source.logical output:output])||!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime||!DWInScope(self.desktop.scope,source.router.pid)||![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth])return NO;
+    if(!DWCapturedInputAvailable(source)||!source.pixels||(self.desktop.native&&![self.desktop.nativeViews replica:source.logical output:output])||!source.nativeButtons||[self.nativeLookup mediaTime]-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid]||![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth])return NO;
     NSDictionary *placement=nil;for(NSDictionary *item in [self.desktop presentationSnapshot][@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:output]){placement=item;break;}
     if(!placement||[placement[@"family_only"]boolValue])return NO;CGRect own=CGRectZero;
     NSDictionary *info=[self.nativeLookup windowInfo:source.router.wid];
     if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||![self.nativeLookup bounds:source.router.wid result:&own]||!CGRectContainsPoint(DWRectFromJSON(placement[@"clip_rect"]),point))return NO;
-    if(!self.desktop.native||self.desktop.native.familiesNeeded){uint32_t parent=0;if(!DWNativeWindowParent(source.identity,&parent)||parent)return NO;}
+    if(!self.desktop.native||self.desktop.native.familiesNeeded){uint32_t parent=0;if(![self.nativeLookup parent:source.identity result:&parent]||parent)return NO;}
     return DWCapturedInputAvailable(source)&&DWNativeDecorationHit(source.nativeButtons,source.identity,own,DWRectFromJSON(placement[@"screen_rect"]),point);
 }
 - (BOOL)earlyNativeTitle:(CGEventType)type event:(CGEventRef)cg {
@@ -217,7 +217,7 @@ static uint64_t DWClickRevertToken;
         ||DWNativeTabletEvent(cg)||!self.desktop.native||[self.desktop nativeUnavailable]||self.desktop.cleaning||self.desktop.sessionInactive
         ||self.gestureView||self.desktop.nativeScrollView||self.desktop.nativeMagnifyView||self.desktop.pointerGrab.active
         ||self.desktop.gestureOwner||self.desktop.trackpad.engaged||self.desktop.globalGestureContact||self.desktop.globalTrackpad.ownsTouches
-        ||self.desktop.globalTrackpad.hasNativeMousePress||self.desktop.magnifying||(NSEvent.pressedMouseButtons&~1UL))return NO;
+        ||self.desktop.globalTrackpad.hasNativeMousePress||self.desktop.magnifying||([self.nativeLookup pressedButtons]&~1UL))return NO;
     NSEvent *event=[NSEvent eventWithCGEvent:cg];if(!event)return NO;
     CGPoint point=CGEventGetLocation(cg);DesktopView *view=nil;NSNumber *output=nil;
     for(DesktopView *candidate in self.desktop.views){
@@ -232,7 +232,7 @@ static uint64_t DWClickRevertToken;
     for(LiveSource *held in self.desktop.sources.allValues){NSDictionary *identity=held.identity;
         if(held.nativeVisibilityHeld&&!held.detached&&[root isEqual:identity[@"wid"]]
             &&[recipient[@"pid"]isEqual:identity[@"pid"]]&&[recipient[@"birth_sec"]isEqual:identity[@"birth_sec"]]
-            &&[recipient[@"birth_usec"]isEqual:identity[@"birth_usec"]]&&DWInScope(self.desktop.scope,held.router.pid)){
+            &&[recipient[@"birth_usec"]isEqual:identity[@"birth_usec"]]&&[self.nativeLookup scope:self.desktop.scope contains:held.router.pid]){
             [self.desktop cancelNativeTitleClick];self.nativeFillBlockedButtons|=1;return YES;
         }
     }
@@ -241,7 +241,7 @@ static uint64_t DWClickRevertToken;
         if(background&&!background.detached&&[placement[@"output"]isEqual:[self fillHandoff][@"output"]]
             &&boundIdentity(placement[@"source"][@"identity"],identity)&&[root isEqual:identity[@"wid"]]
             &&[recipient[@"pid"]isEqual:identity[@"pid"]]&&[recipient[@"birth_sec"]isEqual:identity[@"birth_sec"]]
-            &&[recipient[@"birth_usec"]isEqual:identity[@"birth_usec"]]&&DWInScope(self.desktop.scope,background.router.pid)){
+            &&[recipient[@"birth_usec"]isEqual:identity[@"birth_usec"]]&&[self.nativeLookup scope:self.desktop.scope contains:background.router.pid]){
             [self.desktop cancelNativeTitleClick];self.nativeFillBlockedButtons|=1;return YES;
         }
     }
@@ -261,7 +261,7 @@ static uint64_t DWClickRevertToken;
             source=candidate;wid=source.router.wid;
         }
     }
-    if(!source||!DWInScope(self.desktop.scope,source.router.pid))return NO;
+    if(!source||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid])return NO;
     // Physical chrome recognition precedes logical/renderer admission. An
     // unavailable ACK or layout must never lend a recognized down to AppKit.
     BOOL title=[self titleHit:source.identity report:source.nativeButtons at:point];
@@ -500,7 +500,7 @@ static uint64_t DWClickRevertToken;
             // Dedicated tablet packets may omit mouse-only annotations. Fresh
             // admission still belongs to the actual canvas panel under the pen,
             // never a logical replica covered by another application.
-            CGWindowID recipient=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
+            CGWindowID recipient=[self.nativeLookup windowAt:point];
             for(DesktopView *view in self.desktop.views){NSNumber *output=[view outputAt:point];if(!output)continue;NSDictionary *hit=[view hit:point output:output];LiveSource *source=self.desktop.sources[hit[@"window"]];
                 if(recipient!=(CGWindowID)view.window.windowNumber)return NO;
                 if(!source||![self.desktop.nativeViews replica:source.logical output:output])return NO;
@@ -519,10 +519,10 @@ static uint64_t DWClickRevertToken;
         // Magnify is not a CG mouse event: its mouse-specific window/location
         // fields need not be populated. Resolve the real pointer recipient.
         CGPoint point=pointer();DesktopView *view=self.desktop.nativeMagnifyView;LiveSource *source=self.desktop.nativeMagnifySource;
-        if(view&&(source.detached||self.desktop.sources[source.logical]!=source||!DWInScope(self.desktop.scope,source.router.pid)||![self.desktop.views containsObject:view])){[self cancelNativeInput];return NO;}
+        if(view&&(source.detached||self.desktop.sources[source.logical]!=source||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid]||![self.desktop.views containsObject:view])){[self cancelNativeInput];return NO;}
         if(!view){
-            if(over||self.desktop.gestureOwner||self.desktop.magnifying||NSEvent.pressedMouseButtons)return NO;
-            CGWindowID wid=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
+            if(over||self.desktop.gestureOwner||self.desktop.magnifying||[self.nativeLookup pressedButtons])return NO;
+            CGWindowID wid=[self.nativeLookup windowAt:point];
             source=[self nativeSource:wid at:point];if(!source)return NO;
             for(DesktopView *candidate in self.desktop.views)if([candidate outputAt:point]){view=candidate;break;}
             if(!view)return NO;self.desktop.nativePinchAccepted=NO;
@@ -536,11 +536,11 @@ static uint64_t DWClickRevertToken;
         return YES;
     }
     if(type==kCGEventMouseMoved){
-        CFTimeInterval now=CACurrentMediaTime();if(self.desktop.cleaning||self.desktop.sessionInactive||self.desktop.native.ended)return NO;
+        CFTimeInterval now=[self.nativeLookup mediaTime];if(self.desktop.cleaning||self.desktop.sessionInactive||self.desktop.native.ended)return NO;
         [self.desktop queueNativeHover:cg];
         CGWindowID wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
         if(!wid)wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer);
-        if(!wid)wid=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(CGEventGetLocation(cg).x,screenTop()-CGEventGetLocation(cg).y) belowWindowWithWindowNumber:0];
+        if(!wid)wid=[self.nativeLookup windowAt:CGPointMake(CGEventGetLocation(cg).x,CGEventGetLocation(cg).y)];
         NSNumber *root=[self.desktop.native rootWindowFor:wid];CGPoint point=CGEventGetLocation(cg);
         if(root){NSEvent *motion=[NSEvent eventWithCGEvent:cg];if(motion)for(DesktopView *view in self.desktop.views)if([view outputAt:point]){[view.hover nativeMotion:motion];break;}}
         // Below [zoom] interact_min a window takes no pointer input, hover included (docs/crates/desktop/POINTER.md): the canvas has had this motion above, so
@@ -575,7 +575,7 @@ static uint64_t DWClickRevertToken;
                 BOOL green=[press[@"title"]boolValue]?[self titleHit:source.identity report:source.nativeButtons at:point]:[press[@"replica"]boolValue]?[self replicaGreen:source at:point output:press[@"output"]]:[self nativeGreen:source at:point];
                 if([press[@"replica"]boolValue]){
                     NSDictionary *hit=[captured hit:point output:press[@"output"]];
-                    CGWindowID top=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
+                    CGWindowID top=[self.nativeLookup windowAt:point];
                     green&=top==(CGWindowID)captured.window.windowNumber&&[hit[@"window"]isEqual:press[@"window"]]&&!hit[@"native_member"];
                 }
                 if(!self.desktop.cleaning&&!self.desktop.sessionInactive&&!self.desktop.native.ended&&source&&!source.detached&&[self.desktop.views containsObject:captured]&&[captured.outputs containsObject:press[@"output"]]&&boundIdentity(source.identity,press[@"identity"])&&green){
@@ -608,7 +608,7 @@ static uint64_t DWClickRevertToken;
     }
     CGWindowID wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent);
     if(!wid)wid=(CGWindowID)CGEventGetIntegerValueField(cg,kCGMouseEventWindowUnderMousePointer);
-    if(!wid)wid=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
+    if(!wid)wid=[self.nativeLookup windowAt:point];
     LiveSource *source=[self nativeSource:wid at:point];BOOL replica=NO;
     if(!source)for(DesktopView *view in self.desktop.views)if((CGWindowID)view.window.windowNumber==wid){
         NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;LiveSource *candidate=self.desktop.sources[hit[@"window"]];
@@ -645,7 +645,7 @@ static uint64_t DWClickRevertToken;
             const char *refused=NULL;
             if([recipient[@"wid"]unsignedIntValue]!=wid||!boundIdentity(recipient,identity))refused="placement_recipient";
             else if(![self.desktop.nativeViews isAdmissionCurrentForTransfer:transfer placement:placement])refused="placement_admission_before";
-            else if(!DWNativeValidateAppliedPlacementInput(self.desktop.native,placement,recipient,point,NULL))refused="placement_input";
+            else if(![self.nativeLookup placement:placement presenter:self.desktop.native recipient:recipient at:point])refused="placement_input";
             else if(![self.desktop.nativeViews isAdmissionCurrentForTransfer:transfer placement:placement])refused="placement_admission_after";
             if(refused){DWNativeTitleRefused(NO,refused,source.logical,wid,point,@{@"recipient_wid":recipient[@"wid"]?:NSNull.null,@"recipient_pid":recipient[@"pid"]?:NSNull.null});return YES;}
         }
@@ -711,19 +711,19 @@ static uint64_t DWClickRevertToken;
     if(!window||!self.desktop.native||self.desktop.native.ended||self.desktop.cleaning)return nil;
     NSNumber *root=[self.desktop.native rootWindowFor:window];if(!root)return nil;
     for(LiveSource *source in self.desktop.sources.allValues)if(!source.detached&&source.router.wid==root.unsignedIntValue){
-        if(!DWInScope(self.desktop.scope,source.router.pid)||![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth])return nil;
+        if(![self.nativeLookup scope:self.desktop.scope contains:source.router.pid]||![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth])return nil;
         NSDictionary *info=[self.nativeLookup windowInfo:window];CGRect bounds=CGRectZero;
         if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||![info[(id)kCGWindowIsOnscreen]boolValue]
             ||[info[(id)kCGWindowAlpha]doubleValue]<=0||!info[(id)kCGWindowBounds]
             ||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&bounds)
             ||!CGRectContainsPoint(bounds,point))return nil;
-        if(window!=source.router.wid){NSMutableDictionary *member=[source.identity mutableCopy];member[@"wid"]=@(window);[member removeObjectForKey:@"owner"];if(!DWNativeWindowBelongsToRoot(member,source.identity))return nil;}
+        if(window!=source.router.wid){NSMutableDictionary *member=[source.identity mutableCopy];member[@"wid"]=@(window);[member removeObjectForKey:@"owner"];if(![self.nativeLookup member:member belongsTo:source.identity])return nil;}
         return source;
     }
     return nil;
 }
 - (void)nativeMouseOwnershipChanged:(CGEventRef)event buttons:(NSIndexSet *)buttons {
-    LiveSource *source=self.nativeMouseOwner;CFTimeInterval now=CACurrentMediaTime();
+    LiveSource *source=self.nativeMouseOwner;CFTimeInterval now=[self.nativeLookup mediaTime];
     if(source.nativeMouseOwnership){
         NSMutableDictionary *held=source.nativeMouseOwnership;
         if(!event){held[@"click_possible"]=@NO;[self.desktop.navigation cancelNativeClick];}
@@ -851,11 +851,7 @@ static uint64_t DWClickRevertToken;
     // that AppKit's combined button state keeps the physical button down: a release that cleared it made -endLostInput end the
     // taken-over gesture 50 ms later as a release that never arrived (measured in the guest). It carries the source's lifetime tag,
     // which both taps let through.
-    CGEventSourceRef quiet=CGEventSourceCreate(kCGEventSourceStatePrivate);
-    CGEventRef up=quiet?CGEventCreateMouseEvent(quiet,kCGEventLeftMouseUp,point,kCGMouseButtonLeft):NULL;
-    if(up){CGEventSetIntegerValueField(up,kCGEventSourceUserData,source.router.tag);CGEventSetIntegerValueField(up,kCGMouseEventClickState,1);CGEventPost(kCGHIDEventTap,up);CFRelease(up);}
-    if(quiet)CFRelease(quiet);
-    if(!up){[self.scene call:@{@"op":@"end_gesture"}];return NO;}
+    if(![self.nativeLookup endNativeDragAt:point tag:source.router.tag]){[self.scene call:@{@"op":@"end_gesture"}];return NO;}
     held[@"taken"]=@YES;
     [self.desktop.nativeInput takeNativeButton:0];
     NSDictionary *intent=@{@"window":source.logical,@"output":output,@"identity":source.identity.copy,@"generation":binding[@"generation"]};
@@ -864,7 +860,7 @@ static uint64_t DWClickRevertToken;
     view.clickWindow=nil;[self.desktop.navigation releaseCycle];[self.desktop cancelGestures];[self.desktop cancelNavigation];[self.desktop.panLaunch cancel];view.scrollPanTime=0;
     self.gestureView=view;self.nativeGestureButton=0;
     view.startPoint=view.lastPoint=start;view.dragOutput=view.lastOutput=output;view.gestureButton=0;view.lastDragPan=0;view.lastScrollPan=0;view.clearsFocus=NO;
-    [self titleState:view].intent=intent;[self titleState:view].moved=!early;[self titleState:view].released=NO;view.takenOverAt=CACurrentMediaTime();
+    [self titleState:view].intent=intent;[self titleState:view].moved=!early;[self titleState:view].released=NO;view.takenOverAt=[self.nativeLookup mediaTime];
     view.gesture=2;[self.desktop.navigation perform:begun];
     // An unmoved press makes no gesture_to: even a zero delta can magnetically snap and arm edge pan (DesktopView -mouseDragged:).
     if(!early&&[[self.scene call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(point.x-start.x,point.y-start.y)),@"pointer":pointJSON(point)}][@"needs_frames"]boolValue])[self.desktop ensureFrames];
@@ -881,7 +877,7 @@ static uint64_t DWClickRevertToken;
     NSTimer *timer=[NSTimer timerWithTimeInterval:.004 repeats:YES block:^(NSTimer *tick){
         Desktop *desktop=weak;LiveSource *owner=weakSource;NSMutableDictionary *current=owner.nativeMouseOwnership;
         if(!desktop||!owner||current!=held||current[@"watch"]!=tick||[current[@"taken"]boolValue]||[current[@"early_tried"]boolValue]||desktop.pressAdmission.nativeMouseOwner!=owner
-            ||!CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,kCGMouseButtonLeft)){[tick invalidate];return;}
+            ||![self.nativeLookup physicalButton:kCGMouseButtonLeft]){[tick invalidate];return;}
         CGEventRef here=CGEventCreate(NULL);CGPoint point=here?CGEventGetLocation(here):CGPointZero;if(here)CFRelease(here);
         if([desktop.pressAdmission takeOverNativeDrag:owner at:point early:YES])[tick invalidate];
     }];
@@ -901,14 +897,14 @@ static uint64_t DWClickRevertToken;
 }
 - (void)updateNativeMouseOwners {
     if(self.desktop.cleaning||self.desktop.sessionInactive||!self.desktop.native||self.desktop.native.ended)return;
-    CFTimeInterval now=CACurrentMediaTime();
+    CFTimeInterval now=[self.nativeLookup mediaTime];
     for(LiveSource *source in self.desktop.sources.allValues.copy){
         NSMutableDictionary *held=source.nativeMouseOwnership;if(!held)continue;
         if([held[@"session"]unsignedLongLongValue]!=self.desktop.nativeSessionEpoch){
             [(NSTimer *)held[@"watch"]invalidate];source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.desktop.observationEpoch;
             if(self.nativeMouseOwner==source)self.nativeMouseOwner=nil;continue;
         }
-        __block BOOL physical=NO;[(NSIndexSet *)held[@"buttons"]enumerateIndexesUsingBlock:^(NSUInteger button,BOOL *stop){(void)stop;if(CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,(CGMouseButton)button))physical=YES;}];
+        __block BOOL physical=NO;[(NSIndexSet *)held[@"buttons"]enumerateIndexesUsingBlock:^(NSUInteger button,BOOL *stop){(void)stop;if([self.nativeLookup physicalButton:(CGMouseButton)button])physical=YES;}];
         // Cancellation is not a release. Lost ups settle only after the stored
         // physical buttons are up; an additional button keeps the same owner.
         if(physical){[held removeObjectForKey:@"released"];[held removeObjectForKey:@"stable_since"];continue;}
@@ -949,7 +945,7 @@ static uint64_t DWClickRevertToken;
             DWResizeIdentity target={[who[@"pid"]intValue],[who[@"birth_sec"]unsignedLongLongValue],[who[@"birth_usec"]unsignedLongLongValue],[who[@"wid"]unsignedIntValue]};
             __weak Desktop *weak=self.desktop;__weak LiveSource *weakSource=source;CGRect from=native;NSString *logical=source.logical.description;
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{@autoreleasepool{
-                DWResizeResult result=dw_resize_reposition(target,from,first.origin,DWMonotonicSeconds()+.4);
+                DWResizeResult result=[self.nativeLookup reposition:target from:from to:first.origin deadline:[self.nativeLookup monotonicSeconds]+.4];
                 dispatch_async(dispatch_get_main_queue(),^{Desktop *desktop=weak;LiveSource *owner=weakSource;NSMutableDictionary *current=owner.nativeMouseOwnership;
                     if(DWDebugTrace())fprintf(stderr,"debug: native click move revert window=#%s outcome=%s ax_error=%d from=%g,%g to=%g,%g now=%g,%g\n",logical.UTF8String,dw_resize_outcome_name(result.outcome),result.ax_error,from.origin.x,from.origin.y,first.origin.x,first.origin.y,result.actual_cg.origin.x,result.actual_cg.origin.y);
                     if(!desktop||!current||![current[@"revert_token"]isEqual:token])return;
@@ -987,8 +983,8 @@ static uint64_t DWClickRevertToken;
         ||![d.views containsObject:view]||![view.outputs containsObject:intent[@"output"]]
         ||![view.dragOutput isEqual:intent[@"output"]]
         ||![[d.nativeViews desiredOwnerForWindow:intent[@"window"]]isEqual:intent[@"output"]]||!source||source.detached
-        ||!boundIdentity(source.identity,intent[@"identity"])||!DWInScope(d.scope,source.router.pid)
-        ||![birth(source.router.pid)isEqual:source.router.processBirth]
+        ||!boundIdentity(source.identity,intent[@"identity"])||![self.nativeLookup scope:d.scope contains:source.router.pid]
+        ||![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth]
         ||![[d.native rootWindowFor:source.router.wid]isEqual:@(source.router.wid)])return NO;
     NSDictionary *snapshot=[self.scene call:@{@"op":@"snapshot"}],*binding=nil;BOOL output=NO;
     for(NSDictionary *window in snapshot[@"windows"])if([window[@"window"]isEqual:intent[@"window"]]){binding=DWTyped(window[@"source"],NSDictionary.class);break;}
@@ -1093,5 +1089,24 @@ static uint64_t DWClickRevertToken;
         [self.scene call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-view.startPoint.x,p.y-view.startPoint.y)),@"pointer":pointJSON(p)}];
     state.intent=nil;
     return titleClick;
+}
+- (void)mouseDown:(NSEvent *)e view:(DesktopView *)view {
+    if(view.desktop.sessionInactive||[view.desktop nativeUnavailable])return;
+    [view.desktop.compositor finishGeometryTransitions];
+    if(view.desktop.compositor.hasGeometryTransitions)return;
+    // One gesture at a time: another button waits until the first is released.
+    NSInteger button=e.buttonNumber;if(view.gesture&&button!=view.gestureButton){if([view.desktop.pointerGrab ownsEvent:e.CGEvent])[view.desktop forwardCapturedPointer:e.CGEvent screen:[view screenPoint:e]];return;}
+    // A press still held for its window's focus goes first, before this one withdraws that request.
+    [view deliverHeld];
+    // A press is a fresh interaction, as upstream. It ends an open cycle as letting go of its modifiers does, committing a
+    // settled selection as upstream's focus_changed commits it. The pad is one device: in a normal run the press then ends
+    // a trackpad gesture in progress, cancelled, so that the coast a pan's end launches stops with the rest. Only then is
+    // the focus request still in flight withdrawn and every flight and coast stopped, and a scroll pan still waiting to
+    // launch never does, at its delay or at the lift of fingers still down.
+    view.clickWindow=nil;[view.desktop.navigation releaseCycle];[view.desktop cancelGestures];[view.desktop cancelNavigation];[view.desktop.panLaunch cancel];view.scrollPanTime=0;
+    CGPoint p=[view screenPoint:e];NSNumber *output=[view outputAt:p];if(!output)return;
+    view.startPoint=view.lastPoint=p;view.dragOutput=view.lastOutput=output;view.gestureButton=button;view.lastDragPan=0;
+    NSDictionary *hit=[view hit:p output:output];BOOL isHit=[hit isKindOfClass:NSDictionary.class];
+    [self press:e button:button hit:isHit?hit:nil at:p output:output view:view];
 }
 @end

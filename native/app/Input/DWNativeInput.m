@@ -240,8 +240,8 @@ CGEventMask DWNativeInputAnnotatedMask(void) {
     CFRunLoopSourceRef _source,_earlySource;
     DWPressPairing *_pairing;
 }
-- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent cancelled:(void (^)(void))cancelled {
-    if((self=[super init]))_pairing=[[DWPressPairing alloc]initWithConsume:consume earlyConsume:earlyConsume ignoreEvent:ignoreEvent cancelled:cancelled];
+- (instancetype)initWithConsume:(BOOL (^)(CGEventType,CGEventRef))consume earlyConsume:(BOOL (^)(CGEventType,CGEventRef))earlyConsume ignoreEvent:(BOOL (^)(CGEventRef))ignoreEvent nativeLookup:(id<DWPressNativeLookup>)native cancelled:(void (^)(void))cancelled {
+    if((self=[super init]))_pairing=[[DWPressPairing alloc]initWithConsume:consume earlyConsume:earlyConsume ignoreEvent:ignoreEvent nativeLookup:native cancelled:cancelled];
     return self;
 }
 - (BOOL)hasEarlyMousePress { return _pairing.hasEarlyMousePress; }

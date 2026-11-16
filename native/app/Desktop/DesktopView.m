@@ -253,31 +253,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 }
 // A title grab cannot be lent to a rebound source or a replacement output.
 // Once cancelled, the tap still swallows this physical pair through its release.
-// A normal run's press, dispatched as upstream's on_pointer_button does: the binding
-// for the held modifiers in the window or canvas context, else the native window
-// under the pointer. An unbound press on empty canvas means nothing to upstream either.
-- (void)press:(NSEvent *)e button:(NSInteger)button hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output {
-    [self.desktop.pressAdmission press:e button:button hit:hit at:p output:output view:self];
-}
-- (void)mouseDown:(NSEvent *)e {
-    if(self.desktop.sessionInactive||[self.desktop nativeUnavailable])return;
-    [self.desktop.compositor finishGeometryTransitions];
-    if(self.desktop.compositor.hasGeometryTransitions)return;
-    // One gesture at a time: another button waits until the first is released.
-    NSInteger button=e.buttonNumber;if(self.gesture&&button!=self.gestureButton){if([self.desktop.pointerGrab ownsEvent:e.CGEvent])[self.desktop forwardCapturedPointer:e.CGEvent screen:[self screenPoint:e]];return;}
-    // A press still held for its window's focus goes first, before this one withdraws that request.
-    [self deliverHeld];
-    // A press is a fresh interaction, as upstream. It ends an open cycle as letting go of its modifiers does, committing a
-    // settled selection as upstream's focus_changed commits it. The pad is one device: in a normal run the press then ends
-    // a trackpad gesture in progress, cancelled, so that the coast a pan's end launches stops with the rest. Only then is
-    // the focus request still in flight withdrawn and every flight and coast stopped, and a scroll pan still waiting to
-    // launch never does, at its delay or at the lift of fingers still down.
-    self.clickWindow=nil;[self.desktop.navigation releaseCycle];[self.desktop cancelGestures];[self.desktop cancelNavigation];[self.desktop.panLaunch cancel];self.scrollPanTime=0;
-    CGPoint p=[self screenPoint:e];NSNumber *output=[self outputAt:p];if(!output)return;
-    self.startPoint=self.lastPoint=p;self.dragOutput=self.lastOutput=output;self.gestureButton=button;self.lastDragPan=0;
-    NSDictionary *hit=[self hit:p output:output];BOOL isHit=[hit isKindOfClass:NSDictionary.class];
-    [self press:e button:button hit:isHit?hit:nil at:p output:output];
-}
+- (void)mouseDown:(NSEvent *)event { [self.desktop.pressAdmission mouseDown:event view:self]; }
 - (void)rightMouseDown:(NSEvent *)e { [self mouseDown:e]; }
 - (void)otherMouseDown:(NSEvent *)e { [self mouseDown:e]; }
 - (void)rightMouseDragged:(NSEvent *)e { [self mouseDragged:e]; }
