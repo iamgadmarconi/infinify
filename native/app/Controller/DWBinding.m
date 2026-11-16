@@ -25,4 +25,5 @@
 - (NSString *)character { return DWString(self.rawDictionary[@"character"]); }
 - (NSString *)reason { return DWString(self.rawDictionary[@"reason"]); }
 - (NSString *)purpose { return DWString(self.rawDictionary[@"purpose"]); }
+- (BOOL)hasDefinition { return self.rawDictionary.count>0; }
 @end

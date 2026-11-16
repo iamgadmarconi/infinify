@@ -11,5 +11,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) BOOL cameraHasNumericComponents;
 @property(nonatomic,readonly) CGRect usableRectLocal;
 @property(nonatomic,readonly) CGRect usableRectLocalOrNull;
+- (BOOL)hasUsableRectEqualToRect:(CGRect)rect;
 @end
 NS_ASSUME_NONNULL_END

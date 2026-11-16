@@ -35,5 +35,6 @@ NS_ASSUME_NONNULL_BEGIN
 // Presenter-only legacy coercion: direct doubleValue, distinct from typed scene geometry.
 @property(nonatomic,readonly) CGRect nativePresentationRect;
 @property(nonatomic,readonly) double nativePresentationClipArea;
+@property(nonatomic,readonly,nullable) NSNumber *alpha;
 @end
 NS_ASSUME_NONNULL_END

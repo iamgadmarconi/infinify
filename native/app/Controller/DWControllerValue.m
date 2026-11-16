@@ -53,7 +53,7 @@ DWEffect *DWProjectEffect(id dictionary) {
     NSString *op=DWString(d[@"op"]);Class type=DWShellEffect.class;
     if([op isEqual:@"focus_native_window"])type=DWFocusEffect.class;
     else if([op isEqual:@"resize_native_window"]||[op isEqual:@"observe_resize_source"])type=DWSizeEffect.class;
-    return DWProject(type,[d copy]);
+    return DWProject(type,d);
 }
 DWEffect *DWProjectCachedEffect(id dictionary,NSMutableArray<DWEffect *> *cache) {
     NSDictionary *raw=DWDictionary(dictionary);if(!raw)return nil;

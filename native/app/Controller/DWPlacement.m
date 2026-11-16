@@ -46,4 +46,5 @@
     NSDictionary *size=self.rawDictionary[@"clip_rect"][@"size"];
     return [size[@"width"]doubleValue]*[size[@"height"]doubleValue];
 }
+- (NSNumber *)alpha { return DWNumber(self.rawDictionary[@"alpha"]); }
 @end

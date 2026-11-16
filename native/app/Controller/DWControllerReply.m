@@ -134,4 +134,8 @@
     DWEffect *effect=[self cachedEffectFromDictionary:self.rawDictionary[@"effect"]];
     return effect.kind==DWEffectFocusNativeWindow?(DWFocusEffect *)effect:nil;
 }
+- (DWSizeEffect *)topLevelSizeEffect {
+    DWEffect *effect=[self cachedEffectFromDictionary:self.rawDictionary[@"effect"]];
+    return [effect isKindOfClass:DWSizeEffect.class]?(DWSizeEffect *)effect:nil;
+}
 @end

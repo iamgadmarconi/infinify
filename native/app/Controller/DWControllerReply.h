@@ -120,5 +120,6 @@ NS_ASSUME_NONNULL_BEGIN
 + (DWControllerReply *)replyWithFocusEffect:(nullable DWFocusEffect *)effect;
 @property(nonatomic,readonly,nullable) NSNumber *transaction;
 @property(nonatomic,readonly,nullable) DWFocusEffect *primaryFocusEffect;
+@property(nonatomic,readonly,nullable) DWSizeEffect *topLevelSizeEffect;
 @end
 NS_ASSUME_NONNULL_END

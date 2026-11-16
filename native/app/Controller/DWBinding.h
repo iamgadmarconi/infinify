@@ -29,5 +29,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSString *character;
 @property(nonatomic,readonly,nullable) NSString *reason;
 @property(nonatomic,readonly,nullable) NSString *purpose;
+@property(nonatomic,readonly) BOOL hasDefinition;
 @end
 NS_ASSUME_NONNULL_END
