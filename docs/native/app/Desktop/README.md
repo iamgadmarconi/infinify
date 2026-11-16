@@ -20,7 +20,12 @@ cancellation. Session admission precedes annotated admission on the main thread.
 Chrome retention, the 0.5 s title lifetime, 1 s green lifetime, 0.2 s refresh and
 the one-entry on-demand title cache live in admission, not the AX lookup.
 `LiveSource` still carries published chrome observations and their source-revision
-tokens so discovery can invalidate them. This is structural, not new live proof.
+tokens so discovery can invalidate them. Its native-drag ownership record remains
+a published per-window fact, written/reset by admission and read by visibility,
+navigation, Fill, rendering and tracking; display-topology handling still stamps
+the existing `topology_changed`/`stable_since` facts in that record. Session reset
+keeps its existing timer lifetime: the next watch tick observes the cleared record
+and invalidates itself. This is structural, not new live proof.
 
 ## Capture and rendering performance
 

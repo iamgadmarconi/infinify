@@ -28,6 +28,8 @@
 - (BOOL)owner:(NSDictionary *)identity bounds:(CGRect *)bounds;
 @end
 @protocol DWPressSceneLookup <NSObject>
+- (NSDictionary *)presentationSnapshot;
+- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(NSDictionary *)snapshot;
 - (NSDictionary *)call:(NSDictionary *)request;
 - (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output view:(DesktopView *)view;
 - (NSDictionary *)binding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;

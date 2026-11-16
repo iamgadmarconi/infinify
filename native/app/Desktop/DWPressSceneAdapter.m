@@ -9,6 +9,10 @@
 @end
 @implementation DWPressSceneAdapter
 - (instancetype)initWithDesktop:(Desktop *)desktop { if((self=[super init]))_desktop=desktop;return self; }
+- (NSDictionary *)presentationSnapshot { return [self.desktop presentationSnapshot]; }
+- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(NSDictionary *)snapshot {
+    return [self.desktop.compositor standInPart:window output:output screen:point snapshot:snapshot];
+}
 - (NSDictionary *)call:(NSDictionary *)request { return [self.desktop call:request]; }
 - (NSDictionary *)binding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick {
     return [self.desktop mouseBinding:trigger source:source flags:flags window:window under:under pick:pick];

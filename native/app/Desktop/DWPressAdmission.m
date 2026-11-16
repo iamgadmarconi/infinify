@@ -111,7 +111,10 @@ static NSString *decorationRegionVerdict(NSDictionary *title,CGPoint local){
 
 static uint64_t DWClickRevertToken;
 @implementation DWPressAdmission
-- (void)forgetNativeMouseOwner { self.nativeMouseOwner=nil; }
+- (void)forgetNativeMouseOwner {
+    self.nativeMouseOwner=nil;
+    for(LiveSource *source in self.desktop.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.desktop.observationEpoch;}
+}
 - (BOOL)consume:(CGEventType)type event:(CGEventRef)event stage:(DWPressStage)stage {
     return stage==DWPressSession?[self earlyNativeTitle:type event:event]:[self nativeInput:type event:event];
 }
@@ -205,7 +208,7 @@ static uint64_t DWClickRevertToken;
 }
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output {
     if(!DWCapturedInputAvailable(source)||!source.pixels||(self.desktop.native&&![self.desktop.nativeViews replica:source.logical output:output])||!source.nativeButtons||[self.nativeLookup mediaTime]-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime||![self.nativeLookup scope:self.desktop.scope contains:source.router.pid]||![[self.nativeLookup birth:source.router.pid]isEqual:source.router.processBirth])return NO;
-    NSDictionary *placement=nil;for(NSDictionary *item in [self.desktop presentationSnapshot][@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:output]){placement=item;break;}
+    NSDictionary *placement=nil;for(NSDictionary *item in [self.scene presentationSnapshot][@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:output]){placement=item;break;}
     if(!placement||[placement[@"family_only"]boolValue])return NO;CGRect own=CGRectZero;
     NSDictionary *info=[self.nativeLookup windowInfo:source.router.wid];
     if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||![self.nativeLookup bounds:source.router.wid result:&own]||!CGRectContainsPoint(DWRectFromJSON(placement[@"clip_rect"]),point))return NO;
@@ -1017,8 +1020,8 @@ static uint64_t DWClickRevertToken;
     // pointer.rs try_suspended_button: modified bindings and pick mode won
     // above; the label relaunches, the bar moves, the body only focuses.
     if(!binding&&!button&&[hit[@"placeholder"]boolValue]){
-        NSDictionary *snapshot=[view.desktop presentationSnapshot];
-        NSString *part=[view.desktop.compositor standInPart:hit[@"window"] output:output screen:p snapshot:snapshot];
+        NSDictionary *snapshot=[self.scene presentationSnapshot];
+        NSString *part=[self.scene standInPart:hit[@"window"] output:output screen:p snapshot:snapshot];
         if([part isEqual:@"close"]){view.gesture=DWPolicyPress;
             [view.desktop applyReply:[self.scene call:@{@"op":@"ipc",@"output":output,@"request":@{@"Close":hit[@"window"]}}]];return;}
         if([part isEqual:@"label"]){view.gesture=DWPolicyPress;

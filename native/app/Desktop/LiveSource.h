@@ -57,6 +57,9 @@
 // Audited worker geometry for presentation discovery only; capture and input
 // still require their own fresh native identity/parent checks.
 @property NSDictionary *nativeFamily;
+// Published per-window native-drag ownership/settlement facts, tied to this source's
+// lifetime. Press admission alone assigns/clears these properties; other modules
+// read them to gate visibility, navigation, Fill, rendering and window tracking.
 @property NSMutableDictionary *nativeMouseOwnership;
 @property BOOL nativeMouseAdopting;
 @property BOOL nativeTransferFamilyWanted; // exact audited family requested for a replica ownership handoff
