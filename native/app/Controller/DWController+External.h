@@ -10,4 +10,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface DWController (External) <DWExternalController>
 @end
+// Exact public JSON values for the IPC serializer only. Internal consumers use
+// typed reply/geometry accessors instead of these external representations.
+@interface DWControllerReply (External)
+@property(nonatomic,readonly,nullable) NSDictionary *externalReplyObject;
+@end
+@interface DWPlacement (External)
+@property(nonatomic,readonly,nullable) id externalScreenRect;
+@property(nonatomic,readonly,nullable) id externalClipRect;
+@end
 NS_ASSUME_NONNULL_END

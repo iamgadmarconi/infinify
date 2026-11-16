@@ -7,7 +7,7 @@
 // pointer motion does not). The tracker's rules are upstream's. Upstream is handed
 // every key event; how this one learns of a key or a button on top is new (DWTapKeys.h).
 #import "DWTapKeys.h"
-#import "DWTypedValue.h"
+#import "DWControllerReply.h"
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
 
@@ -31,8 +31,8 @@ static BOOL seenSince(NSTimeInterval then) {
     return NO;
 }
 @implementation DWTapKeys {
-    void (^_fire)(NSDictionary *);
-    NSDictionary<NSNumber *,NSDictionary *> *_taps; // physical chord (NSEventModifierFlags) to its entry
+    void (^_fire)(DWBinding *);
+    NSDictionary<NSNumber *,DWBinding *> *_taps; // physical chord (NSEventModifierFlags) to its entry
     id _global,_local;
     NSEventModifierFlags _held; // the modifiers down at the last change seen
     NSEventModifierFlags _peak; // TapTracker.peak
@@ -40,14 +40,14 @@ static BOOL seenSince(NSTimeInterval then) {
     DWTapCounters _began;       // the counters when the chord began
     BOOL _trusted;
 }
-- (instancetype)initWithFire:(void (^)(NSDictionary *))fire { if((self=[super init])){_fire=[fire copy];_taps=@{};}return self; }
-- (void)setBindings:(NSDictionary *)bindings {
-    [self stop];NSMutableDictionary<NSNumber *,NSDictionary *> *taps=[NSMutableDictionary dictionary];
-    for(id entry in DWTyped(DWTyped(bindings,NSDictionary.class)[@"taps"],NSArray.class)){
-        NSDictionary *tap=DWTyped(entry,NSDictionary.class);NSDictionary<NSString *,NSNumber *> *held=DWTyped(tap[@"modifiers"],NSDictionary.class);
+- (instancetype)initWithFire:(void (^)(DWBinding *))fire { if((self=[super init])){_fire=[fire copy];_taps=@{};}return self; }
+- (void)setBindings:(DWControllerReply *)bindings {
+    [self stop];NSMutableDictionary<NSNumber *,DWBinding *> *taps=[NSMutableDictionary dictionary];
+    for(id entry in bindings.taps){
+        DWBinding *tap=[entry isKindOfClass:DWBinding.class]?entry:nil;DWModifiers *held=tap.modifiers;
         // A chord whose action cannot run here is not watched for.
-        if(!held||!DWTyped(tap[@"action"],NSString.class)||[DWTyped(tap[@"implemented"],NSNumber.class)isEqual:@NO])continue;
-        NSEventModifierFlags chord=([DWTyped(held[@"control"],NSNumber.class)boolValue]?NSEventModifierFlagControl:0)|([DWTyped(held[@"option"],NSNumber.class)boolValue]?NSEventModifierFlagOption:0)|([DWTyped(held[@"shift"],NSNumber.class)boolValue]?NSEventModifierFlagShift:0)|([DWTyped(held[@"command"],NSNumber.class)boolValue]?NSEventModifierFlagCommand:0);
+        if(!held||!tap.action||[tap.implemented isEqual:@NO])continue;
+        NSEventModifierFlags chord=([held.control boolValue]?NSEventModifierFlagControl:0)|([held.option boolValue]?NSEventModifierFlagOption:0)|([held.shift boolValue]?NSEventModifierFlagShift:0)|([held.command boolValue]?NSEventModifierFlagCommand:0);
         if(chord&&!taps[@(chord)])taps[@(chord)]=tap;
     }
     _taps=taps;
@@ -70,7 +70,7 @@ static BOOL seenSince(NSTimeInterval then) {
     // The same modifiers as before: Caps Lock, an ordinary key here as in upstream's is_modifier_keysym, or Fn, or the second key of a modifier already held.
     if(!released){if(event.keyCode==kVK_CapsLock)[self taint];return;}
     // Released: the release that finishes an untainted chord completes it, bound or not, and the chord then stays spent until every modifier is up.
-    NSDictionary *tap=nil;
+    DWBinding *tap=nil;
     if(!_tainted&&_peak){DWTapCounters at=counters();if(!memcmp(&at,&_began,sizeof(at)))tap=_taps[@(_peak)];_tainted=YES;}
     if(!now){_peak=0;_tainted=NO;}
     // Last: the action may stop or restart this object.

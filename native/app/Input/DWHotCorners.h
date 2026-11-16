@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+@class DWHotCornerSettings;
 #import <CoreGraphics/CoreGraphics.h>
 // Upstream's hot-corner trigger over an observed pointer: a bound corner fires once
 // when the pointer enters its zone and is armed again when the pointer leaves it.
@@ -12,7 +13,7 @@
 // threshold is upstream's default 4 and a missing dragging or fullscreen rule its
 // default true. An output with no bound corner is not watched. The latch is kept,
 // as upstream keeps it across a reload.
-- (void)arm:(NSArray *)outputs;
+- (void)arm:(NSArray<DWHotCornerSettings *> *)outputs;
 // Some corner of some output is bound: only then is the pointer worth reading.
 @property (readonly) BOOL armed;
 // One observation: the pointer at `point`, from the top-left of `output`'s display

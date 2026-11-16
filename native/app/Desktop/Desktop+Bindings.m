@@ -23,9 +23,9 @@ static BOOL DWLauncherOverlayVisible(void) {
 @implementation Desktop (Bindings)
 // Which corners are bound depends on the outputs registered: read from the bindings
 // after every config load, and again whenever panels open.
-- (void)armCorners:(NSDictionary *)bindings { if(!self.corners)self.corners=[DWHotCorners new];[self.corners arm:asArray(bindings[@"hot_corners"])]; }
+- (void)armCorners:(DWControllerReply *)bindings { if(!self.corners)self.corners=[DWHotCorners new];[self.corners arm:bindings.hotCorners]; }
 // Is a window fullscreen on this output, by the outputs of the snapshot last drawn (-render)?
-- (BOOL)fullscreenOn:(NSNumber *)output { for(NSDictionary *o in self.pointerOutputs)if([o[@"id"]isEqual:output])return DWTyped(o[@"fullscreen"],NSDictionary.class)!=nil;return NO; }
+- (BOOL)fullscreenOn:(NSNumber *)output { for(DWOutput *o in self.pointerOutputs)if([o.identifier isEqual:output])return o.fullscreen!=nil;return NO; }
 // Upstream checks hot corners on every pointer motion. Here the pointer is read at
 // the poll and frame cadence, and only while some corner is bound. A display's
 // corners are its panel's, which are the output's and the display's own: the true
@@ -82,39 +82,38 @@ static BOOL DWLauncherOverlayVisible(void) {
 // Upstream's binding lookup for one press or scroll: physical modifiers, trigger and
 // context in; the bound gesture, or nil for none, out. The binding carries the config's
 // pointer speeds.
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window { return [self mouseBinding:trigger source:source flags:flags window:window under:nil pick:NO]; }
+- (DWBinding *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window { return [self mouseBinding:trigger source:source flags:flags window:window under:nil pick:NO]; }
 // The lookup of a real press or scroll also names the window it is over, and says whether that window is a pick target.
 // under: upstream's pass_mouse (src/input/pointer.rs: pass_mouse_claims, pass_mouse_claims_notch). Where that window's rule claims the
 // trigger the controller answers {"binding": null, "passed": true}, and the trigger is unbound here exactly as it is there: nil, and the
 // press or scroll goes on to the window. nil for a placeholder, which has no application to pass anything to.
 // pick: that window is a pick target, as its hit says, and the lookup is upstream's below [zoom] interact_min (docs/crates/desktop/POINTER.md); it then
 // claims nothing.
-- (NSDictionary *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick {
-    NSMutableDictionary *command=[@{@"op":@"mouse_binding",@"trigger":trigger,@"source":source?:NSNull.null,@"modifiers":modifiersJSON(flags),@"context":window?@"window":@"canvas",@"pick":pick?@YES:@NO}mutableCopy];if(under)command[@"window"]=under;
-    NSDictionary *reply=[self call:command],*binding=DWTyped(reply[@"binding"],NSDictionary.class);
-    return binding;
+- (DWBinding *)mouseBinding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick {
+    DWModifierFlags modifiers={!!(flags&NSEventModifierFlagControl),!!(flags&NSEventModifierFlagOption),!!(flags&NSEventModifierFlagShift),!!(flags&NSEventModifierFlagCommand)};
+    return [self.controller mouseBinding:trigger source:source modifiers:modifiers windowContext:window window:under pick:pick].binding;
 }
 // The controller's binding table as hot keys: after every config
 // load, and again whenever the keyboard input source changes. Returns what was left out.
 - (NSArray<NSString *> *)refreshBindings {
     NSString *status=self.statusText;NSMutableArray<NSString *> *notes=[NSMutableArray array];
-    NSDictionary *bindings=[self call:@{@"op":@"bindings"}];if(!bindings)[notes addObject:self.statusText?:@"bindings unavailable"];
-    for(id warning in asArray(bindings[@"warnings"]))if(DWTyped(warning,NSString.class))[notes addObject:warning];
+    DWControllerReply *bindings=[self.controller bindings];if(!bindings)[notes addObject:self.statusText?:@"bindings unavailable"];
+    for(id warning in bindings.warnings)if(DWTyped(warning,NSString.class))[notes addObject:warning];
     // A key that fires as a binding is a key on top of whatever modifier chord is held: that chord is no tap.
     if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak.tapKeys taint];[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.standinEnter=^dispatch_block_t{return [weak standInEnter];};self.hotKeys.nativeWindowControl=^dispatch_block_t(DWNativeWindowControl action){return [weak nativeWindowControlKey:action];};self.hotKeys.systemSwitch=^(BOOL held){[weak.navigation noteSystemSwitchHeld:held];};self.hotKeys.unconsumedKey=^(uint32_t code,uint64_t flags){(void)flags;Desktop *d=weak;if(d&&(code==36||code==76)&&DWLauncherOverlayVisible())[d.navigation noteSystemUIIntent];};self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
     // A tap binding's chord, completed, goes back to the controller as it came, to be looked up and run there. The output, the pointer and the modifiers
     // still down are those of the moment, as a hot key's: the release that completes a chord of two leaves one of them held.
-    if(!self.tapKeys){__weak Desktop *weak=self;self.tapKeys=[[DWTapKeys alloc]initWithFire:^(NSDictionary *tap){NSDictionary *chord=DWTyped(tap[@"modifiers"],NSDictionary.class);if(chord)[weak action:DWTyped(tap[@"action"],NSString.class) output:[weak viewOutput] at:pointer() held:[DWCycleHold modifiersDown]!=0 corner:nil tap:chord];}];}
+    if(!self.tapKeys){__weak Desktop *weak=self;self.tapKeys=[[DWTapKeys alloc]initWithFire:^(DWBinding *tap){DWModifiers *chord=tap.modifiers;if(chord)[weak action:tap.action output:[weak viewOutput] at:pointer() held:[DWCycleHold modifiersDown]!=0 corner:nil tap:chord];}];}
     // Keys running without a panel (own keys only) are restarted the same way, in the same mode.
     BOOL open=self.panels.count!=0,keyed=open||self.keysRunning;if(keyed)[self stopKeys];
     [self.hotKeys setBindings:bindings];[self.tapKeys setBindings:bindings];
     // INFINIFY_DEBUG: which key bindings run here, and so are registered as hot keys in a run that registers any, and which stay with the applications.
     if(DWDebugTrace()){NSMutableArray<NSString *> *run=[NSMutableArray array],*inert=[NSMutableArray array];
-        for(id entry in asArray(bindings[@"keys"])){NSDictionary *key=DWTyped(entry,NSDictionary.class);if(DWTyped(key[@"action"],NSString.class))[([DWTyped(key[@"implemented"],NSNumber.class)isEqual:@NO]?inert:run) addObject:[NSString stringWithFormat:@"%@=%@",DWTyped(key[@"combo"],NSString.class)?:@"?",key[@"action"]]];}
+        for(id entry in bindings.keys){DWBinding *key=[entry isKindOfClass:DWBinding.class]?entry:nil;if(key.action)[([key.implemented isEqual:@NO]?inert:run) addObject:[NSString stringWithFormat:@"%@=%@",key.combo?:@"?",key.action]];}
         fprintf(stderr,"debug: key bindings that run here: %s\ndebug: key bindings that do not run here: %s\n",[run componentsJoinedByString:@"; "].UTF8String,[inert componentsJoinedByString:@"; "].UTF8String);}
     [notes addObjectsFromArray:self.hotKeys.notes];
     // Upstream's cycle_hold as the controller reports it, else as upstream derives it: the modifiers of the cycle-windows forward binding, Option when it has none.
-    NSDictionary *hold=DWTyped(bindings[@"cycle_hold"],NSDictionary.class);UInt32 mask=([hold[@"control"]isEqual:@YES]?controlKey:0)|([hold[@"option"]isEqual:@YES]?optionKey:0)|([hold[@"shift"]isEqual:@YES]?shiftKey:0)|([hold[@"command"]isEqual:@YES]?cmdKey:0);
+    DWModifiers *hold=bindings.cycleHold;UInt32 mask=([hold.control isEqual:@YES]?controlKey:0)|([hold.option isEqual:@YES]?optionKey:0)|([hold.shift isEqual:@YES]?shiftKey:0)|([hold.command isEqual:@YES]?cmdKey:0);
     if(!mask)for(NSDictionary *key in self.hotKeys.keys)if([key[@"action"]isEqual:@"cycle-windows forward"]){mask=[key[@"chord"]unsignedIntValue]&(controlKey|optionKey|shiftKey|cmdKey);break;}
     self.cycleModifiers=mask?:optionKey;
     [self refreshGestureFingers];

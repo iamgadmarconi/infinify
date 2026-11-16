@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "DWHotKeys.h"
 #import "DWTypedValue.h"
+#import "DWControllerReply.h"
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
 #import <ApplicationServices/ApplicationServices.h>
@@ -59,7 +60,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
 }
 @implementation DWHotKeys {
     void (^_fire)(NSString *);
-    NSDictionary *_bindings;
+    DWControllerReply *_bindings;
     EventHandlerRef _handler;
     NSMutableArray<NSValue *> *_registered;
     CFMachPortRef _keyTap;
@@ -86,29 +87,29 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     return self;
 }
 - (void)inputSourceChanged:(NSNotification *)notification { (void)notification;if(self.changed)self.changed(); }
-- (void)setBindings:(NSDictionary *)bindings {
-    [self stop];_bindings=DWTyped(bindings,NSDictionary.class);
+- (void)setBindings:(DWControllerReply *)bindings {
+    [self stop];_bindings=bindings;
     // Upstream looks the active layout's keysym up first in both modes (keyboard.rs: modified_sym, then Config::lookup);
     // layout_independent, its default and what absent means here, only adds a fallback: here the ANSI position.
-    NSNumber *independent=DWTyped(_bindings[@"layout_independent"],NSNumber.class);NSData *layout=keyboardLayout();BOOL fallback=!independent||independent.boolValue;
+    NSNumber *independent=_bindings.layoutIndependent;NSData *layout=keyboardLayout();BOOL fallback=!independent||independent.boolValue;
     _nativeFullscreenKey=keyTyping(layout,@"f",@3,NO);
     _nativeRestoreKey=keyTyping(layout,@"r",@15,NO);_nativeCenterKey=keyTyping(layout,@"c",@8,NO);
     NSMutableArray *keys=[NSMutableArray array],*notes=[NSMutableArray array],*deferred=[NSMutableArray array];NSMutableSet *taken=[NSMutableSet set];
     // Upstream tries the fallback only once the layout's own keysym has found no binding: keys the layout resolves take their chords first.
-    for(int pass=0;pass<2;pass++)for(id entry in pass?deferred:DWTyped(_bindings[@"keys"],NSArray.class)){
-        NSDictionary *key=DWTyped(entry,NSDictionary.class);NSString *action=DWTyped(key[@"action"],NSString.class),*combo=DWTyped(key[@"combo"],NSString.class)?:action,*character=DWTyped(key[@"character"],NSString.class);
-        NSNumber *position=DWTyped(key[@"key_code"],NSNumber.class),*code=position;if(!action)continue;
+    for(int pass=0;pass<2;pass++)for(id entry in pass?deferred:_bindings.keys){
+        DWBinding *key=[entry isKindOfClass:DWBinding.class]?entry:nil;NSString *action=key.action,*combo=key.combo?:action,*character=key.character;
+        NSNumber *position=key.keyCode,*code=position;if(!action)continue;
         // A chord whose action cannot run here stays with the native applications.
-        BOOL inert=[DWTyped(key[@"implemented"],NSNumber.class)isEqual:@NO];
-        NSDictionary<NSString *,NSNumber *> *held=DWTyped(key[@"modifiers"],NSDictionary.class);
-        if(layout&&character.length&&!(position&&keypad(position.unsignedIntValue))){code=keyTyping(layout,character,position,[DWTyped(held[@"shift"],NSNumber.class)boolValue]);if(!code&&fallback){if(!pass){[deferred addObject:entry];continue;}code=position;}}
+        BOOL inert=[key.implemented isEqual:@NO];
+        DWModifiers *held=key.modifiers;
+        if(layout&&character.length&&!(position&&keypad(position.unsignedIntValue))){code=keyTyping(layout,character,position,[held.shift boolValue]);if(!code&&fallback){if(!pass){[deferred addObject:entry];continue;}code=position;}}
         if(!code||code.unsignedIntValue>127){if(!inert)[notes addObject:[NSString stringWithFormat:@"%@ (%@) has no key on this keyboard",combo,action]];continue;}
-        UInt32 c=code.unsignedIntValue,modifiers=([DWTyped(held[@"control"],NSNumber.class)boolValue]?controlKey:0)|([DWTyped(held[@"option"],NSNumber.class)boolValue]?optionKey:0)|([DWTyped(held[@"shift"],NSNumber.class)boolValue]?shiftKey:0)|([DWTyped(held[@"command"],NSNumber.class)boolValue]?cmdKey:0);
+        UInt32 c=code.unsignedIntValue,modifiers=([held.control boolValue]?controlKey:0)|([held.option boolValue]?optionKey:0)|([held.shift boolValue]?shiftKey:0)|([held.command boolValue]?cmdKey:0);
         NSString *name=keyName(c)?:(keypad(c)?[@"Keypad " stringByAppendingString:keyCharacter(layout,c,NO)?:@"key"]:nil)?:keyCharacter(layout,c,NO).uppercaseString?:character.uppercaseString?:[NSString stringWithFormat:@"key %u",c];
         NSNumber *chord=DWChord(c,modifiers);NSString *label=[DWModifierGlyphs(modifiers) stringByAppendingString:name];
         if(inert)continue;
         if([taken containsObject:chord]){[notes addObject:[NSString stringWithFormat:@"%@ (%@) is already bound",label,action]];continue;}
-        [taken addObject:chord];[keys addObject:@{@"action":action,@"combo":combo,@"chord":chord,@"modifiers":DWModifierGlyphs(modifiers),@"key":name,@"repeat":@([DWTyped(key[@"repeat"],NSNumber.class)boolValue]),@"passable":@([DWTyped(key[@"passable"],NSNumber.class)boolValue])}];
+        [taken addObject:chord];[keys addObject:@{@"action":action,@"combo":combo,@"chord":chord,@"modifiers":DWModifierGlyphs(modifiers),@"key":name,@"repeat":@([key.repeat boolValue]),@"passable":@([key.passable boolValue])}];
     }
     _keys=keys;_notes=notes;
 }
@@ -295,7 +296,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     if(![self registered:identifier-1])return;
     NSDictionary *key=_keys[identifier-1];NSString *action=key[@"action"];NSUInteger generation=_generation;_down=identifier;
     _fire(action);
-    double delay=[DWTyped(_bindings[@"repeat_delay_ms"],NSNumber.class)doubleValue]/1000,rate=[DWTyped(_bindings[@"repeat_rate_hz"],NSNumber.class)doubleValue];
+    double delay=[_bindings.repeatDelayMilliseconds doubleValue]/1000,rate=[_bindings.repeatRateHertz doubleValue];
     // The action may have stopped or replaced the registration it was fired from, or the key may have been passed and let go meanwhile.
     if(generation!=_generation||!_handler||![self registered:identifier-1]||![key[@"repeat"]boolValue]||!(rate>0)||!(delay>=0))return;
     UInt32 modifiers=[key[@"chord"]unsignedIntValue]&chordModifiers;__weak DWHotKeys *weak=self;_repeating=identifier;

@@ -19,13 +19,13 @@
     for(DesktopView *view in self.views)if(view.outputs.count)return view.outputs[0];
     return nil;
 }
-- (NSString *)actionFeedback:(NSString *)action flight:(NSDictionary *)flight output:(NSNumber *)output {
+- (NSString *)actionFeedback:(NSString *)action flight:(DWNavigation *)flight output:(NSNumber *)output {
     BOOL home=[action isEqual:@"home-toggle"];
     if(home||[action isEqual:@"zoom-to-fit"]){
         if(!flight)return home?@"Already home":@"Nothing to fit";
         // The toggle keeps its return view while away; an armed flight without one is the way back.
-        id returns=[self call:@{@"op":@"snapshot"}][@"navigation"][home?@"home_returns":@"overview_returns"];
-        if([returns isKindOfClass:NSDictionary.class]&&!returns[output.stringValue])return @"Previous view";
+        DWNavigation *navigation=self.controller.scene.navigation;
+        if((home?navigation.hasHomeReturns:navigation.hasOverviewReturns)&&!(home?[navigation hasHomeReturnForOutput:output]:[navigation hasOverviewReturnForOutput:output]))return @"Previous view";
         return home?@"Home":@"Zoom to fit";
     }
     if([action hasPrefix:@"pan-viewport "])return nil;
@@ -34,25 +34,25 @@
     // Every other bound action, exec and nudge-window among them, reports only its errors.
     if(![@[@"zoom-in",@"zoom-out",@"zoom-reset"]containsObject:action])return nil;
     if(!flight)return @"Zoom limit reached";
-    double zoom=[flight[@"target_zoom"]doubleValue];return zoom==1?@"Zoom 1:1":[NSString stringWithFormat:@"Zoom %.3g%%",zoom*100];
+    double zoom=flight.targetZoom.doubleValue;return zoom==1?@"Zoom 1:1":[NSString stringWithFormat:@"Zoom %.3g%%",zoom*100];
 }
 // One exec effect. A command sh cannot find or run says so on the resting status and
 // ends the key repeat in progress: a held chord never starts a missing program
 // over and over.
-- (void)exec:(NSDictionary *)effect {
-    NSString *command=effect[@"command"];__weak Desktop *weak=self;
+- (void)exec:(DWShellEffect *)effect {
+    NSString *command=effect.command;__weak Desktop *weak=self;
     // Upstream puts WAYLAND_DISPLAY in every child's environment and its msg client derives the
     // socket from it; the served socket path stands for it here. An [env] entry of that name wins.
-    NSMutableDictionary *env=[DWTyped(effect[@"env"],NSDictionary.class) mutableCopy]?:[NSMutableDictionary dictionary];
+    NSMutableDictionary *env=[effect.environment mutableCopy]?:[NSMutableDictionary dictionary];
     if(self.ipc&&self.socketPath&&env[@"INFINIFY_SOCKET"]==nil)env[@"INFINIFY_SOCKET"]=self.socketPath;
     NSString *error=DWExecCommand(command,env,^{Desktop *d=weak;if(!d||d.cleaning)return;[d.hotKeys endRepeat];[d flashStatus:[@"sh could not run: " stringByAppendingString:command]];[d render];});
     if(error)[self flashStatus:error];
 }
 // macOS's selected keyboard input source, for the controller's Layout and State answers.
 - (void)reportLayout {
-    NSMutableDictionary *command=[DWCurrentLayout()mutableCopy];if(!command)return;
-    NSString *status=self.statusText;command[@"op"]=@"layout_changed";
-    if(![self call:command]){fprintf(stderr,"layout_changed: %s\n",self.statusText.UTF8String);self.statusText=status;}
+    NSDictionary *layout=DWCurrentLayout();if(!layout)return;
+    NSString *status=self.statusText;
+    if(![self.controller layoutChangedName:layout[@"name"] shortName:layout[@"short"] index:[layout[@"index"]unsignedIntegerValue] count:[layout[@"count"]unsignedIntegerValue]]){fprintf(stderr,"layout_changed: %s\n",self.statusText.UTF8String);self.statusText=status;}
     [self publishState];
 }
 // The launch effect of relaunching a stand-in. The window it opens is found like any
@@ -60,13 +60,13 @@
 // A stand-in has no native keyboard recipient. Take the existing canvas panel's
 // keyboard focus once on that logical transition, without changing its order.
 // Later rendering must never steal it back from an application the user chose.
-- (void)updateStandInKeyboard:(NSDictionary *)snapshot {
-    NSDictionary *standin=DWFocusedStandIn(snapshot);NSNumber *window=standin[@"window"];
+- (void)updateStandInKeyboard:(DWScene *)snapshot {
+    DWWindow *standin=DWFocusedStandIn(snapshot);NSNumber *window=standin.window;
     if(self.windowed||self.cleaning||self.sessionInactive)window=nil;
     if([window isEqual:self.standinKeyboardWindow]||(!window&&!self.standinKeyboardWindow))return;
     DesktopPanel *panel=nil;
-    if(window)for(NSDictionary *placement in snapshot[@"placements"])if([placement[@"window"]isEqual:window]){
-        for(DesktopView *view in self.views)if([view.outputs containsObject:placement[@"output"]]&&[view.window isKindOfClass:DesktopPanel.class]){panel=(DesktopPanel *)view.window;break;}
+    if(window)for(DWPlacement *placement in snapshot.placements)if([placement.window isEqual:window]){
+        for(DesktopView *view in self.views)if([view.outputs containsObject:placement.output]&&[view.window isKindOfClass:DesktopPanel.class]){panel=(DesktopPanel *)view.window;break;}
         if(panel)break;
     }
     if(window&&!panel)return;
@@ -81,11 +81,11 @@
         ||![self.panels containsObject:self.standinKeyboardPanel]||NSEvent.pressedMouseButtons||self.gestureOwner||self.magnifying||self.trackpad.engaged||self.sizeTransition.fillHandoff)return nil;
     for(DesktopView *view in self.views)if(view.gesture||view.pressedSource)return nil;
     for(LiveSource *source in self.sources.allValues)if(source.nativeMouseOwnership)return nil;
-    NSDictionary *standin=DWFocusedStandIn([self call:@{@"op":@"snapshot"}]);
-    if(!standin||![standin[@"window"]isEqual:self.standinKeyboardWindow])return nil;
-    NSUInteger serial=self.standinKeyboardSerial;NSNumber *window=standin[@"window"];__weak Desktop *weak=self;
+    DWWindow *standin=DWFocusedStandIn(self.controller.scene);
+    if(!standin||![standin.window isEqual:self.standinKeyboardWindow])return nil;
+    NSUInteger serial=self.standinKeyboardSerial;NSNumber *window=standin.window;__weak Desktop *weak=self;
     return ^{Desktop *d=weak;if(!d||d.standinKeyboardSerial!=serial||![d.standinKeyboardWindow isEqual:window]||![d standInEnter])return;
-        [d.tapKeys taint];[d applyReply:[d call:@{@"op":@"ipc",@"request":@{@"Relaunch":window}}]];};
+        [d.tapKeys taint];[d applyReply:[d.controller relaunchWindow:window output:nil]];};
 }
 // A system window-control shortcut belongs to the exact managed native root that
 // currently has keyboard focus. The controller's last observation alone cannot
@@ -97,13 +97,12 @@
     LiveSource *source=nil;
     for(LiveSource *candidate in self.sources.allValues)if(boundIdentity(candidate.identity,observed)){source=candidate;break;}
     if(!source||source.detached||source.nativeVisibilityHeld||!DWInScope(self.scope,source.router.pid))return nil;
-    NSNumber *window=source.logical;NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
-    NSDictionary *binding=nil;
-    for(NSDictionary *record in snapshot[@"windows"])if([record[@"window"]isEqual:window]){binding=DWTyped(record[@"source"],NSDictionary.class);break;}
+    NSNumber *window=source.logical;DWScene *snapshot=self.controller.scene;
+    DWSource *binding=[snapshot windowWithID:window].source;
     NSNumber *output=[self.nativeViews desiredOwnerForWindow:window];
-    if(!output||[self.nativeViews replica:window output:output]||!DWTyped(binding[@"generation"],NSNumber.class)||!boundIdentity(source.identity,binding[@"identity"]))return nil;
+    if(!output||[self.nativeViews replica:window output:output]||!binding.generation||!boundIdentity(source.identity,DWNativeIdentity(binding.identity)))return nil;
     NSDictionary *identity=source.identity.copy;
-    return @{@"window":window,@"identity":identity,@"generation":binding[@"generation"],@"output":output,@"session":@(self.nativeSessionEpoch)};
+    return @{@"window":window,@"identity":identity,@"generation":binding.generation,@"output":output,@"session":@(self.nativeSessionEpoch)};
 }
 - (dispatch_block_t)nativeWindowControlKey:(DWNativeWindowControl)action {
     NSDictionary *intent=[self nativeWindowControlIntent];if(!intent)return nil;__weak Desktop *weak=self;
@@ -111,8 +110,8 @@
     // unavailable before dispatch. Never deliver a native fallback mid-pair.
     return ^{Desktop *d=weak;if(!d||![[d nativeWindowControlIntent]isEqual:intent])return;
         LiveSource *source=d.sources[intent[@"window"]];
-        NSDictionary *focus=DWTyped([d call:@{@"op":@"snapshot"}][@"focus"],NSDictionary.class);
-        if(DWTyped(focus[@"pending_effect"],NSDictionary.class)||d.sizeTransition.fillHandoff||source.nativeMouseOwnership||d.nativeOwnershipTransfer||d.nativeHoverTransfer
+        DWFocus *focus=d.controller.scene.focus;
+        if(focus.pendingEffect||d.sizeTransition.fillHandoff||source.nativeMouseOwnership||d.nativeOwnershipTransfer||d.nativeHoverTransfer
             ||d.pressAdmission.gestureView||d.nativeScrollView||d.nativeMagnifyView||d.pointerGrab.active||d.gestureOwner||d.magnifying
             ||d.trackpad.engaged||d.globalGestureContact||d.globalTrackpad.ownsTouches||d.globalTrackpad.hasNativeMousePress
             ||NSEvent.pressedMouseButtons||[[d.sizeTransition busyWindow]isEqual:source.logical])return;
@@ -127,8 +126,7 @@
                 [d.tapKeys taint];[d cancelNativeTitleClick];[d flashStatus:@"Use the canvas to arrange windows"];[d render];return;
         }
         if(!name)return;
-        NSMutableDictionary *command=[intent mutableCopy];[command removeObjectForKey:@"session"];command[@"op"]=@"native_decoration";command[@"action"]=name;
-        [d.tapKeys taint];[d cancelNativeTitleClick];[d applyReply:[d call:command]];
+        [d.tapKeys taint];[d cancelNativeTitleClick];[d applyReply:[d.controller nativeDecoration:name window:intent[@"window"] output:intent[@"output"] identity:DWControllerIdentity(intent[@"identity"]) generation:intent[@"generation"]]];
         if(DWDebugTrace())fprintf(stderr,"debug: native window control key action=%s window=#%s\n",name.UTF8String,source.logical.description.UTF8String);
     };
 }
@@ -146,7 +144,7 @@
     __weak Desktop *weak=self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.1*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
         Desktop *d=weak;if(!d||DWStopSignal)return;
-        for(id effect in effects){NSDictionary *e=DWTyped(effect,NSDictionary.class);if([e[@"op"]isEqual:@"exec"]&&DWTyped(e[@"command"],NSString.class))[d exec:e];}
+        for(DWShellEffect *effect in effects)if(effect.kind==DWEffectExec&&effect.command)[d exec:effect];
     });
 }
 // Hold-to-commit, after an action ran, whatever fired it: a held cycle-windows step keeps the session open
@@ -169,7 +167,7 @@
 - (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner { [self action:action output:output at:point held:held corner:corner tap:nil]; }
 // So is a tap binding's, which the controller looks up by the chord: `tap` is the physical modifiers of the chord just completed, as the
 // bindings reply gave them. Upstream runs a tap's action as it runs a key's (keyboard.rs: pending_tap_action through execute_action).
-- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner tap:(NSDictionary *)tap {
+- (void)action:(NSString *)action output:(NSNumber *)output at:(CGPoint)point held:(BOOL)held corner:(NSString *)corner tap:(DWModifiers *)tap {
     if(self.sessionInactive||([self nativeUnavailable]&&![action isEqual:@"quit"]))return;
     // An action cancels a resize the pointer began and is dropped while that is unresolved. A sizing action's own transaction is
     // not cancelled and drops nothing: the next action, a held grow-window's repeat among them, is the controller's to answer.
@@ -177,15 +175,15 @@
     // Upstream's go-to-bookmark is silent on an unset name, so the bookmark table is asked first.
     NSString *name=[action hasPrefix:@"go-to-bookmark "]?[action substringFromIndex:15]:nil;
     // The question is an ipc reply like any other: a size transaction the controller began with it, the size a fullscreen exit still owed its window, is performed.
-    NSDictionary *known=name?[self call:@{@"op":@"ipc",@"output":output,@"request":@{@"Bookmark":@{@"name":name}}}]:nil;[self.sizeTransition consumeSize:known];
-    BOOL unset=name&&!DWTyped(known[@"reply"],NSDictionary.class)[@"Ok"];
-    NSMutableDictionary *command=[(tap?@{@"op":@"tap",@"modifiers":tap,@"output":output}:corner?@{@"op":@"hot_corner",@"output":output,@"corner":corner}:@{@"op":@"action",@"output":output,@"action":action})mutableCopy];
-    command[@"pointer"]=pointJSON(point);command[@"held"]=held?@YES:@NO;
-    NSDictionary *reply=[self call:command];
+    DWControllerReply *known=name?[self.controller bookmark:name output:output]:nil;[self.sizeTransition consumeSize:known];
+    BOOL unset=name&&!known.hasReplyOKValue;
+    DWModifierFlags modifiers={tap.control.boolValue,tap.option.boolValue,tap.shift.boolValue,tap.command.boolValue};
+    NSValue *position=[NSValue valueWithPoint:NSPointFromCGPoint(point)];
+    DWControllerReply *reply=tap?[self.controller tapModifiers:modifiers output:output pointer:position held:held]:corner?[self.controller hotCorner:corner output:output pointer:position held:held]:[self.controller action:action output:output pointer:position held:held];
     if(reply)[self holdCycle:action held:held];
     NSString *sets=[self.hotKeys chords:[@"set-bookmark " stringByAppendingString:name?:@""]].firstObject;
     NSString *missing=[NSString stringWithFormat:@"No bookmark %@ yet%@",name,sets?[NSString stringWithFormat:@" — %@ sets it",sets]:@""];
-    NSString *text=unset?missing:reply?[self actionFeedback:action flight:DWTyped(reply[@"navigation"],NSDictionary.class) output:output]:self.statusText;
+    NSString *text=unset?missing:reply?[self actionFeedback:action flight:reply.navigation output:output]:self.statusText;
     if(text)[self flashStatus:text];
     [self applyReply:reply];
 }

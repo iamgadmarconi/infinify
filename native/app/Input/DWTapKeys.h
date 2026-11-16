@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+@class DWControllerReply, DWBinding;
 // DriftWM's tap bindings: a [keybindings] entry that is a bare modifier chord
 // ("alt+shift" = "switch-layout next") fires when the chord is pressed and let go
 // with nothing else pressed on top. The "taps" of the controller's
@@ -57,12 +58,12 @@
 //   the modifiers still held begin a new one.
 @interface DWTapKeys : NSObject
 // fire receives the entry of "taps" whose chord was just completed.
-- (instancetype)initWithFire:(void (^)(NSDictionary *tap))fire;
+- (instancetype)initWithFire:(void (^)(DWBinding *tap))fire;
 // Stops, then takes the reply's "taps": [{"combo":…,"modifiers":{"control":BOOL,
 // "option":BOOL,"shift":BOOL,"command":BOOL},"action":…,"implemented":BOOL}]. An
 // entry marked "implemented": false is left out, as a key is, and so is any entry
 // after the first on one chord.
-- (void)setBindings:(NSDictionary *)bindings;
+- (void)setBindings:(DWControllerReply *)bindings;
 // Watches the modifiers until -stop. Nothing is installed while no tap is bound.
 // No-op while started.
 - (void)start;

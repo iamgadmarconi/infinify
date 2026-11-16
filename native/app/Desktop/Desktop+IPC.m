@@ -2,6 +2,7 @@
 // Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // Desktop IPC and debug requests: request lines, state broadcast, the debug decoration, capture and pointer probes.
 #import "Desktop+Private.h"
+#import "DWController+External.h"
 #import "DWInputSources.h"
 #import "DWDebugTrace.h"
 #import "DWNativeFocus.h"
@@ -38,7 +39,7 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
 // only when it differs from the last one it returned, and that line goes to every
 // subscriber. Without an active output there is no State, which is no news for the resting status.
 - (void)broadcastState {
-    NSString *status=self.statusText,*line=DWTyped([self call:@{@"op":@"state_event",@"output":[self viewOutput]?:NSNull.null}][@"line"],NSString.class);self.statusText=status;
+    NSString *status=self.statusText,*line=[self.controller stateEventOnOutput:[self viewOutput]].line;self.statusText=status;
     if(line)[self.ipc publish:[line dataUsingEncoding:NSUTF8StringEncoding]];
 }
 // Subscribers get the State after anything that may have changed what it reports:
@@ -85,23 +86,23 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     if(self.debugPointer&&DWTyped(DWTyped(request,NSDictionary.class)[@"DebugCapture"],NSDictionary.class))return [self debugCapture:DWTyped(request,NSDictionary.class)[@"DebugCapture"]];
     NSDictionary *command=request?@{@"op":@"ipc",@"output":[self viewOutput]?:NSNull.null,@"request":request,@"pointer":pointJSON(pointer())}:nil;
     if(!command||![NSJSONSerialization isValidJSONObject:command])return ipcError(@"invalid request");
-    NSString *status=self.statusText;NSData *raw=nil;NSDictionary *data=[self call:command raw:&raw];
+    NSString *status=self.statusText;NSData *raw=nil;DWControllerReply *data=[self.controller executeExternalCommand:command rawResponse:&raw];
     // Screenshot is answered in two steps: the controller's reply is null and names the
     // capture as an effect, the compositor renders it offscreen and writes the PNG, and
     // what screenshot_result returns for the outcome is the client's reply.
-    NSDictionary *capture=nil;if(data&&!DWTyped(data[@"reply"],NSDictionary.class))for(id effect in asArray(data[@"effects"]))if([DWTyped(DWTyped(effect,NSDictionary.class)[@"op"],NSString.class)isEqual:@"screenshot"])capture=effect;
+    DWShellEffect *capture=nil;if(data&&!data.externalReplyObject)for(DWShellEffect *effect in data.arrayShellEffects)if(effect.kind==DWEffectScreenshot)capture=effect;
     if(capture){
-        self.screenshotBusy=YES;NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];
+        self.screenshotBusy=YES;DWScene *snapshot=self.controller.scene;
         [self prepareScreenshot:capture completed:^(NSString *preparation){
             if(self.cleaning){self.exportSources=nil;self.exportAttachments=nil;self.exportOrdering=nil;self.screenshotBusy=NO;deferred(ipcError(@"screenshot cancelled during shutdown"));return;}
             void (^finish)(NSDictionary *)=^(NSDictionary *rendered){
                 self.exportSources=nil;self.exportAttachments=nil;self.exportOrdering=nil;self.screenshotBusy=NO;
                 if(self.cleaning){deferred(ipcError(@"screenshot cancelled during shutdown"));return;}
                 NSMutableDictionary *result=[rendered mutableCopy];result[@"op"]=@"screenshot_result";
-                NSData *response=nil;NSDictionary *answered=[self call:result raw:&response];
-                if(!DWTyped(answered[@"reply"],NSDictionary.class)){NSString *error=answered?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;deferred(ipcError(error));return;}
+                NSData *response=nil;DWControllerReply *answered=[self.controller executeExternalCommand:result rawResponse:&response];
+                if(!answered.externalReplyObject){NSString *error=answered?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;deferred(ipcError(error));return;}
                 [self applyReply:data];
-                deferred(jsonMember(jsonMember(response,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:answered[@"reply"] options:NSJSONWritingWithoutEscapingSlashes error:nil]);
+                deferred(jsonMember(jsonMember(response,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:answered.externalReplyObject options:NSJSONWritingWithoutEscapingSlashes error:nil]);
             };
             DWCanvasRenderer *renderer=[self canvasRenderer];
             if(preparation||!renderer)finish(@{@"error":preparation?:@"no renderer available for capture"});
@@ -110,13 +111,13 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
         return nil;
     }
     // A controller-level refusal still answers the client and leaves the resting status alone.
-    if(!DWTyped(data[@"reply"],NSDictionary.class)){NSString *error=data?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;return ipcError(error);}
+    if(!data.externalReplyObject){NSString *error=data?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;return ipcError(error);}
     [self applyReply:data];
-    for(id effect in asArray(data[@"effects"])){NSString *first=DWTyped(DWTyped(effect,NSDictionary.class)[@"line"],NSString.class);if([DWTyped(effect,NSDictionary.class)[@"op"]isEqual:@"subscribe"]&&first){*subscribe=YES;*event=[first dataUsingEncoding:NSUTF8StringEncoding];}}
+    for(NSString *first in data.subscribeLines){*subscribe=YES;*event=[first dataUsingEncoding:NSUTF8StringEncoding];}
     // That snapshot is the current State. The broadcast is brought up to it before the connection joins:
     // earlier subscribers get a change not yet sent to them, and the new one is not sent its snapshot twice.
     if(*subscribe)[self broadcastState];
-    return jsonMember(jsonMember(raw,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:data[@"reply"] options:NSJSONWritingWithoutEscapingSlashes error:nil];
+    return jsonMember(jsonMember(raw,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:data.externalReplyObject options:NSJSONWritingWithoutEscapingSlashes error:nil];
 }
 // --debug-pointer, which needs --only-pid: a press, a drag and a release on a managed window, for a test that cannot move the pointer.
 // Scoped handler exercise only: the read-only probe returns the actual AX green
@@ -136,7 +137,7 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     CGRect local=DWRectFromJSON(button);CGPoint point=CGPointMake(displayed.origin.x+CGRectGetMidX(local)*displayed.size.width/own.size.width,displayed.origin.y+CGRectGetMidY(local)*displayed.size.height/own.size.height);
     if(![self nativeGreen:source at:point])return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugDecoration":@{@"ready":@NO}}} options:0 error:nil];
     NSNumber *output=nil;NSDictionary *hit=nil;for(DesktopView *view in self.views)if(CGRectContainsPoint(view.globalBounds,point)){output=[view outputAt:point];if(output)hit=[view hit:point output:output];break;}
-    BOOL eligible=[hit[@"window"]isEqual:source.logical]&&![hit[@"pick"]boolValue]&&![hit[@"widget"]boolValue]&&[self nativeSource:source.router.wid at:point]==source;
+    BOOL eligible=[hit.windowisEqual:source.logical]&&![hit[@"pick"]boolValue]&&![hit[@"widget"]boolValue]&&[self nativeSource:source.router.wid at:point]==source;
     if(!eligible)return [NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugDecoration":@{@"ready":@NO,@"screen":@[@(point.x),@(point.y)],@"output":output?:NSNull.null,@"canvas_hit":hit?:NSNull.null}}} options:0 error:nil];
     if([phase isEqual:@"click"]){
         if(self.pressAdmission.gestureView||self.nativeScrollView)return ipcError(@"another native input sequence is active");
@@ -226,17 +227,17 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     if(button==NSNotFound||(request[@"button"]&&!DWTyped(request[@"button"],NSString.class)))return ipcError(@"DebugPointer button is left, right or middle");
     for(id name in asArray(request[@"modifiers"])){NSNumber *flag=@{@"alt":@(NSEventModifierFlagOption),@"shift":@(NSEventModifierFlagShift),@"ctrl":@(NSEventModifierFlagControl),@"super":@(NSEventModifierFlagCommand)}[DWTyped(name,NSString.class)?:@""];if(!flag)return ipcError(@"DebugPointer modifiers are alt, shift, ctrl and super");flags|=flag.unsignedIntegerValue;}
     if(offset&&(offset.count!=2||!DWTyped(offset[0],NSNumber.class)||!DWTyped(offset[1],NSNumber.class)))return ipcError(@"DebugPointer offset is [ox, oy], screen points");
-    NSDictionary *placement=nil;for(NSDictionary *p in [self call:@{@"op":@"snapshot"}][@"placements"])if([p[@"window"]isEqual:window]){placement=p;break;}
-    DesktopView *view=nil;for(DesktopView *v in self.views)if([v.outputs containsObject:placement[@"output"]])view=v;
+    DWPlacement *placement=nil;for(DWPlacement *p in self.controller.scene.placements)if([p.window isEqual:window]){placement=p;break;}
+    DesktopView *view=nil;for(DesktopView *v in self.views)if([v.outputs containsObject:placement.output])view=v;
     if(!placement||!view)return ipcError(@"that window has no placement on an output");
-    CGRect rect=DWRectFromJSON(placement[@"screen_rect"]),clip=DWRectFromJSON(placement[@"clip_rect"]);CGPoint s=CGPointMake(rect.origin.x+fx*rect.size.width+(offset?[offset[0]doubleValue]:0),rect.origin.y+fy*rect.size.height+(offset?[offset[1]doubleValue]:0));
+    CGRect rect=placement.screenRect,clip=placement.clipRect;CGPoint s=CGPointMake(rect.origin.x+fx*rect.size.width+(offset?[offset[0]doubleValue]:0),rect.origin.y+fy*rect.size.height+(offset?[offset[1]doubleValue]:0));
     if((!offset&&!CGRectContainsPoint(clip,s))||!CGRectContainsPoint(view.globalBounds,s))return ipcError(@"that point of the window is not on the canvas");
     // A release is not asked what lies under it: it goes to the same fraction of the window's placement as it is now, whatever has come over that point since.
-    NSDictionary *hit=up?nil:DWTyped([view hit:s output:placement[@"output"]],NSDictionary.class);
+    DWHit *hit=up?nil:[view hit:s output:placement.output];
     // A point named by an offset is one of the window's resize border, or of the window itself: the controller says which.
-    NSDictionary *border=!up&&offset&&!hit?DWTyped([view pointerCommand:@{@"op":@"resize_border",@"output":placement[@"output"],@"screen":pointJSON(s)} quiet:YES][@"border"],NSDictionary.class):nil;self.statusText=status;
-    if(!up&&![hit[@"window"]isEqual:window]&&![border[@"window"]isEqual:window])return ipcError(hit?[NSString stringWithFormat:@"window #%@ is under that point",hit[@"window"]]:border?[NSString stringWithFormat:@"the resize border of window #%@ is under that point",border[@"window"]]:@"no window takes a press at that point");
-    NSData *reply=[NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugPointer":@{@"screen":@[@(s.x),@(s.y)],@"screen_rect":placement[@"screen_rect"],@"clip_rect":placement[@"clip_rect"],@"hit":up||!hit?NSNull.null:hit[@"window"],@"border":border?border[@"edges"]:NSNull.null}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
+    DWResizeBorder *border=!up&&offset&&!hit?[view resizeBorderAt:s output:placement.output quiet:YES]:nil;self.statusText=status;
+    if(!up&&![hit.windowisEqual:window]&&![border.windowisEqual:window])return ipcError(hit?[NSString stringWithFormat:@"window #%@ is under that point",hit.window]:border?[NSString stringWithFormat:@"the resize border of window #%@ is under that point",border.window]:@"no window takes a press at that point");
+    NSData *reply=[NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"DebugPointer":@{@"screen":@[@(s.x),@(s.y)],@"screen_rect":placement.externalScreenRect,@"clip_rect":placement.externalClipRect,@"hit":up||!hit?NSNull.null:hit.window,@"border":border?border.edges:NSNull.null}}} options:NSJSONWritingWithoutEscapingSlashes error:nil];
     if([phase isEqual:@"probe"])return reply;
     if(up?!view.injected:(view.gesture||view.injected))return ipcError(up?@"no DebugPointer press is down":@"a press is already down");
     [view.injectedTimer invalidate];view.injectedTimer=nil;

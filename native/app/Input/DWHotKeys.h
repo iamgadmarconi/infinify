@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+@class DWControllerReply, DWBinding;
 typedef NS_ENUM(NSUInteger, DWNativeWindowControl) {
     DWNativeWindowControlToggleFullscreen,
     DWNativeWindowControlFill,
@@ -35,7 +36,7 @@ typedef NS_ENUM(NSUInteger, DWNativeWindowControl) {
 @property (copy) void (^unconsumedKey)(uint32_t keyCode,uint64_t flags);
 // Unregisters, then resolves every key against the current layout. A key the reply
 // marks "implemented": false is left out silently, its chord untouched.
-- (void)setBindings:(NSDictionary *)bindings;
+- (void)setBindings:(DWControllerReply *)bindings;
 // Resolved keys, first of a physical chord only, in the reply's order: those the
 // layout resolves, then those that fell back to "key_code". Each has "action",
 // "combo", "chord" (DWChord), "modifiers" (⌃⌥⇧⌘), "key" (A, ←, F5), "repeat" and
