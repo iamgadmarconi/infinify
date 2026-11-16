@@ -10,7 +10,8 @@
 #import "DWNativeResult.h"
 NS_ASSUME_NONNULL_BEGIN
 @class DWSceneWriter, DWResizeValidityFacts;
-typedef struct { BOOL control, option, shift, command; } DWModifierFlags;\n// Semantic protocol values, separate from transport operation names. Action
+typedef struct { BOOL control, option, shift, command; } DWModifierFlags;
+// Semantic protocol values, separate from transport operation names. Action
 // strings remain open (configuration and IPC define that vocabulary).
 typedef NSString *DWActivationCause NS_TYPED_EXTENSIBLE_ENUM;
 typedef NSString *DWControllerResizeEdges NS_TYPED_EXTENSIBLE_ENUM;
