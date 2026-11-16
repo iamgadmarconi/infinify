@@ -193,13 +193,13 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,DWFocus *focus,pid_t
     NSDictionary *member=hit.nativeMember;
     DWHit *validated=member?hit:[self.desktop.controller inputOnOutput:output screen:p identity:DWControllerIdentity(source.identity)].hit;
     if(!validated||(!native&&![source.router valid]))return NO;
-    CGPoint local=validated.local;
+    CGPoint local=validated.nativeLocal;
     CGRect own=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&own))return NO;
     DWSource *binding=[self.desktop.controller.scene windowWithID:source.logical].source;
     if(!binding.generation||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||![binding.observationKnown boolValue])return NO;
     if(member&&(![member[@"generation"]isEqual:binding.generation]||![self.desktop.nativeFamilies contains:source.logical identity:member[@"identity"] generation:binding.generation bounds:DWRectFromJSON(member[@"native_bounds"])]))return NO;
     NSMutableDictionary *target=[@{@"window":source.logical,@"output":output,@"generation":binding.generation,@"identity":source.identity,@"root_identity":source.identity,@"native_bounds":DWRectJSON(own)}mutableCopy];
-    if(native||member){DWPlacement *placement=nil;for(DWPlacement *item in [self.desktop presentationSnapshot].placements)if([item.window isEqual:source.logical]&&[item.output isEqual:output]){placement=item;break;}CGRect site=placement.screenRect;if(site.size.width>0&&site.size.height>0)target[@"motion_scale"]=pointJSON(CGPointMake(own.size.width/site.size.width,own.size.height/site.size.height));}
+    if(native||member){DWPlacement *placement=nil;for(DWPlacement *item in [self.desktop presentationSnapshot].placements)if([item.window isEqual:source.logical]&&[item.output isEqual:output]){placement=item;break;}CGRect site=placement.nativeScreenRect;if(site.size.width>0&&site.size.height>0)target[@"motion_scale"]=pointJSON(CGPointMake(own.size.width/site.size.width,own.size.height/site.size.height));}
     if(member){target[@"identity"]=member[@"identity"];target[@"native_bounds"]=member[@"native_bounds"];target[@"native_member"]=@YES;local=jsonPoint(member[@"local"]);}
     if(expected&&!sameInputTarget(expected,target))return NO;
     if(self.pressedTarget&&(drag||up)&&![self.pressedTarget[@"identity"]isEqual:target[@"identity"]])return NO;

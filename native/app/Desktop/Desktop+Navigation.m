@@ -180,7 +180,7 @@ static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEvent
     if(!self.pointerOutputs.count)return nil;
     NSInteger top=[NSWindow windowNumberAtPoint:NSMakePoint(p.x,screenTop()-p.y) belowWindowWithWindowNumber:0];
     BOOL native=[self nativeSource:(CGWindowID)top at:p]!=nil;
-    for(DesktopView *view in self.views)if(view.window.windowNumber==top||native)for(DWOutput *o in self.pointerOutputs)if([view.outputs containsObject:o.identifier]&&CGRectContainsPoint(o.screenBoundsOrNull,p))return o.identifier;
+    for(DesktopView *view in self.views)if(view.window.windowNumber==top||native)for(DWOutput *o in self.pointerOutputs)if([view.outputs containsObject:o.identifier]&&CGRectContainsPoint(o.nativeScreenBounds,p))return o.identifier;
     return nil;
 }
 // The pointer's part of a frame, before the tick. It is read once, and only when one of its

@@ -35,12 +35,12 @@
     return intent&&site&&drawn&&observed&&![site.familyOnly boolValue]&&![drawn.familyOnly boolValue]
         &&boundIdentity(intent[@"identity"],source.identity)&&[drawn.source isEqual:site.source]
         &&[observed.source isEqual:drawn.source]
-        &&CGRectEqualToRect(observed.screenRect,drawn.screenRect)
-        &&CGRectEqualToRect(observed.clipRect,drawn.clipRect)
-        &&CGRectEqualToRect(drawn.screenRect,site.screenRect)
-        &&CGRectEqualToRect(drawn.clipRect,site.clipRect)
-        &&CGRectEqualToRect(site.screenRect,site.clipRect)
-        &&CGRectContainsPoint(site.clipRect,point);
+        &&CGRectEqualToRect(observed.nativeScreenRect,drawn.nativeScreenRect)
+        &&CGRectEqualToRect(observed.nativeClipRect,drawn.nativeClipRect)
+        &&CGRectEqualToRect(drawn.nativeScreenRect,site.nativeScreenRect)
+        &&CGRectEqualToRect(drawn.nativeClipRect,site.nativeClipRect)
+        &&CGRectEqualToRect(site.nativeScreenRect,site.nativeClipRect)
+        &&CGRectContainsPoint(site.nativeClipRect,point);
 }
 - (void)cancelNativeHoverForWindow:(NSNumber *)window {
     DWNativeViewTransfer *transfer=self.nativeHoverTransfer;

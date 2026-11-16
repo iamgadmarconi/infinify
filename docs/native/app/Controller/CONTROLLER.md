@@ -37,3 +37,91 @@ These are source-level paths, not measured runtime timings. A cached scene read 
 | Cached chrome content refusal | No controller calls or snapshot rebuilds (chrome-poll scheduling) | Read cached visual scene only |
 
 Verification for this work is compile-only in the macOS guest. No tests or fixtures are run, written or edited during the architecture migration.
+
+## Completed interface and retained transport
+
+Public consumers depend on `DWSceneController`, `DWInputController`,
+`DWNavigationCommands` / `DWNavigationController`, `DWResizeController`,
+`DWWindowController`, `DWOutputController`, `DWConfigurationController`,
+`DWActionController` and `DWPersistenceController`. Command replies expose
+immutable field projections and separated focus, size and shell effects. The
+navigation coordinator receives execution hooks, not JSON or a controller handle.
+Native identities, capture-site records and family/handoff records remain native
+adapter data; `DWControllerNative` is their explicit bridge.
+
+The old `Desktop -call:`/`-call:raw:` and the internal legacy-command shim are
+removed. The old query-name allowlist is removed: each semantic method chooses
+the query or mutation transport, and Rust classifies owned `Command` values into
+`ReadCommand`, `PolicyFactCommand`, navigation ticks, or scene transactions.
+Policy facts roll back only policy state on error, without cloning/settling the
+scene. Reply stripping is no longer a caller responsibility; exact legacy
+continuations (including unknown fields, explicit nulls and raw effect pointer
+comparison) are private value-layer transformations.
+
+Stage 2 is deliberately deferred. No new typed FFI is introduced without
+behavioral tests. The narrow resize validity API is implemented in stage 1 over
+the same cached scene query and same tick, not a new notification or stale
+side-cache. Arrival and observation are one typed call from the consumer, with
+unchanged underlying fact/command/receipt calls and synchronous epoch hooks.
+They are not claimed to be one Rust round trip.
+
+`clock_only` patching and `DWSnapshotMirror` remain, now inside Controller, because
+removing them while JSON remains would rebuild geometry on idle ticks or lose
+delta transport. The existing C output/source/removal queries remain underneath
+typed methods; scene persistence retains its worker-copy C path. External IPC
+alone imports `DWController+External`; it keeps raw reply bytes and the existing
+JSON request/response forms. Native CLI entry points that do not instantiate the
+shell are unchanged.
+
+## Allocation accounting
+
+Source inspection only, not a measured performance claim. JSON decoding,
+command dictionaries and existing native/render allocations are excluded.
+
+- New scene: one `DWScene`; no container copy or scene traversal. Shared-section
+  seeding performs nine raw pointer comparisons, allocates at most one scene
+  projection-cache dictionary, and retains already-materialized shared views.
+- Repeated scalar reads/rendering of an already projected scene: zero additional
+  typed objects.
+- First traversal of changed windows `N`, placements `P`, outputs `O` and lifecycle
+  events `L`: one scene, one scene cache, at most four lazy array objects, and
+  `N+P+O+L` record objects. For `P=N, O=1`, at most `7+2N+L` Objective-C objects,
+  before nested child views/configuration. Index-addressed caches allocate at
+  most four C slot buffers totalling `8*(N+P+O+L)` bytes on arm64, on first access.
+  Zero-initializing a newly accessed changed array is O(array length), once.
+- Each requested child projection adds one object; the first cached child on its
+  parent adds one parent-cache dictionary. Scalars and geometry structs allocate
+  nothing. This adds `C+D` for `C` child projections on `D` newly caching parents.
+- Hit reply plus hit view: three objects (reply, cache, hit), plus two if identity
+  is read. Input hit plus binding: four, plus two for a requested primary effect
+  (effect/alias list), plus two if its identity is requested.
+- Hover reply without an effect: one reply object. With a requested primary
+  effect: three, plus two if identity is requested. Navigation effect extraction
+  adds one reply-cache dictionary. Plural effects add an array and C slot buffer,
+  plus lazily requested effect wrappers, sharing a reply-local alias list.
+
+There are no process-global weak interning tables, boxed array indexes, or raw
+container copies in projection construction. Owned mutable overlay/factory
+records are frozen once before publication. Effect identity is materialized on
+the main queue before native resize worker dispatch; scalar worker reads are
+pure. Arbitrary concurrent scene lazy access is not a supported API.
+
+## Test-phase migration (not executed here)
+
+- Navigation coordinator fakes should implement `DWNavigationController` and its
+  execution hooks instead of supplying dictionary command blocks. Preserve the
+  focus ordering table, failed attach consumption and nil-receipt cases.
+- Resize coordinator/driver/presentation fixtures should supply typed size
+  effects/results and `DWResizeController`; cover native coercing geometry,
+  orphan equality, null pending effects and the display-tick validity facts.
+- Canvas/native view/presenter/controller-hit fixtures should construct typed
+  values through test adapters or a real in-memory controller; include scene
+  pointer identity, overlays, full unknown-field equality and malformed shapes.
+- Desktop captured-input/chrome/root-capture tests need typed scene/hit/effect
+  fakes; source-slicing assertions must follow the new owner rather than search
+  for operation literals. E2E compile lists need Controller sources.
+- A later runtime pass must exercise drag/resize, Fill/Restore handoff, arrivals,
+  repeated native-family observations, hover/capture, render/config updates,
+  screenshots, and raw IPC/persistence compatibility.
+
+No test files were changed by this migration.

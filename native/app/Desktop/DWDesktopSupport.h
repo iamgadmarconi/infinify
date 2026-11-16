@@ -53,15 +53,6 @@ static inline BOOL boundIdentity(NSDictionary *bound,NSDictionary *named) {
     for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"])if(!DWTyped(named[key],NSNumber.class)||![bound[key]isEqual:named[key]])return NO;
     return YES;
 }
-// The effect of a native size transaction in a controller reply, or nil. A sizing action's reply carries it under "effect",
-// the key begin_native_resize answers with; an entry of "effects" is read the same way, which is where the attach of a window
-// whose rule names a size carries it, its "effect" being the focus request.
-static inline NSDictionary *sizeEffect(NSDictionary *reply) {
-    for(id effect in [@[reply[@"effect"]?:NSNull.null] arrayByAddingObjectsFromArray:asArray(reply[@"effects"])]){NSString *op=DWTyped(DWTyped(effect,NSDictionary.class)[@"op"],NSString.class);if([op isEqual:@"observe_resize_source"]||[op isEqual:@"resize_native_window"])return effect;}
-    return nil;
-}
-// Physical modifiers as the controller reads them: JSON booleans, since a boxed comparison would be sent as 0 or 1.
-static inline NSDictionary *modifiersJSON(NSEventModifierFlags flags) { return @{@"control":flags&NSEventModifierFlagControl?@YES:@NO,@"option":flags&NSEventModifierFlagOption?@YES:@NO,@"shift":flags&NSEventModifierFlagShift?@YES:@NO,@"command":flags&NSEventModifierFlagCommand?@YES:@NO}; }
 // The first line and how many follow: the resting status has room for one.
 static inline NSString *summary(NSString *subject,NSArray<NSString *> *lines) { return [NSString stringWithFormat:@"%@: %@%@",subject,lines[0],lines.count>1?[NSString stringWithFormat:@" (+%lu more)",(unsigned long)lines.count-1]:@""]; }
 // Said once per run, on stderr and in the resting status, when a normal run has no Accessibility access.

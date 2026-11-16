@@ -28,5 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (DWHit *)hitWithPlaceholder:(BOOL)placeholder;
 - (DWHit *)hitWithNativeMember:(NSDictionary *)member;
 + (instancetype)hitWithWindow:(nullable NSNumber *)window identity:(nullable DWIdentity *)identity generation:(nullable NSNumber *)generation local:(nullable NSValue *)local nativeMember:(nullable NSDictionary *)member pick:(nullable NSNumber *)pick widget:(nullable NSNumber *)widget pinned:(nullable NSNumber *)pinned;
+// Native adapter compatibility: direct scalar doubleValue coercion.
+@property(nonatomic,readonly) CGPoint nativeLocal;
 @end
 NS_ASSUME_NONNULL_END

@@ -44,4 +44,6 @@
     return CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
 }
 - (CGRect)nativeScreenBounds { return DWNativeCoercingRect(self.rawDictionary[@"screen_bounds"]); }
+- (CGPoint)nativeCamera { id p=self.rawDictionary[@"camera"];return CGPointMake([p[@"x"]doubleValue],[p[@"y"]doubleValue]); }
+- (CGFloat)nativeZoom { return [self.rawDictionary[@"zoom"]doubleValue]; }
 @end

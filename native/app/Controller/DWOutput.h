@@ -27,5 +27,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) CGRect nativePointerScreenBounds;
 // Native adapter compatibility: direct doubleValue, distinct from strict numeric shape readers.
 @property(nonatomic,readonly) CGRect nativeScreenBounds;
+// Native adapter compatibility: direct scalar doubleValue coercion.
+@property(nonatomic,readonly) CGPoint nativeCamera;
+// Native adapter compatibility: direct scalar doubleValue coercion.
+@property(nonatomic,readonly) CGFloat nativeZoom;
 @end
 NS_ASSUME_NONNULL_END

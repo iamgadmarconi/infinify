@@ -30,4 +30,5 @@
 }
 - (NSNumber *)placeholder { return DWNumber(self.rawDictionary[@"placeholder"]); }
 - (DWHit *)hitWithPlaceholder:(BOOL)placeholder { NSMutableDictionary *copy=[self.rawDictionary mutableCopy];copy[@"placeholder"]=@(placeholder);return DWProject(DWHit.class,[copy copy]); }
+- (CGPoint)nativeLocal { id p=self.rawDictionary[@"local"];return CGPointMake([p[@"x"]doubleValue],[p[@"y"]doubleValue]); }
 @end

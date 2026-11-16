@@ -127,7 +127,7 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     // description; it creates no controller hit site or input authority.
     return enabled?[self.sizeTransition nativeFillBackground:self.nativeOwnerSnapshot]:self.nativeOwnerSnapshot;
 }
-- (DWScene *)visualSnapshot { return self.controllerVisualSnapshot?:self.controller.scene; }
+- (DWScene *)visualSnapshot { return self.controller.visualScene?:self.controller.scene; }
 - (DWScene *)presentationSnapshot {
     DWScene *snapshot=[self visualSnapshot];
     if(!self.native){

@@ -77,7 +77,7 @@
     for(DWPlacement *item in snapshot.placements)if([item.window isEqual:source.logical]&&[item.output isEqual:target[@"output"]]){placement=item;break;}
     DWSource *binding=[self.controller.scene windowWithID:source.logical].source;
     if(![binding.observationKnown boolValue])return nil;
-    CGRect own=CGRectZero,current=CGRectZero,site=placement.screenRect;
+    CGRect own=CGRectZero,current=CGRectZero,site=placement.nativeScreenRect;
     if(!source.router.bounds||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&own)
        ||!DWNativeBounds(source.router.wid,&current)||!CGRectEqualToRect(own,current)
        ||CGRectIsEmpty(own)||CGRectIsInfinite(own)||CGRectIsNull(own)

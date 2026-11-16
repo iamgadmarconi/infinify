@@ -55,15 +55,15 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     if(placed){
         NSNumber *output=[self viewOutput];if(output)command.output=output;command.pointer=[NSValue valueWithPoint:NSPointFromCGPoint(pointer())];
     }
-    else if(logical)command.logicalID=logical;else {if(!world){DWOutput *o=self.controller.scene.outputs.firstObject;double zoom=o.zoom.doubleValue;CGPoint camera=o.camera;world=DWRectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command.worldRect=[NSValue valueWithRect:NSRectFromCGRect(DWRectFromJSON(world))];}
+    else if(logical)command.logicalID=logical;else {if(!world){DWOutput *o=self.controller.scene.outputs.firstObject;double zoom=o.nativeZoom;CGPoint camera=o.nativeCamera;world=DWRectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command.worldRect=[NSValue valueWithRect:NSRectFromCGRect(DWRectFromJSON(world))];}
     if(window.displayFixed){
         DWScene *snapshot=self.controller.scene;DWOutput *chosen=nil;double best=INFINITY;
         CGPoint center=CGPointMake(CGRectGetMidX(bounds),CGRectGetMidY(bounds));
-        for(DWOutput *output in snapshot.outputs){CGRect screen=output.screenBounds;if(CGRectIsEmpty(screen))continue;
+        for(DWOutput *output in snapshot.outputs){CGRect screen=output.nativeScreenBounds;if(CGRectIsEmpty(screen))continue;
             double dx=center.x-fmin(CGRectGetMaxX(screen),fmax(CGRectGetMinX(screen),center.x)),dy=center.y-fmin(CGRectGetMaxY(screen),fmax(CGRectGetMinY(screen),center.y));double distance=dx*dx+dy*dy;
             if(distance<best){best=distance;chosen=output;}}
         if(!chosen){self.statusText=@"Utility panel has no live display to pin to";return NO;}
-        CGRect screen=chosen.screenBounds;
+        CGRect screen=chosen.nativeScreenBounds;
         command.pinOutput=chosen.identifier;command.pinPosition=CGPointMake(bounds.origin.x-screen.origin.x,bounds.origin.y-screen.origin.y);
     }
     DWControllerReply *reply=self.navigation?[self.navigation attach:command arrived:placed adopted:self.adopted utility:window.displayFixed]:[self.controller attach:command];source.logical=reply.window;if(!source.logical)return NO;source.observationToken=++self.observationEpoch;self.sources[source.logical]=source;
@@ -402,7 +402,7 @@ static void observeStats(NSUInteger sources,BOOL all) {
         }
         if(self.native){
             DWSource *binding=family?[self sourceBinding:source.logical]:nil;
-            if(family&&boundIdentity(family[@"identity"],source.identity)&&boundIdentity(DWNativeIdentity(binding.identity),source.identity)&&binding.generation&&binding.observationKnown.boolValue&&CGRectEqualToRect(binding.observedRect,bounds)){
+            if(family&&boundIdentity(family[@"identity"],source.identity)&&boundIdentity(DWNativeIdentity(binding.identity),source.identity)&&binding.generation&&binding.observationKnown.boolValue&&CGRectEqualToRect(binding.nativeObservedRect,bounds)){
                 NSDictionary *description=@{@"identity":source.identity,@"generation":binding.generation,@"native_bounds":DWRectJSON(bounds),@"members":asArray(family[@"members"])?:@[]};
                 if(![source.nativeFamily isEqual:description]){source.nativeFamily=description;self.nativeFamilyRevision++;}
             }else [self forgetNativeFamily:source];

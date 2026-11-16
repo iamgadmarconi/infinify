@@ -140,7 +140,7 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
 // wins, including pinned windows and widgets. Cropping does not lower density. Native ownership and world geometry are unchanged.
 - (CGSize)capturePixels:(LiveSource *)source native:(CGSize)native placements:(NSArray *)placements scales:(NSDictionary *)scales demandDensity:(double *)demand {
     double density=0;
-    for(DWPlacement *p in placements)if([p.window isEqual:source.logical]){CGRect r=p.screenRect;if(CGRectIsNull(r))continue;double scale=[scales[p.output]doubleValue];density=fmax(density,fmax(r.size.width/native.width,r.size.height/native.height)*(scale>0?scale:2));}
+    for(DWPlacement *p in placements)if([p.window isEqual:source.logical]){CGRect r=p.nativeScreenRect;if(CGRectIsNull(r))continue;double scale=[scales[p.output]doubleValue];density=fmax(density,fmax(r.size.width/native.width,r.size.height/native.height)*(scale>0?scale:2));}
     if(density<=0)density=source.captureNativeSize.width>0?source.captureSize.width/source.captureNativeSize.width:2;
     density=fmin(2,fmax(1.0/32,density));if(demand)*demand=density;
     density=fmax(density,exp2(ceil(2*log2(density))*.5));
