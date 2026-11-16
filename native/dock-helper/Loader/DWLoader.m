@@ -51,7 +51,7 @@
 #include <Security/Security.h>
 #include <signal.h>
 #include "DWPreflight.h"
-#include "DWJournalFields.h"
+#include "DWHelperLifecycle.h"
 #include "DWStagedPayload.h"
 #include "DWHelperClient.h"
 #include <sys/un.h>
@@ -177,47 +177,6 @@ static BOOL current_dock(pid_t pid,const struct proc_bsdinfo *expected) {
     return get_dock_pid()==pid && process_info(pid,&now) && now.pbi_uid==expected->pbi_uid
         && now.pbi_start_tvsec==expected->pbi_start_tvsec && now.pbi_start_tvusec==expected->pbi_start_tvusec;
 }
-static BOOL boot_session_uuid(char output[37]) {
-    char value[37]={0};size_t size=sizeof(value);
-    if(sysctlbyname("kern.bootsessionuuid",value,&size,NULL,0) || size!=sizeof(value) || value[36]!='\0')return NO;
-    for(NSUInteger i=0;i<36;i++) {
-        char c=value[i];
-        if(i==8 || i==13 || i==18 || i==23) { if(c!='-')return NO; }
-        else if(!((c>='0'&&c<='9')||(c>='A'&&c<='F')))return NO;
-    }
-    memcpy(output,value,sizeof(value));return YES;
-}
-static BOOL json_integer(id value,uint64_t minimum,uint64_t maximum) {
-    return [value isKindOfClass:NSNumber.class]
-        && CFGetTypeID((__bridge CFTypeRef)value)!=CFBooleanGetTypeID()
-        && !CFNumberIsFloatType((__bridge CFNumberRef)value)
-        && [value compare:@(minimum)]!=NSOrderedAscending
-        && [value compare:@(maximum)]!=NSOrderedDescending;
-}
-static const char *private_runtime_suffix(const char *path) {
-    static const char varPrefix[]="/var/tmp/if-native.",tmpPrefix[]="/tmp/if-native.";
-    const char *suffix=NULL;
-    if(path && !strncmp(path,varPrefix,sizeof(varPrefix)-1))suffix=path+sizeof(varPrefix)-1;
-    else if(path && !strncmp(path,tmpPrefix,sizeof(tmpPrefix)-1))suffix=path+sizeof(tmpPrefix)-1;
-    if(!suffix || strlen(suffix)!=6)return NULL;
-    for(const char *p=suffix;*p;p++)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')))return NULL;
-    return suffix;
-}
-static BOOL private_runtime_path(const char *path) { return private_runtime_suffix(path)!=NULL; }
-static BOOL retired_process(pid_t pid,uint64_t birthSec,uint64_t birthUsec) {
-    struct proc_bsdinfo current={0};
-    errno=0;
-    int length=proc_pidinfo(pid,PROC_PIDTBSDINFO,0,&current,sizeof(current));
-    if(length==(int)sizeof(current)) {
-        if(current.pbi_pid!=(uint32_t)pid || !current.pbi_start_tvsec || current.pbi_start_tvusec>=1000000)return NO;
-        return current.pbi_start_tvsec!=birthSec || current.pbi_start_tvusec!=birthUsec;
-    }
-    if(length!=0 && errno==ESRCH)return YES;
-    if(length!=0)return NO;
-    if(errno==ESRCH)return YES;
-    if(kill(pid,0)==-1 && errno==ESRCH)return YES;
-    return NO;
-}
 static BOOL write_all_fd(int fd,const void *bytes,size_t length) {
     const uint8_t *cursor=bytes;
     while(length) {
@@ -228,118 +187,12 @@ static BOOL write_all_fd(int fd,const void *bytes,size_t length) {
     }
     return YES;
 }
-static NSString *sha256_hex(NSData *data) {
-    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
-    if(!CC_SHA256(data.bytes,(CC_LONG)data.length,digest))return nil;
-    NSMutableString *hex=[NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH*2];
-    for(unsigned i=0;i<CC_SHA256_DIGEST_LENGTH;i++)[hex appendFormat:@"%02x",digest[i]];
-    return hex;
-}
-static BOOL recovery_journal(const char *sourcePath,const char *runtime,const struct proc_bsdinfo *dock,
-                             pid_t expectedPID,uint64_t expectedSec,uint64_t expectedUsec,
-                             NSData **sourceBytes,NSDictionary **recoveryFields) {
-    if(!sourcePath || sourcePath[0]!='/' || strlen(sourcePath)>=PATH_MAX || !private_runtime_path(runtime))return NO;
-    const char *lastSlash=strrchr(sourcePath,'/');
-    if(!lastSlash || strcmp(lastSlash+1,"v2-journal.json"))return NO;
-    size_t directoryLength=(size_t)(lastSlash-sourcePath);
-    if(!directoryLength || directoryLength>=PATH_MAX)return NO;
-    char sourceDirectory[PATH_MAX];memcpy(sourceDirectory,sourcePath,directoryLength);sourceDirectory[directoryLength]=0;
-    const char *runtimeSuffix=private_runtime_suffix(runtime),*sourceSuffix=private_runtime_suffix(sourceDirectory);
-    if(!runtimeSuffix || !sourceSuffix || !strcmp(sourceSuffix,runtimeSuffix))return NO;
-    int sourceFD=open(sourceDirectory,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-    if(sourceFD<0)return NO;
-    struct stat directoryStat={0},stageStat={0};
-    BOOL ok=fstat(sourceFD,&directoryStat)==0 && S_ISDIR(directoryStat.st_mode)
-        && directoryStat.st_uid==dock->pbi_uid && (directoryStat.st_mode&07777)==0700;
-    if(ok) {
-        if(fstatat(sourceFD,"v2-journal.next",&stageStat,AT_SYMLINK_NOFOLLOW)==0 || errno!=ENOENT)ok=NO;
-    }
-    int journalFD=ok ? openat(sourceFD,"v2-journal.json",O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK) : -1;
-    if(journalFD<0)ok=NO;
-    struct stat fileStat={0};
-    if(ok)ok=fstat(journalFD,&fileStat)==0 && S_ISREG(fileStat.st_mode) && fileStat.st_uid==dock->pbi_uid
-        && (fileStat.st_mode&07777)==0600 && fileStat.st_size>0 && fileStat.st_size<=4*1024*1024;
-    NSMutableData *data=ok ? [NSMutableData dataWithLength:(NSUInteger)fileStat.st_size] : nil;
-    if(ok) {
-        uint8_t *cursor=data.mutableBytes;size_t remaining=(size_t)fileStat.st_size;
-        while(remaining) {
-            ssize_t count=read(journalFD,cursor,remaining);
-            if(count<0 && errno==EINTR)continue;
-            if(count<=0){ok=NO;break;}
-            cursor+=(size_t)count;remaining-=(size_t)count;
-        }
-        char extra;
-        if(ok) {
-            ssize_t count;
-            do { count=read(journalFD,&extra,1); } while(count<0 && errno==EINTR);
-            if(count!=0)ok=NO;
-        }
-    }
-    if(journalFD>=0)close(journalFD);
-    if(sourceFD>=0)close(sourceFD);
-    if(!ok)return NO;
-
-    NSDictionary *journal=[NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
-    if(![journal isKindOfClass:NSDictionary.class])return NO;
-    NSArray *keys=@[@"v",@"server_pid",@"server_birth_sec",@"server_birth_usec",@"server_uid",@"boot_uuid",
-        @"generation",@"state",@"windows",@"released_windows",@"last_restore"];
-    NSArray *windows=journal[@"windows"],*released=journal[@"released_windows"];
-    char bootUUID[37];
-    if(!boot_session_uuid(bootUUID) || !dw_exact_keys(journal,keys)
-        || !json_integer(journal[@"v"],4,4) || !json_integer(journal[@"server_pid"],2,INT_MAX)
-        || !json_integer(journal[@"server_birth_sec"],1,UINT64_MAX) || !json_integer(journal[@"server_birth_usec"],0,999999)
-        || !json_integer(journal[@"server_uid"],1,UINT32_MAX) || !dw_boot_uuid_valid(journal[@"boot_uuid"])
-        || !json_integer(journal[@"generation"],0,UINT64_MAX-1)
-        || ![@[@"empty",@"holding",@"restoring"] containsObject:journal[@"state"]]
-        || ![windows isKindOfClass:NSArray.class] || ![released isKindOfClass:NSArray.class]
-        || windows.count>1024 || released.count>1024 || windows.count+released.count>1024
-        || (journal[@"last_restore"]!=NSNull.null && ![journal[@"last_restore"] isKindOfClass:NSDictionary.class]))return NO;
-    if([journal[@"server_pid"]intValue]!=expectedPID || [journal[@"server_birth_sec"]unsignedLongLongValue]!=expectedSec
-        || [journal[@"server_birth_usec"]unsignedLongLongValue]!=expectedUsec
-        || [journal[@"server_uid"]unsignedIntValue]!=dock->pbi_uid
-        || ![journal[@"boot_uuid"]isEqual:[NSString stringWithUTF8String:bootUUID]]
-        || !retired_process(expectedPID,expectedSec,expectedUsec))return NO;
-    NSString *digest=sha256_hex(data);
-    if(!digest)return NO;
-    *sourceBytes=data;
-    *recoveryFields=@{@"recovery_source_sha256":digest,@"recovery_server_pid":journal[@"server_pid"],
-        @"recovery_server_birth_sec":journal[@"server_birth_sec"],@"recovery_server_birth_usec":journal[@"server_birth_usec"],
-        @"recovery_server_uid":journal[@"server_uid"],@"recovery_boot_uuid":journal[@"boot_uuid"]};
-    return YES;
-}
 static BOOL parse_decimal(const char *text,uint64_t maximum,uint64_t *value) {
     if(!text || !*text)return NO;
     for(const char *p=text;*p;p++)if(*p<'0' || *p>'9')return NO;
     errno=0;char *end=NULL;unsigned long long number=strtoull(text,&end,10);
     if(errno==ERANGE || *end || number>maximum)return NO;
     *value=number;return YES;
-}
-static BOOL valid_nonce(const char *nonce) {
-    if(strlen(nonce)!=64)return NO;
-    for(const char *p=nonce;*p;p++)if(!((*p>='0' && *p<='9') || (*p>='a' && *p<='f')))return NO;
-    return YES;
-}
-// The production launcher never places credentials in argv. O_NONBLOCK also
-// avoids waiting on a substituted FIFO before fstat rejects its file type.
-static BOOL read_nonce_file(const char *path,uid_t uid,char nonce[65]) {
-    if(path[0]!='/')return NO;
-    int fd=open(path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
-    if(fd<0)return NO;
-    struct stat st;
-    BOOL ok=fstat(fd,&st)==0 && S_ISREG(st.st_mode) && st.st_uid==uid
-        && (st.st_mode&07777)==0600 && (st.st_size==64 || st.st_size==65);
-    char bytes[66];size_t used=0;
-    while(ok && used<sizeof(bytes)) {
-        ssize_t n=read(fd,bytes+used,sizeof(bytes)-used);
-        if(n<0 && errno==EINTR)continue;
-        if(n<0){ok=NO;break;}
-        if(!n)break;
-        used+=(size_t)n;
-    }
-    close(fd);
-    if(!ok || (used!=64 && !(used==65 && bytes[64]=='\n')))return NO;
-    memcpy(nonce,bytes,64);nonce[64]=0;
-    return valid_nonce(nonce);
 }
 // Readiness audits protocol v2 without submitting a frame or enrolling a window.
 // dwclient binds both authenticated peers to their kernel PID/effective UID; the
@@ -444,7 +297,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         pid_t pid=get_dock_pid();struct proc_bsdinfo info;
         if(!process_info(pid,&info) || !current_dock(pid,&info)){fprintf(stderr,"could not locate stable Dock identity\n");return 1;}
         char bootUUID[37];
-        if(!boot_session_uuid(bootUUID)){fprintf(stderr,"could not identify current boot session\n");return 1;}
+        if(!DWHelperBootSessionUUID(bootUUID)){fprintf(stderr,"could not identify current boot session\n");return 1;}
         printf("{\"pid\":%d,\"birth_sec\":%" PRIu64 ",\"birth_usec\":%" PRIu64 ",\"uid\":%u,\"boot_uuid\":\"%s\"}\n",
             pid,(uint64_t)info.pbi_start_tvsec,(uint64_t)info.pbi_start_tvusec,info.pbi_uid,bootUUID);
         return 0;
@@ -497,10 +350,11 @@ int main(int argc, char **argv) { @autoreleasepool {
         if(staged){fprintf(stderr,"staged payload refused: %s\n",staged);return 1;}
     } else if(lstat(payload_path,&st)||!S_ISREG(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&0022)){fprintf(stderr,"payload ownership/mode invalid (neither the login user's own file nor a payload staged by the launch daemon)\n");return 1;}
     if(lstat(runtime,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=dockInfo.pbi_uid||(st.st_mode&07777)!=0700){fprintf(stderr,"create a fresh 0700 runtime directory as Dock login user first\n");return 1;}
+    DWHelperLifecycle *lifecycle=[DWHelperLifecycle systemLifecycle];
     char nonce[65];
-    if(!read_nonce_file(nonceFile,dockInfo.pbi_uid,nonce)){fprintf(stderr,"nonce file must be a login-user-owned regular 0600 file containing 64 lowercase hex bytes and optional newline\n");return 1;}
+    if(!DWHelperReadNonceFile(nonceFile,dockInfo.pbi_uid,nonce)){fprintf(stderr,"nonce file must be a login-user-owned regular 0600 file containing 64 lowercase hex bytes and optional newline\n");return 1;}
     NSData *recoveryBytes=nil;NSDictionary *recoveryFields=nil;
-    if(recoveryJournalPath && !recovery_journal(recoveryJournalPath,runtime,&dockInfo,(pid_t)retiredPID,retiredSec,retiredUsec,&recoveryBytes,&recoveryFields)) {
+    if(recoveryJournalPath && ![lifecycle recoveryJournal:recoveryJournalPath runtime:runtime dock:&dockInfo expectedPID:(pid_t)retiredPID expectedSec:retiredSec expectedUsec:retiredUsec sourceBytes:&recoveryBytes recoveryFields:&recoveryFields]) {
         fprintf(stderr,"recovery journal is not a committed same-boot schema-4 record for a positively retired same-user Dock; refusing recovery\n");return 1;
     }
     char socketPath[sizeof(((struct sockaddr_un *)0)->sun_path)];

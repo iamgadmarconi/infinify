@@ -25,7 +25,7 @@
 // once more after 10 s, still at most kQuietTriesPerDock per Dock; the guard counts the launcher's own load before the
 // app started, so that a Dock killed soon after login is a strike.
 #import "DWDockReloader.h"
-#import "DWOwnerFile.h"
+#import "DWHelperLifecycle.h"
 #import <AppKit/AppKit.h>
 #include <libproc.h>
 #include <sys/stat.h>
@@ -36,8 +36,6 @@ const NSUInteger DWDockCrashLimit=3;
 static NSString *const kDockBundleID=@"com.apple.dock";
 static const NSUInteger kQuietTriesPerDock=2;
 static const NSTimeInterval kAnswerTimeout=150; // the launcher waits for the loader's own readiness audit (seconds)
-static NSString *const kPauseFile=@"auto-reload-paused.plist";
-static NSString *const kEndpointPrefix=@"INFINIFY-NATIVE-ENDPOINT ";
 
 void DWDockCrashGuardLoadStarted(DWDockCrashGuard *guard,NSTimeInterval at) { guard->loading=YES;guard->loaded=YES;guard->lastLoad=at; }
 void DWDockCrashGuardLoadEnded(DWDockCrashGuard *guard,NSTimeInterval at) { guard->loading=NO;guard->loaded=YES;guard->lastLoad=at; }
@@ -47,40 +45,6 @@ BOOL DWDockCrashGuardDockRestarted(DWDockCrashGuard *guard,NSTimeInterval at) {
     return guard->strikes>=DWDockCrashLimit;
 }
 void DWDockCrashGuardReset(DWDockCrashGuard *guard) { guard->strikes=0; }
-
-NSString *DWDockReloadStateDirectory(void) { return [DWSupportDirectory() stringByAppendingPathComponent:@"native-desktop"]; }
-BOOL DWDockReloadPaused(NSString *directory,NSString *payloadSHA256) {
-    NSString *path=[directory stringByAppendingPathComponent:kPauseFile];
-    struct stat st;
-    if(lstat(path.fileSystemRepresentation,&st))return NO;
-    // Present but not a pause this user made: it cannot be told from one, so it holds loading back until the owner loads by hand.
-    NSDictionary *record=DWOwnerFileReadPlist(path);
-    if(!record||![record[@"version"] isEqual:@1]||![record[@"payload_sha256"] isKindOfClass:NSString.class])return YES;
-    return [record[@"payload_sha256"] isEqualToString:payloadSHA256];
-}
-BOOL DWDockReloadPause(NSString *directory,NSString *payloadSHA256,NSString *reason) {
-    if(payloadSHA256.length!=64)return NO;
-    return DWOwnerFileWritePlist([directory stringByAppendingPathComponent:kPauseFile],
-        @{@"version":@1,@"payload_sha256":payloadSHA256,@"paused_at":[NSDate date],@"reason":reason?:@""});
-}
-BOOL DWDockReloadResume(NSString *directory) { return DWOwnerFileRemove([directory stringByAppendingPathComponent:kPauseFile]); }
-
-BOOL DWDockReloadParseEndpoint(NSString *output,NSString *__autoreleasing *runtime,NSString *__autoreleasing *nonceFile) {
-    NSString *line=nil;
-    for(NSString *candidate in [output componentsSeparatedByString:@"\n"])if([candidate hasPrefix:kEndpointPrefix])line=candidate;
-    if(!line)return NO;
-    NSArray<NSString *> *parts=[[line substringFromIndex:kEndpointPrefix.length] componentsSeparatedByString:@" "];
-    if(parts.count!=2)return NO;
-    NSString *path=parts[0],*nonce=parts[1];
-    NSString *matchedPrefix=nil;
-    for(NSString *prefix in @[@"/var/tmp/if-native.",@"/tmp/if-native."])if([path hasPrefix:prefix]){matchedPrefix=prefix;break;}
-    if(!matchedPrefix||path.length!=matchedPrefix.length+6)return NO;
-    for(NSUInteger i=matchedPrefix.length;i<path.length;i++){unichar c=[path characterAtIndex:i];if(!((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')))return NO;}
-    if(![nonce isEqualToString:[path stringByAppendingString:@"/nonce"]])return NO;
-    if(runtime)*runtime=path;
-    if(nonceFile)*nonceFile=nonce;
-    return YES;
-}
 
 // The Dock as the loader sees it: exactly one com.apple.dock, finished launching, with its process start.
 static BOOL currentDock(pid_t *pid,uint64_t *sec,uint64_t *usec) {

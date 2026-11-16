@@ -8,6 +8,7 @@
 // the daemon (native/dock-helper/Daemon/Daemon.m).
 #import "DWLoaddRequest.h"
 #import "DWStagedPayload.h"
+#import "DWHelperLifecycle.h"
 #import <Security/Security.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <dirent.h>
@@ -30,16 +31,13 @@ NSString *DWLoadCallerRequirement(NSString *team) {
     return [NSString stringWithFormat:@"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%@\"",DWLoadAppIdentifier,team];
 }
 
-// /var/tmp/if-native.XXXXXX (and /tmp/if-native.XXXXXX from 0.2.9 and earlier), the forms DWLoader.m's private_runtime_path accepts.
+// Request grammar shares the lifecycle runtime spelling, not filesystem access.
 static NSString *runtimeSuffix(NSString *path) {
     if(![path isKindOfClass:NSString.class])return nil;
-    for(NSString *prefix in @[@"/var/tmp/if-native.",@"/tmp/if-native."]){
-        if(path.length==prefix.length+DW_STAGED_SUFFIX_LENGTH&&[path hasPrefix:prefix]){
-            for(NSUInteger i=prefix.length;i<path.length;i++)if(!alnum([path characterAtIndex:i]))return nil;
-            return [path substringFromIndex:prefix.length];
-        }
-    }
-    return nil;
+    const char *bytes=path.UTF8String;
+    if(!bytes || strlen(bytes)!=path.length)return nil;
+    const char *suffix=DWHelperRuntimeSuffix(bytes);
+    return suffix?@(suffix):nil;
 }
 static BOOL runtimePath(NSString *path) { return runtimeSuffix(path)!=nil; }
 // A canonical unsigned decimal in [minimum, maximum]: no sign, no space, no leading zero.

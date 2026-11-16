@@ -22,7 +22,7 @@ Do not commit generated build products, local scene saves, or runtime credential
 ## Layout and naming
 
 - Native code lives in `native/app/<Module>` (Desktop, Canvas, Windows, Input, CompositorMode, Navigation, System, Support,
-  Resources) and `native/dock-helper/<Module>` (Payload, Loader, Daemon, Client). `main.m` is the entry point only.
+  Resources) and `native/dock-helper/<Module>` (Payload, Loader, Daemon, Client, Lifecycle). `main.m` is the entry point only.
 - A file that defines a class is named exactly after its primary class (`DWWindowManager.h/.m`); a category is
   `Class+Category.m`; a class's internal interface is `Class+Private.h`. A C-function-only module is
   `DW<Descriptive>.h/.m`. Prefixes: `DW` for the shell, `IF` for the compositor and background modules.

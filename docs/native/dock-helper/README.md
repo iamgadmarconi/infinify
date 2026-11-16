@@ -15,6 +15,7 @@ native-window compositing.
 
 | Document | What it holds |
 | --- | --- |
+| [Lifecycle/README.md](Lifecycle/README.md) | Shared runtime, nonce, launch and recovery rules |
 | [Loader/README.md](Loader/README.md) | The explicit production launcher: loader, doctor, manifest |
 | [Daemon/README.md](Daemon/README.md) | The launch daemon, login start and Dock reload |
 | [Client/README.md](Client/README.md) | Protocol v2 and the client library |
