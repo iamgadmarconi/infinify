@@ -79,11 +79,11 @@
     [state.menuLayer.renderer purge];[state.menuPanel orderOut:nil];[state.menuPanel close];
     state.menuPanel=nil;state.menuLayer=nil;state.menuFrame=nil;state.menuDirty=NO;
 }
-- (void)describeMenuBackground:(DWCanvasOutput *)state output:(NSDictionary *)output snapshot:(NSDictionary *)snapshot {
-    NSNumber *identifier=DWTyped(output[@"id"],NSNumber.class);CGRect bounds=rectOf(output[@"screen_bounds"]);
-    NSDictionary *context=DWTyped(DWTyped(DWTyped(snapshot[@"navigation"],NSDictionary.class)[@"contexts"],NSDictionary.class)[identifier.stringValue],NSDictionary.class);
-    CGRect usable=rectOf(context[@"usable_rect_local"]);double top=usable.origin.y;
-    if(!self.nativeWindows||!self.nativeMenuBackground||!DWTyped(output[@"fullscreen"],NSDictionary.class)||CGRectIsNull(usable)||!isfinite(top)||top<=0||top>=bounds.size.height){[self stopMenuBackground:state];return;}
+- (void)describeMenuBackground:(DWCanvasOutput *)state output:(DWOutput *)output snapshot:(DWScene *)snapshot {
+    NSNumber *identifier=output.identifier;CGRect bounds=output.screenBoundsOrNull;
+    DWNavigationContext *context=[snapshot.navigation contextForOutput:identifier];
+    CGRect usable=context.usableRectLocalOrNull;double top=usable.origin.y;
+    if(!self.nativeWindows||!self.nativeMenuBackground||!output.fullscreen||CGRectIsNull(usable)||!isfinite(top)||top<=0||top>=bounds.size.height){[self stopMenuBackground:state];return;}
     top=ceil(top);if(top>=bounds.size.height){[self stopMenuBackground:state];return;}
     NSRect place=NSMakeRect(bounds.origin.x,NSMaxY(NSScreen.screens.firstObject.frame)-bounds.origin.y-top,bounds.size.width,top);
     if(!state.menuPanel){
@@ -134,11 +134,11 @@
 // outline onto the others (upstream build_output_outline_elements passes over one that is
 // visually fullscreen, opaque or see-through): an output with such a neighbour has its
 // outlines described again here, from the snapshot's outputs, without that neighbour's.
-- (void)fullscreen:(NSDictionary *)o among:(NSArray<NSDictionary *> *)all state:(DWCanvasOutput *)state {
-    IFCompositorFrame *frame=state.frame;NSDictionary *full=DWTyped(o[@"fullscreen"],NSDictionary.class);CGPoint corner=rectOf(o[@"screen_bounds"]).origin;
+- (void)fullscreen:(DWOutput *)o among:(NSArray<DWOutput *> *)all state:(DWCanvasOutput *)state {
+    IFCompositorFrame *frame=state.frame;DWFullscreen *full=o.fullscreen;CGPoint corner=o.screenBoundsOrNull.origin;
     // "black": nothing but the clear colour lies behind the window. "canvas": its opacity is below 1 and the canvas shows through it.
-    BOOL concealed=full&&![DWTyped(full[@"backdrop"],NSString.class)isEqual:@"canvas"],parked=NO;
-    for(NSDictionary *other in all)if(other!=o&&DWTyped(other[@"fullscreen"],NSDictionary.class))parked=YES;
+    BOOL concealed=full&&![full.backdrop isEqual:@"canvas"],parked=NO;
+    for(DWOutput *other in all)if(other!=o&&other.fullscreen)parked=YES;
     // Upstream shrinks a concealed output's chunk cache on every such frame: it frees its chunks, keeps its floor and has nothing pending.
     // Native windows fill the usable desktop area while this canvas covers the
     // entire display. Keep its background beneath the menu bar and uncovered
@@ -147,17 +147,17 @@
     frame.background=concealed&&!self.nativeWindows?nil:state.background;if(concealed){if(!self.nativeWindows)[state.background shrinkChunkCache];[frame setOutlineRects:NULL count:0];}
     else if(parked){
         NSMutableData *outlines=[NSMutableData data];
-        for(NSDictionary *other in all){
-            if(other==o||!DWTyped(other[@"id"],NSNumber.class)||[other[@"id"]isEqual:o[@"id"]]||DWTyped(other[@"fullscreen"],NSDictionary.class))continue;
-            CGPoint otherCamera=pointOf(other[@"camera"]);CGRect otherBounds=rectOf(other[@"screen_bounds"]);if(CGRectIsNull(otherBounds))continue;
-            CGRect outline=IFCompositorOutlineRect(frame.cameraX,frame.cameraY,frame.zoom,otherCamera.x,otherCamera.y,otherBounds.size,[DWTyped(other[@"zoom"],NSNumber.class)doubleValue]);[outlines appendBytes:&outline length:sizeof(outline)];
+        for(DWOutput *other in all){
+            if(other==o||!other.identifier||[other.identifier isEqual:o.identifier]||other.fullscreen)continue;
+            CGPoint otherCamera=other.camera;CGRect otherBounds=other.screenBoundsOrNull;if(CGRectIsNull(otherBounds))continue;
+            CGRect outline=IFCompositorOutlineRect(frame.cameraX,frame.cameraY,frame.zoom,otherCamera.x,otherCamera.y,otherBounds.size,[other.zoom doubleValue]);[outlines appendBytes:&outline length:sizeof(outline)];
         }
         [frame setOutlineRects:outlines.bytes count:outlines.length/sizeof(CGRect)];
     }
     for(NSNumber *window in state.placements){
-        NSDictionary *p=state.placements[window];IFCompositorElement *element=state.elements[window];CGRect screen=rectOf(p[@"screen_rect"]);
+        DWPlacement *p=state.placements[window];IFCompositorElement *element=state.elements[window];CGRect screen=p.screenRectOrNull;
         // The controller refuses a stand-in fullscreen; one marked so all the same is drawn as the stand-in it is.
-        if(![DWTyped(p[@"fullscreen"],NSNumber.class)boolValue]||element.kind!=IFCompositorElementKindWindow||CGRectIsNull(screen))continue;
+        if(![p.fullscreen boolValue]||element.kind!=IFCompositorElementKindWindow||CGRectIsNull(screen))continue;
         element.rect=CGRectOffset(screen,-corner.x,-corner.y);element.space=IFCompositorSpacePinned;
         element.decoration=IFCompositorDecorationDrawn(element.decoration,YES,IFCompositorCoverageNone);
     }

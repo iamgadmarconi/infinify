@@ -3,6 +3,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CoreVideo/CoreVideo.h>
 #import "DWCanvasAttachment.h"
+#import "DWScene.h"
 @class IFBackgroundProgram;
 // One window's live picture as the shell holds it: the latest pixel buffer of its
 // stream, a counter that moves with every frame, and where the window sits inside
@@ -10,7 +11,7 @@
 typedef struct { CVPixelBufferRef buffer;uint64_t generation;CGRect rect;CGSize pointSize;CGSize nativeSize; } DWCanvasContent;
 // `placement` is the window's entry of snapshot.placements, or, for a window that is
 // on no output, {window,presentation_settled,source} read from snapshot.windows.
-typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,NSDictionary *placement);
+typedef DWCanvasContent (^DWCanvasSource)(NSNumber *window,DWPlacement *placement);
 // The canvas drawn the way DriftWM draws it, from the controller's snapshot: one
 // compositor layer per output (background, the outlines of the other outputs'
 // viewports, every window with its shadow, border, rounded corners and opacity, and
@@ -55,7 +56,7 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // refresh and export, never for a video frame. A resolver may return the base
 // while an asynchronous image load is pending, then call -refreshBackgrounds.
 // The platform adapter owns screen/URL/options discovery and its image cache.
-@property(copy) IFBackgroundProgram *(^backgroundForOutput)(NSNumber *output,NSDictionary *description,IFBackgroundProgram *base);
+@property(copy) IFBackgroundProgram *(^backgroundForOutput)(NSNumber *output,DWOutput *description,IFBackgroundProgram *base);
 @property(readonly) BOOL inheritsMacBackground;
 // Replaces only changed output programs and schedules their redraw. The resolver
 // must retain explicit configured sources and perform no per-frame disk work.
@@ -69,7 +70,7 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // buckets occur, even for a pinned window captured alone. Root order, exact token
 // membership and barrier partitions use the live order's validation contract.
 // Called once before region clipping; never changes native ownership or cameras.
-@property(copy) NSArray<NSDictionary *> *(^exportOrder)(NSArray<NSDictionary *> *baseTokens,NSDictionary *effect,NSDictionary *snapshot);
+@property(copy) NSArray<NSDictionary *> *(^exportOrder)(NSArray<NSDictionary *> *baseTokens,DWShellEffect *effect,DWScene *snapshot);
 // Is this root covered by the frozen one-shot ordering cohort? Used only when
 // exportOrder is installed. Missing predicate means every root is a barrier.
 @property(copy) BOOL (^exportOrderRoot)(NSNumber *window);
@@ -100,10 +101,10 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // provider revision. Layout-equivalent snapshots compare by value (ignoring only
 // a placement's focused flag); exact source bindings and generations must match.
 // Callers must block stale replica input rather than regroup the drawn families.
-- (NSArray<NSDictionary *> *)appliedOrderForOutput:(NSNumber *)output snapshot:(NSDictionary *)snapshot;
+- (NSArray<NSDictionary *> *)appliedOrderForOutput:(NSNumber *)output snapshot:(DWScene *)snapshot;
 // Current stand-in chrome in global screen points: label, close, title or body.
 // nil for stale layout, a non-stand-in or a point outside its current clip.
-- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(NSDictionary *)snapshot;
+- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(DWScene *)snapshot;
 // Counts for -takeCounts. Set before the first frame is described; without it nothing is counted or timed.
 @property BOOL measured;
 - (DWCanvasCounts)takeCounts;
@@ -125,7 +126,7 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // Adopts snapshot.render. The background program, the chrome style, the outline
 // settings, [effects] and the error bar's messages are rebuilt only when
 // render.revision changed; YES when they were.
-- (BOOL)configure:(NSDictionary *)snapshot;
+- (BOOL)configure:(DWScene *)snapshot;
 // Why the background is not the configured one (a shader that does not compile, a
 // missing file: the module's own fallback is drawn instead), nil when it loaded as asked.
 @property (readonly) NSString *note;
@@ -134,7 +135,7 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // hosting window's backing scale. decorationScale: the largest backing scale among
 // all outputs, rounded up. Nothing is drawn here, and nothing is asked for: the caller
 // follows it with -flushDescribed.
-- (void)render:(NSDictionary *)snapshot outputs:(NSArray<NSNumber *> *)outputs host:(CALayer *)host origin:(CGPoint)origin scale:(CGFloat)scale decorationScale:(NSInteger)decorationScale;
+- (void)render:(DWScene *)snapshot outputs:(NSArray<NSNumber *> *)outputs host:(CALayer *)host origin:(CGPoint)origin scale:(CGFloat)scale decorationScale:(NSInteger)decorationScale;
 - (CALayer *)layerForOutput:(NSNumber *)output;
 // A stream delivered a frame for this window: only the outputs showing it are redrawn.
 // YES when that frame is the first picture of a window whose opening, or whose
@@ -196,9 +197,9 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // footprint of the output the region's centre is on, as upstream's.
 // Creates missing parent directories, then writes exactly that file. Returns
 // {path,width,height}, or {error} with the create/write failure stage.
-- (NSDictionary *)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot;
+- (NSDictionary *)screenshot:(DWShellEffect *)effect snapshot:(DWScene *)snapshot;
 // Same export with compression and file writes on a serial worker. Call on main;
 // offscreen rendering prepares independent pixels before returning. Completion
 // runs on main exactly once. The caller serializes requests to bound pixel memory.
-- (void)screenshot:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot completed:(void (^)(NSDictionary *))completed;
+- (void)screenshot:(DWShellEffect *)effect snapshot:(DWScene *)snapshot completed:(void (^)(NSDictionary *))completed;
 @end

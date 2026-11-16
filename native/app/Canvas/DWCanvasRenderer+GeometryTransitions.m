@@ -51,26 +51,26 @@ static CGRect geometryFromScreen(CGRect rect,IFCompositorSpace space,IFComposito
 }
 
 @implementation DWCanvasRenderer (GeometryTransitions)
-- (void)describeGeometry:(NSDictionary *)snapshot state:(DWCanvasOutput *)state now:(double)now {
+- (void)describeGeometry:(DWScene *)snapshot state:(DWCanvasOutput *)state now:(double)now {
     BOOL wasAnimating=state.geometryAnimating;
     state.geometryAnimating=NO;
     // Physical WindowServer windows must keep the geometry submitted to their
     // native presenter; this overlay animation cannot move those windows.
     if(self.nativeWindows){[state.geometry removeAllObjects];state.geometryNeedsSettledDraw|=wasAnimating;return;}
     if(!state.geometry)state.geometry=[NSMutableDictionary dictionary];
-    CGRect bounds=rectOf(state.orderOutput[@"screen_bounds"]);
+    CGRect bounds=state.orderOutput.screenBoundsOrNull;
     if(!CGRectEqualToRect(bounds,state.geometryBounds)){[state.geometry removeAllObjects];state.geometryBounds=bounds;}
-    NSDictionary *resize=DWTyped(snapshot[@"native_resize"],NSDictionary.class);NSString *phase=DWTyped(resize[@"phase"],NSString.class);
-    BOOL live=DWTyped(resize[@"pending_effect"],NSDictionary.class)||[phase isEqual:@"preparing"]||[phase isEqual:@"dragging"]||[phase isEqual:@"settling"];
+    DWResizeTransaction *resize=snapshot.nativeResize;NSString *phase=resize.phase;
+    BOOL live=resize.pendingEffect||[phase isEqual:@"preparing"]||[phase isEqual:@"dragging"]||[phase isEqual:@"settling"];
     double duration=fmin(.35,fmax(.20,IFCompositorAnimationDuration(self.effects.animationSpeed)));
     for(NSNumber *window in state.geometry.allKeys)if(!state.elements[window])[state.geometry removeObjectForKey:window];
     for(NSNumber *window in state.elements){
-        IFCompositorElement *element=state.elements[window];NSDictionary *p=state.placements[window],*source=DWTyped(p[@"source"],NSDictionary.class),*identity=DWTyped(source[@"identity"],NSDictionary.class);NSNumber *generation=DWTyped(source[@"generation"],NSNumber.class);
+        IFCompositorElement *element=state.elements[window];DWPlacement *p=state.placements[window];DWSource *source=p.source;DWIdentity *identity=source.identity;NSNumber *generation=source.generation;
         if(element.kind!=IFCompositorElementKindWindow||!identity||!generation||!DWFiniteRect(element.rect)){[state.geometry removeObjectForKey:window];continue;}
         DWCanvasGeometry *geometry=state.geometry[window];BOOL known=geometry&&[geometry.identity isEqual:identity]&&[geometry.generation isEqual:generation];
-        BOOL full=[DWTyped(p[@"fullscreen"],NSNumber.class)boolValue];
-        BOOL action=[resize[@"window"]isEqual:window]&&DWTyped(resize[@"interactive"],NSNumber.class)&&![resize[@"interactive"]boolValue]&&[resize[@"identity"]isEqual:identity]&&[resize[@"generation"]isEqual:generation];
-        NSNumber *transaction=action?DWTyped(resize[@"transaction"],NSNumber.class):nil;CGRect target=element.rect;
+        BOOL full=[p.fullscreen boolValue];
+        BOOL action=[resize.window isEqual:window]&&resize.interactive&&![resize.interactive boolValue]&&[resize.identity isEqual:identity]&&[resize.generation isEqual:generation];
+        NSNumber *transaction=action?resize.transaction:nil;CGRect target=element.rect;
         if(!known){geometry=[DWCanvasGeometry new];geometry.identity=identity;geometry.generation=generation;geometry.target=target;geometry.space=element.space;geometry.screen=geometryScreen(target,element.space,state.frame);state.geometry[window]=geometry;}
         BOOL changed=geometry.space!=element.space||!CGRectEqualToRect(geometry.target,target);
         BOOL permitted=(geometry.active||geometry.fullscreen!=full||(action&&(live||geometry.actionLive||![geometry.transaction isEqual:transaction])))&&!(action&&[geometry.blockedTransaction isEqual:transaction]);

@@ -68,9 +68,9 @@ NSArray<NSDictionary *> *DWCanvasValidatedOrder(NSArray<NSDictionary *> *candida
     static const IFCompositorStackLayer buckets[]={IFCompositorStackLayerWidget,IFCompositorStackLayerNormal,IFCompositorStackLayerClosing,IFCompositorStackLayerPinned};
     for(NSUInteger i=0;i<sizeof(buckets)/sizeof(*buckets);i++){
         IFCompositorStackLayer bucket=buckets[i];
-        for(NSDictionary *p in state.orderPlacements){
-            NSNumber *window=p[@"window"];IFCompositorElement *root=state.elements[window];
-            IFCompositorStackLayer layer=root?root.layer:[DWTyped(p[@"pinned"],NSNumber.class)boolValue]?IFCompositorStackLayerPinned:[DWTyped(p[@"widget"],NSNumber.class)boolValue]?IFCompositorStackLayerWidget:IFCompositorStackLayerNormal;
+        for(DWPlacement *p in state.orderPlacements){
+            NSNumber *window=p.window;IFCompositorElement *root=state.elements[window];
+            IFCompositorStackLayer layer=root?root.layer:[p.pinned boolValue]?IFCompositorStackLayerPinned:[p.widget boolValue]?IFCompositorStackLayerWidget:IFCompositorStackLayerNormal;
             if(layer!=bucket)continue;
             BOOL barrier=!root||root.kind==IFCompositorElementKindStandIn;
             NSDictionary *token=barrier?@{@"window":window,@"bucket":@(bucket),@"barrier":@YES}:@{@"window":window,@"bucket":@(bucket)};

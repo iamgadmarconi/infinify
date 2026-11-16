@@ -57,7 +57,7 @@
 @property IFCompositorSpace space;
 @property double start,end;
 @property BOOL active,drawn,fullscreen,actionLive;
-@property NSDictionary *identity;
+@property DWIdentity *identity;
 @property NSNumber *generation,*transaction,*blockedTransaction;
 @end
 // One output on screen: its layer, the frame description refilled in place, and the
@@ -72,18 +72,18 @@
 // The background as this output draws it: its own chunk cache when the program has one, else the program itself.
 @property IFBackgroundProgram *background;
 @property NSMutableDictionary<NSNumber *,IFCompositorElement *> *elements;
-@property NSMutableDictionary<NSNumber *,NSDictionary *> *placements;
+@property NSMutableDictionary<NSNumber *,DWPlacement *> *placements;
 @property NSMutableDictionary<NSNumber *,DWCanvasFamily *> *attachments;
 @property NSMutableDictionary<NSNumber *,DWCanvasGeometry *> *geometry;
 @property BOOL geometryAnimating;
 @property BOOL geometryNeedsSettledDraw;
 @property CGRect geometryBounds;
 // Includes physical placements absent from `elements`: their tokens are barriers.
-@property NSArray<NSDictionary *> *orderPlacements;
-@property NSDictionary *orderOutput;
-@property NSDictionary *orderSnapshot;
-@property NSDictionary *orderMatchedSnapshot;
-@property NSArray<NSDictionary *> *orderBinding;
+@property NSArray<DWPlacement *> *orderPlacements;
+@property DWOutput *orderOutput;
+@property DWScene *orderSnapshot;
+@property DWScene *orderMatchedSnapshot;
+@property NSArray<DWPlacement *> *orderBinding;
 @property NSArray<NSDictionary *> *orderBase,*orderApplied;
 @property NSDictionary<NSDictionary *,IFCompositorElement *> *orderElements;
 @property id orderProvider,orderRevisionProvider;
@@ -142,12 +142,12 @@
 @interface DWCanvasRenderer ()
 - (void)setNeedsFlush;
 - (uint64_t)mark;
-- (BOOL)fill:(IFCompositorElement *)element window:(NSNumber *)window placement:(NSDictionary *)p rect:(CGRect)world onScreen:(BOOL)onScreen;
+- (BOOL)fill:(IFCompositorElement *)element window:(NSNumber *)window placement:(DWPlacement *)p rect:(CGRect)world onScreen:(BOOL)onScreen;
 @end
 @interface DWCanvasRenderer (Fullscreen)
 - (void)stopMenuBackground:(DWCanvasOutput *)state;
-- (void)describeMenuBackground:(DWCanvasOutput *)state output:(NSDictionary *)output snapshot:(NSDictionary *)snapshot;
-- (void)fullscreen:(NSDictionary *)o among:(NSArray<NSDictionary *> *)all state:(DWCanvasOutput *)state;
+- (void)describeMenuBackground:(DWCanvasOutput *)state output:(DWOutput *)output snapshot:(DWScene *)snapshot;
+- (void)fullscreen:(DWOutput *)o among:(NSArray<DWOutput *> *)all state:(DWCanvasOutput *)state;
 - (void)flushMenuBackground:(DWCanvasOutput *)state;
 @end
 @interface DWCanvasRenderer (Families)
@@ -156,14 +156,14 @@
 - (void)attachmentsForWindow:(NSNumber *)window output:(NSNumber *)output state:(DWCanvasOutput *)state;
 @end
 @interface DWCanvasRenderer (Lifecycle)
-- (void)play:(NSDictionary *)snapshot now:(double)now;
+- (void)play:(DWScene *)snapshot now:(double)now;
 @end
 @interface DWCanvasRenderer (GeometryTransitions)
-- (void)describeGeometry:(NSDictionary *)snapshot state:(DWCanvasOutput *)state now:(double)now;
+- (void)describeGeometry:(DWScene *)snapshot state:(DWCanvasOutput *)state now:(double)now;
 - (void)advanceGeometry:(DWCanvasOutput *)state now:(double)now;
 @end
 @interface DWCanvasRenderer (Screenshot)
-- (NSDictionary *)screenshotPixels:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot;
+- (NSDictionary *)screenshotPixels:(DWShellEffect *)effect snapshot:(DWScene *)snapshot;
 @end
 // Helpers that were file-static before this file was split and are shared across its pieces.
 // They are static inline here, so no piece exports a generic C name. Two stay external under DW names:
@@ -177,25 +177,6 @@ static inline BOOL validAttachment(DWCanvasAttachment *image) {
     CGRect crop=image.contentRect;if(CGRectIsNull(crop))return YES;
     return DWFiniteRect(crop)&&crop.origin.x>=0&&crop.origin.y>=0&&CGRectGetMaxX(crop)<=CVPixelBufferGetWidth(image.buffer)&&CGRectGetMaxY(crop)<=CVPixelBufferGetHeight(image.buffer);
 }
-static inline CGPoint pointOf(id value) { NSDictionary *p=DWTyped(value,NSDictionary.class);return CGPointMake([DWTyped(p[@"x"],NSNumber.class)doubleValue],[DWTyped(p[@"y"],NSNumber.class)doubleValue]); }
-// The controller's {origin:{x,y},size:{width,height}}; CGRectNull for anything else.
-static inline CGRect rectOf(id value) {
-    NSDictionary *r=DWTyped(value,NSDictionary.class),*origin=DWTyped(r[@"origin"],NSDictionary.class),*size=DWTyped(r[@"size"],NSDictionary.class);if(!DWTyped(origin[@"x"],NSNumber.class)||!DWTyped(origin[@"y"],NSNumber.class)||!DWTyped(size[@"width"],NSNumber.class)||!DWTyped(size[@"height"],NSNumber.class))return CGRectNull;
-    return CGRectMake([DWTyped(origin[@"x"],NSNumber.class)doubleValue],[DWTyped(origin[@"y"],NSNumber.class)doubleValue],[DWTyped(size[@"width"],NSNumber.class)doubleValue],[DWTyped(size[@"height"],NSNumber.class)doubleValue]);
-}
-static inline BOOL currentDrawnPlacement(NSDictionary *p) {
-    NSString *kind=DWTyped(p[@"kind"],NSString.class);
-    return ([kind isEqual:@"window"]||[kind isEqual:@"standin"])&&DWTyped(p[@"focused"],NSNumber.class)&&DWFiniteRect(rectOf(p[@"world_rect"]));
-}
-static inline BOOL currentOutputPlacement(NSDictionary *p) {
-    return currentDrawnPlacement(p)&&DWTyped(p[@"window"],NSNumber.class)&&DWTyped(p[@"output"],NSNumber.class);
-}
-static inline BOOL currentOutputPlacements(id value) {
-    if(![value isKindOfClass:NSArray.class])return NO;
-    for(id entry in value)if(!currentOutputPlacement(DWTyped(entry,NSDictionary.class)))return NO;
-    return YES;
-}
-static inline BOOL pinnedOf(NSDictionary *p) { return [DWTyped(p[@"pinned"],NSNumber.class)boolValue]||DWTyped(p[@"pinned"],NSDictionary.class)!=nil; }
 // When an animation that begins now began, on this output's clock. Upstream advances every animation before it draws, so the
 // first frame that shows one is already a tick in: the time of the last frame presented. This canvas draws on demand, so
 // that frame can be long past, and the animation would be over before it was seen: never more than one 60 Hz tick ago.

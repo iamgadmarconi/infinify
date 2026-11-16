@@ -119,14 +119,14 @@
 // holds the elements of its last frame. What the list held when this renderer described its first frame happened before
 // there was a frame to animate. An opening is the output's own to start, in -render:. With animation_speed 1 upstream's
 // animations are over on their first tick, and nothing is played.
-- (void)play:(NSDictionary *)snapshot now:(double)now {
-    NSArray *events=list(snapshot[@"lifecycle_events"]);uint64_t played=self.played,newest=played;
-    for(id event in events)newest=MAX(newest,[DWTyped(DWTyped(event,NSDictionary.class)[@"serial"],NSNumber.class)unsignedLongLongValue]);
+- (void)play:(DWScene *)snapshot now:(double)now {
+    NSArray *events=snapshot.lifecycleEvents;uint64_t played=self.played,newest=played;
+    for(id entry in events){DWLifecycleEvent *event=[entry isKindOfClass:DWLifecycleEvent.class]?entry:nil;newest=MAX(newest,event.serial.unsignedLongLongValue);}
     self.played=newest;if(!self.following){self.following=YES;return;}
     if(newest==played||self.effects.animationSpeed>=1)return;
     for(id entry in events){
-        NSDictionary *event=DWTyped(entry,NSDictionary.class);NSNumber *window=DWTyped(event[@"window"],NSNumber.class);NSString *name=DWTyped(event[@"event"],NSString.class);
-        if(!window||[DWTyped(event[@"serial"],NSNumber.class)unsignedLongLongValue]<=played)continue;
+        DWLifecycleEvent *event=[entry isKindOfClass:DWLifecycleEvent.class]?entry:nil;NSNumber *window=event.window;NSString *name=event.event;
+        if(!window||[event.serial unsignedLongLongValue]<=played)continue;
         if([name isEqual:@"close"]||[name isEqual:@"close_to_standin"])[self close:window inPlace:[name isEqual:@"close_to_standin"] now:now];
         else if([name isEqual:@"standin_dismiss"]||[name isEqual:@"standin_adopted"])[self fade:window inPlace:[name isEqual:@"standin_adopted"] now:now];
     }

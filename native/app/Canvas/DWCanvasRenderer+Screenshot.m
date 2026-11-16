@@ -36,9 +36,9 @@
 #import <ImageIO/ImageIO.h>
 
 // Upstream output_viewport_rect: size / zoom canvas units from the rounded camera. CGRectNull without an output.
-static CGRect viewportOf(NSDictionary *o) {
-    CGRect bounds=rectOf(o[@"screen_bounds"]);if(!o||CGRectIsNull(bounds))return CGRectNull;
-    CGPoint camera=pointOf(o[@"camera"]);double zoom=[DWTyped(o[@"zoom"],NSNumber.class)doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
+static CGRect viewportOf(DWOutput *o) {
+    CGRect bounds=o.screenBoundsOrNull;if(!o||CGRectIsNull(bounds))return CGRectNull;
+    CGPoint camera=o.camera;double zoom=[o.zoom doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
     return CGRectMake(round(camera.x),round(camera.y),round(round(bounds.size.width)/zoom),round(round(bounds.size.height)/zoom));
 }
 static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
@@ -57,68 +57,67 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
 // Upstream resolve_screenshot_region, for an effect that names its target only. The
 // controller's own `region`, when the effect carries one, is used instead: it knows
 // zoom.fit_padding and the decoration of windows that are on no output.
-- (CGRect)region:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot elements:(NSArray<IFCompositorElement *> *)elements isolate:(IFCompositorElement *)isolate refusal:(NSString *__autoreleasing *)refused {
-    NSArray<NSDictionary *> *outputs=list(snapshot[@"outputs"]);NSDictionary *active=nil;id target=effect[@"target"];NSDictionary *r=DWTyped(DWTyped(target,NSDictionary.class)[@"Region"],NSDictionary.class);
-    for(NSDictionary *o in outputs)if(DWTyped(effect[@"output"],NSNumber.class)&&[o[@"id"]isEqual:effect[@"output"]])active=o;
+- (CGRect)region:(DWShellEffect *)effect snapshot:(DWScene *)snapshot elements:(NSArray<IFCompositorElement *> *)elements isolate:(IFCompositorElement *)isolate refusal:(NSString *__autoreleasing *)refused {
+    NSArray<DWOutput *> *outputs=snapshot.outputs;DWOutput *active=nil;DWScreenshotTarget *target=effect.target;DWScreenshotRegionTarget *r=target.region;
+    for(DWOutput *o in outputs)if([o isKindOfClass:DWOutput.class]&&effect.output&&[o.identifier isEqual:effect.output])active=o;
     if(isolate)return [self visual:isolate];
-    if([target isEqual:@"Viewport"]){
+    if(target.kind==DWScreenshotTargetViewport){
         if(!active){*refused=@"no active output to capture";return CGRectNull;}
         return viewportOf(active);
     }
-    if([target isEqual:@"All"]){
+    if(target.kind==DWScreenshotTargetAll){
         // The union of every canvas window and stand-in, framed by zoom.fit_padding canvas units (upstream's default
         // without one). `elements` holds no pinned window; a widget is drawn and not framed, as upstream's is_canvas_window says.
         CGRect all=CGRectNull;for(IFCompositorElement *element in elements)if(element.layer!=IFCompositorStackLayerWidget)all=CGRectUnion(all,[self visual:element]);
         if(CGRectIsNull(all)){*refused=@"no windows to capture";return CGRectNull;}
-        double pad=round(fmax(DWTyped(effect[@"fit_padding"],NSNumber.class)?[effect[@"fit_padding"]doubleValue]:80,0));return CGRectInset(all,-pad,-pad);
+        double pad=round(fmax(effect.fitPadding?[effect.fitPadding doubleValue]:80,0));return CGRectInset(all,-pad,-pad);
     }
     if(!r){*refused=@"unknown screenshot target";return CGRectNull;}
-    long x=[DWTyped(r[@"x"],NSNumber.class)longValue],y=[DWTyped(r[@"y"],NSNumber.class)longValue],w=[DWTyped(r[@"w"],NSNumber.class)longValue],h=[DWTyped(r[@"h"],NSNumber.class)longValue];
+    long x=[r.x longValue],y=[r.y longValue],w=[r.w longValue],h=[r.h longValue];
     if(w<=0||h<=0){*refused=@"region width and height must be positive";return CGRectNull;}
     // rule_to_internal: the rectangle is centred on a Y-up canvas point.
-    if(![DWTyped(r[@"from_screen"],NSNumber.class)boolValue])return CGRectMake(x-w/2,-y-h/2,w,h);
+    if(![r.fromScreen boolValue])return CGRectMake(x-w/2,-y-h/2,w,h);
     // Screen points, mapped through the output they lie on, else the active one.
-    NSDictionary *output=nil;for(NSDictionary *o in outputs)if(!output&&CGRectContainsPoint(rectOf(o[@"screen_bounds"]),CGPointMake(x,y)))output=o;
+    DWOutput *output=nil;for(DWOutput *o in outputs)if([o isKindOfClass:DWOutput.class]&&!output&&CGRectContainsPoint(o.screenBoundsOrNull,CGPointMake(x,y)))output=o;
     if(!output)output=active;if(!output){*refused=@"no output for the screen region";return CGRectNull;}
-    CGPoint camera=pointOf(output[@"camera"]),corner=rectOf(output[@"screen_bounds"]).origin;double zoom=[DWTyped(output[@"zoom"],NSNumber.class)doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
+    CGPoint camera=output.camera,corner=output.screenBoundsOrNull.origin;double zoom=[output.zoom doubleValue];if(!(isfinite(zoom)&&zoom>0))zoom=1;
     return CGRectMake(round(camera.x+(x-corner.x)/zoom),round(camera.y+(y-corner.y)/zoom),round(w/zoom),round(h/zoom));
 }
-- (NSDictionary *)screenshotPixels:(NSDictionary *)effect snapshot:(NSDictionary *)snapshot {
-    NSString *path=DWTyped(effect[@"path"],NSString.class),*refused=nil;double scale=DWTyped(effect[@"scale"],NSNumber.class)?[effect[@"scale"]doubleValue]:NAN;
+- (NSDictionary *)screenshotPixels:(DWShellEffect *)effect snapshot:(DWScene *)snapshot {
+    NSString *path=effect.path,*refused=nil;double scale=effect.scale?[effect.scale doubleValue]:NAN;
     if(!path.isAbsolutePath)return refusal(@"screenshot path must be absolute");
     if(!snapshot)return refusal(@"no renderer available for capture");
-    if(!currentOutputPlacements(snapshot[@"placements"]))return refusal(@"snapshot placements do not match the current schema");
+    if(!snapshot.hasCurrentOutputPlacements)return refusal(@"snapshot placements do not match the current schema");
     [self configure:snapshot];
     // A window target is composed alone on transparency, its shadow included. The controller resolved the selector.
-    id target=effect[@"target"];IFCompositorElement *isolate=nil;NSDictionary *alone=DWTyped(DWTyped(target,NSDictionary.class)[@"Window"],NSDictionary.class);
-    NSNumber *wanted=alone?DWTyped(alone[@"window"],NSNumber.class)?:DWTyped(DWTyped(snapshot[@"focus"],NSDictionary.class)[@"intent"],NSNumber.class):nil;
+    DWScreenshotTarget *target=effect.target;IFCompositorElement *isolate=nil;DWScreenshotWindowTarget *alone=target.window;
+    NSNumber *wanted=alone?alone.window?:snapshot.focus.intent:nil;
     // Every world window bottom to top at its canvas rectangle, described by its placement on any
     // output; one that is on no output is described by its entry of the window list. Upstream
     // compose_capture_elements: a canvas capture never includes a screen-pinned window
     // (window_render_transform gives it no place without an output), and draws the widgets below the
     // other windows; only a window captured alone is drawn whatever it is, at its stage position,
     // which for a pinned window is the canvas frame its pin shows.
-    NSMutableDictionary<NSNumber *,NSDictionary *> *placed=[NSMutableDictionary dictionary];
-    for(id entry in list(snapshot[@"placements"])){
-        NSDictionary *p=DWTyped(entry,NSDictionary.class);NSNumber *window=DWTyped(p[@"window"],NSNumber.class);
-        if(currentOutputPlacement(p)&&(!placed[window]||[p[@"output"]isEqual:effect[@"output"]]))placed[window]=p;
+    NSMutableDictionary<NSNumber *,DWPlacement *> *placed=[NSMutableDictionary dictionary];
+    for(id entry in snapshot.placements){
+        DWPlacement *p=[entry isKindOfClass:DWPlacement.class]?entry:nil;NSNumber *window=p.window;
+        if(p.isCurrentOutputPlacement&&(!placed[window]||[p.output isEqual:effect.output]))placed[window]=p;
     }
     NSMutableArray<IFCompositorElement *> *elements=[NSMutableArray array];
     NSMutableDictionary<NSNumber *,NSArray<IFCompositorElement *> *> *attachments=[NSMutableDictionary dictionary];
     NSMutableArray<NSDictionary *> *exportTokens=self.exportOrder?[NSMutableArray array]:nil;
     NSMutableDictionary<NSDictionary *,IFCompositorElement *> *exportElements=self.exportOrder?[NSMutableDictionary dictionary]:nil;
-    for(id entry in list(snapshot[@"windows"])){
-        NSDictionary *w=DWTyped(entry,NSDictionary.class);if(!w)return refusal(@"snapshot window entries must be objects");
-        NSNumber *window=DWTyped(w[@"window"],NSNumber.class);CGRect world=rectOf(w[@"world_rect"]);NSDictionary *p=placed[window],*source=DWTyped(w[@"source"],NSDictionary.class),*metadata=DWTyped(w[@"metadata"],NSDictionary.class);
+    for(id entry in snapshot.windows){
+        DWWindow *w=[entry isKindOfClass:DWWindow.class]?entry:nil;if(!w)return refusal(@"snapshot window entries must be objects");
+        NSNumber *window=w.window;CGRect world=w.worldRectOrNull;DWPlacement *p=placed[window];
         // Upstream's windows are at least one pixel in each direction.
         if(!window||CGRectIsNull(world)||world.size.width<=0||world.size.height<=0)continue;
         // An isolated export has exactly this family's token set. Other roots
         // neither constrain its order nor borrow pixels into this composition.
         if(alone&&![window isEqual:wanted])continue;
-        if(pinnedOf(w)&&![window isEqual:wanted])continue;
-        if(!p){NSMutableDictionary *described=[w mutableCopy];BOOL settled=source&&[DWTyped(source[@"observation_known"],NSNumber.class)boolValue];
-            described[@"presentation_settled"]=settled?@YES:@NO;if(!described[@"title"])described[@"title"]=DWTyped(metadata[@"title"],NSString.class)?:@"";if(!described[@"app_name"])described[@"app_name"]=DWTyped(metadata[@"bundle_id"],NSString.class)?:@"";p=described;}
-        if(!currentDrawnPlacement(p))return refusal(@"snapshot window entries do not match the current schema");
+        if(w.isPinned&&![window isEqual:wanted])continue;
+        if(!p)p=w.capturePlacement;
+        if(!p.isCurrentDrawnPlacement)return refusal(@"snapshot window entries do not match the current schema");
         // Native presentation omits live pictures from the on-screen canvas, but
         // an export supplies separate one-shot pixels through the source provider.
         IFCompositorElement *element=[IFCompositorElement new];if(![self fill:element window:window placement:p rect:world onScreen:NO])return refusal(@"snapshot window entries do not match the current schema");[elements addObject:element];
@@ -129,7 +128,7 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
         // family's matching output may supply pixels when no one-shot ordering
         // contract is installed. Never borrow live observations into an ordered
         // one-shot export, or another output's geometry/capture generation.
-        NSArray<DWCanvasAttachment *> *familyImages=element.kind==IFCompositorElementKindWindow?(self.exportAttachments?self.exportAttachments(window):!self.exportOrder&&self.liveAttachments&&DWTyped(p[@"output"],NSNumber.class)?self.liveAttachments(window,p[@"output"]):nil):nil;
+        NSArray<DWCanvasAttachment *> *familyImages=element.kind==IFCompositorElementKindWindow?(self.exportAttachments?self.exportAttachments(window):!self.exportOrder&&self.liveAttachments&&p.output?self.liveAttachments(window,p.output):nil):nil;
         if(familyImages.count){NSMutableArray *family=[NSMutableArray array];NSMutableSet<NSString *> *keys=exportTokens?[NSMutableSet set]:nil;
             for(DWCanvasAttachment *image in familyImages){
                 if(!validAttachment(image))return refusal(@"capture attachment has no valid image geometry or source-pixel crop");
@@ -161,10 +160,10 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
         if(!isolate)return refusal(window?@"window has no capturable area":@"no window matching selector");
         // Upstream compose_capture_elements: a window captured alone is drawn as itself, at its rule's
         // opacity or 1, not at the opacity its focus gives it on screen. The controller resolved which.
-        NSNumber *opacity=DWTyped(DWTyped(DWTyped(target,NSDictionary.class)[@"Window"],NSDictionary.class)[@"opacity"],NSNumber.class);if(opacity){IFCompositorDecoration d=isolate.decoration;d.opacity=opacity.doubleValue;isolate.decoration=d;
+        NSNumber *opacity=target.window.opacity;if(opacity){IFCompositorDecoration d=isolate.decoration;d.opacity=opacity.doubleValue;isolate.decoration=d;
             for(IFCompositorElement *child in attachments[window]){IFCompositorDecoration d=child.decoration;d.opacity=opacity.doubleValue;child.decoration=d;}}
     }
-    CGRect region=rectOf(effect[@"region"]);if(CGRectIsNull(region))region=[self region:effect snapshot:snapshot elements:elements isolate:isolate refusal:&refused];
+    CGRect region=effect.regionOrNull;if(CGRectIsNull(region))region=[self region:effect snapshot:snapshot elements:elements isolate:isolate refusal:&refused];
     if(refused)return refusal(refused);
     // A Window effect's controller-supplied region describes the root's chrome;
     // attached popups and sheets can lie outside it. Include the complete family
@@ -181,10 +180,10 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
     // fixed to the screen, so a capture shows it over the canvas footprint of the output the region's centre
     // lies on, else of the active output. The region crops it and the rest stays transparent; with no such
     // output there is no background.
-    CGPoint backgroundCentre=CGPointMake(region.origin.x+trunc(region.size.width/2),region.origin.y+trunc(region.size.height/2));NSDictionary *backgroundOutput=nil,*activeBackgroundOutput=nil;
-    for(NSDictionary *output in list(snapshot[@"outputs"])){if(!backgroundOutput&&CGRectContainsPoint(viewportOf(output),backgroundCentre))backgroundOutput=output;if([output[@"id"]isEqual:effect[@"output"]])activeBackgroundOutput=output;}
+    CGPoint backgroundCentre=CGPointMake(region.origin.x+trunc(region.size.width/2),region.origin.y+trunc(region.size.height/2));DWOutput *backgroundOutput=nil,*activeBackgroundOutput=nil;
+    for(DWOutput *output in snapshot.outputs){if(![output isKindOfClass:DWOutput.class])continue;if(!backgroundOutput&&CGRectContainsPoint(viewportOf(output),backgroundCentre))backgroundOutput=output;if([output.identifier isEqual:effect.output])activeBackgroundOutput=output;}
     backgroundOutput=backgroundOutput?:activeBackgroundOutput;
-    IFBackgroundProgram *backgroundProgram=!isolate&&self.backgroundForOutput&&backgroundOutput?self.backgroundForOutput(DWTyped(backgroundOutput[@"id"],NSNumber.class),backgroundOutput,self.program):nil;backgroundProgram=backgroundProgram?:self.program;
+    IFBackgroundProgram *backgroundProgram=!isolate&&self.backgroundForOutput&&backgroundOutput?self.backgroundForOutput(backgroundOutput.identifier,backgroundOutput,self.program):nil;backgroundProgram=backgroundProgram?:self.program;
     BOOL wallpaper=!isolate&&backgroundProgram.kind==IFBackgroundKindWallpaper;CGRect dest=CGRectNull;
     if(wallpaper){
         dest=viewportOf(backgroundOutput);
@@ -209,7 +208,7 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
         // The picture that output shows, drawn by the same module at the capture's density (one texture at
         // most), laid under the scene at whole pixels. Core Graphics counts rows from the bottom.
         IFCompositorFrame *under=[IFCompositorFrame new];size_t wide=CGImageGetWidth(image),high=CGImageGetHeight(image);
-        CGRect paperBounds=rectOf(backgroundOutput[@"screen_bounds"]);CGPoint paperCamera=pointOf(backgroundOutput[@"camera"]);double paperZoom=[DWTyped(backgroundOutput[@"zoom"],NSNumber.class)doubleValue];
+        CGRect paperBounds=backgroundOutput.screenBoundsOrNull;CGPoint paperCamera=backgroundOutput.camera;double paperZoom=[backgroundOutput.zoom doubleValue];
         under.size=paperBounds.size;under.scale=fmin(scale/paperZoom,16384/fmax(paperBounds.size.width,paperBounds.size.height));under.cameraX=paperCamera.x;under.cameraY=paperCamera.y;under.zoom=paperZoom;under.time=frame.time;under.clear=IFCompositorClearTransparent;under.background=backgroundProgram;
         CGImageRef paper=[renderer newImageForFrame:under error:&error];CGColorSpaceRef srgb=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         CGContextRef context=paper?CGBitmapContextCreate(NULL,wide,high,8,0,srgb,kCGImageAlphaPremultipliedFirst|kCGBitmapByteOrder32Little):NULL;CGColorSpaceRelease(srgb);
