@@ -35,6 +35,14 @@ static const NSTimeInterval DWNativeGreenMapLifetime=1;
 static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictionary *current,NSDictionary *identity,
     CFTimeInterval now,BOOL nativeCurrent,CGRect native) {
     if(report){
+        if([report[@"title_incomplete"]boolValue]&&current&&[current[@"title"]count]){
+            double currentSampled=[current[@"sampled_at"]doubleValue],currentAge=now-currentSampled;
+            if(nativeCurrent&&[current[@"identity"]isEqual:identity]&&isfinite(currentSampled)&&currentSampled>0
+                &&isfinite(currentAge)&&currentAge>=0&&currentAge<=.5&&isfinite(native.origin.x)&&isfinite(native.origin.y)
+                &&isfinite(native.size.width)&&isfinite(native.size.height)&&native.size.width>0&&native.size.height>0
+                &&CGRectEqualToRect(DWRectFromJSON(current[@"native_bounds"]),native)
+                &&CGRectEqualToRect(DWRectFromJSON(report[@"native_bounds"]),native))return current;
+        }
         // A busy main queue can delay publication. Keep evidence that is
         // still valid for green-button hit testing. Title hits check their own
         // shorter lifetime when the press arrives.
@@ -62,7 +70,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
         dispatch_async(dispatch_get_main_queue(),^{Desktop *d=weak;source.nativeButtonsReading=NO;
             if(!d||d.cleaning||d.sessionInactive||d.native.ended||d.nativeSessionEpoch!=session||d.sources[source.logical]!=source||source.detached||source.nativeButtonsRevision!=revision||![source.identity isEqual:identity]||!DWInScope(d.scope,source.router.pid))return;
             NSDictionary *current=source.nativeButtons;CGRect native=CGRectZero;BOOL nativeCurrent=NO;
-            if(!report&&current){
+            if((!report||[report[@"title_incomplete"]boolValue])&&current){
                 DWFocusIdentity selected={.pid=[identity[@"pid"]intValue],.window=[identity[@"wid"]unsignedIntValue],.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
                 nativeCurrent=dw_focus_owner(selected,&native);
             }
@@ -81,11 +89,17 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
     }});
 }
 - (BOOL)nativeGreen:(LiveSource *)source at:(CGPoint)point {
-    if(!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime||![birth(source.router.pid)isEqual:source.router.processBirth]||!DWInScope(self.scope,source.router.pid))return NO;
+    if(![birth(source.router.pid)isEqual:source.router.processBirth]||!DWInScope(self.scope,source.router.pid))return NO;
     if(self.native.familiesNeeded){uint32_t parent=0;if(!DWNativeWindowParent(source.identity,&parent)||parent)return NO;}
     NSDictionary *info=windowInfo(source.router.wid);CGRect displayed=CGRectZero,own=CGRectZero;
     if([info[(id)kCGWindowOwnerPID]intValue]!=source.router.pid||![info[(id)kCGWindowIsOnscreen]boolValue]||[info[(id)kCGWindowAlpha]doubleValue]<=0
-        ||!info[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&displayed)||!DWNativeBounds(source.router.wid,&own))return NO;
+        ||!info[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&displayed)
+        ||!CGRectContainsPoint(displayed,point)||!DWNativeBounds(source.router.wid,&own))return NO;
+    if(!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime){
+        NSDictionary *fresh=DWNativeDecorationButtons(source.identity);
+        if(fresh)source.nativeButtons=fresh;
+    }
+    if(!source.nativeButtons||CACurrentMediaTime()-[source.nativeButtons[@"sampled_at"]doubleValue]>DWNativeGreenMapLifetime)return NO;
     return DWNativeDecorationHit(source.nativeButtons,source.identity,own,displayed,point);
 }
 - (BOOL)replicaGreen:(LiveSource *)source at:(CGPoint)point output:(NSNumber *)output {
@@ -103,7 +117,7 @@ static NSDictionary *DWNativeButtonsAfterRefresh(NSDictionary *report,NSDictiona
         ||self.routingEarlyNativeTitle||self.nativeGestureView||self.nativeScrollView||self.nativeMagnifyView||self.pointerGrab.active
         ||self.gestureOwner||self.trackpad.engaged||self.globalGestureContact||self.globalTrackpad.ownsTouches
         ||self.globalTrackpad.hasNativeMousePress||self.magnifying||(NSEvent.pressedMouseButtons&~1UL))return NO;
-    NSEvent *event=[NSEvent eventWithCGEvent:cg];if(!event||event.subtype==NSEventSubtypeTouch)return NO;
+    NSEvent *event=[NSEvent eventWithCGEvent:cg];if(!event)return NO;
     CGPoint point=CGEventGetLocation(cg);DesktopView *view=nil;NSNumber *output=nil;
     for(DesktopView *candidate in self.views){
         if(candidate.gesture||candidate.heldPress||candidate.pressedSource||candidate.pressedTablet||candidate.pressedPointerGrab)return NO;

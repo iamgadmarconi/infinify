@@ -208,13 +208,17 @@
         // Below [zoom] interact_min a window takes no pointer input, hover included (docs/crates/desktop/POINTER.md): the canvas has had this motion above, so
         // its own hover, sloppy focus and edge pan go on, and the packet goes no further. The window server has already moved the cursor.
         if(root&&[self pickMotionAt:point window:root])return YES;
-        if(now-self.nativeButtonMotion<.1)return NO;self.nativeButtonMotion=now;self.nativeButtonHover=nil;
-        for(LiveSource *source in self.sources.allValues)if(!source.detached&&source.router.wid==root.unsignedIntValue){self.nativeButtonHover=source.logical;[self refreshNativeButtons:source];break;}
-        if(!self.nativeButtonHover)for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==wid){
+        NSNumber *hovered=nil;LiveSource *hoveredSource=nil;
+        for(LiveSource *source in self.sources.allValues)if(!source.detached&&source.router.wid==root.unsignedIntValue){hovered=source.logical;hoveredSource=source;break;}
+        if(!hovered)for(DesktopView *view in self.views)if((CGWindowID)view.window.windowNumber==wid){
             NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;
             LiveSource *source=self.sources[hit[@"window"]];
-            if(source&&!hit[@"native_member"]&&!source.detached&&(!self.native||[self.nativeViews replica:source.logical output:output])){self.nativeButtonHover=source.logical;[self refreshNativeButtons:source];}break;
+            if(source&&!hit[@"native_member"]&&!source.detached&&(!self.native||[self.nativeViews replica:source.logical output:output])){hovered=source.logical;hoveredSource=source;}break;
         }
+        BOOL sameHover=(hovered==self.nativeButtonHover)||(hovered&&[hovered isEqual:self.nativeButtonHover]);
+        if(sameHover&&now-self.nativeButtonMotion<.1)return NO;
+        self.nativeButtonMotion=now;self.nativeButtonHover=hovered;
+        if(hoveredSource)[self refreshNativeButtons:hoveredSource];
         return NO;
     }
     BOOL down=type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown;

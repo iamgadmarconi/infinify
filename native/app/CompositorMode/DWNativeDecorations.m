@@ -36,10 +36,25 @@ static BOOL decorationFrameRead(AXUIElementRef element,CGRect *out,BOOL allowEmp
     if(values)CFRelease(values);return valid;
 }
 static BOOL decorationFrame(AXUIElementRef element,CGRect *out){return decorationFrameRead(element,out,NO);}
+static _Thread_local DWFocusIdentity decorationActiveOwner;
+static _Thread_local CFTimeInterval decorationActiveDeadline;
+static BOOL decorationSameProcessWindow(AXUIElementRef element,uint32_t childWindow){
+    if(!childWindow||!decorationActiveOwner.pid||childWindow==decorationActiveOwner.window)return NO;
+    pid_t elementPID=0;if(AXUIElementGetPid(element,&elementPID)||elementPID!=decorationActiveOwner.pid)return NO;
+    DWFocusIdentity child=decorationActiveOwner;child.window=childWindow;
+    return dw_focus_owner(child,NULL);
+}
 static BOOL decorationNear(CGRect a,CGRect b){return fabs(a.origin.x-b.origin.x)<=1&&fabs(a.origin.y-b.origin.y)<=1&&fabs(a.size.width-b.size.width)<=1&&fabs(a.size.height-b.size.height)<=1;}
 static id decorationAttribute(AXUIElementRef element,CFStringRef name,AXError *error){
-    CFTypeRef value=NULL;AXError result=AXUIElementCopyAttributeValue(element,name,&value);if(error)*error=result;
-    if(result){if(value)CFRelease(value);return nil;}return CFBridgingRelease(value);
+    for(int attempt=0;attempt<2;attempt++){
+        CFTypeRef value=NULL;AXError result=AXUIElementCopyAttributeValue(element,name,&value);if(error)*error=result;
+        if(!result)return CFBridgingRelease(value);
+        if(value)CFRelease(value);
+        CFTimeInterval remaining=decorationActiveDeadline-CACurrentMediaTime();
+        if(result!=kAXErrorCannotComplete||attempt>0||remaining<=0)return nil;
+        [NSThread sleepForTimeInterval:fmin(.003,remaining)];
+    }
+    return nil;
 }
 static CGRect decorationLocal(CGRect frame,CGRect own){frame.origin.x-=own.origin.x;frame.origin.y-=own.origin.y;return frame;}
 static BOOL decorationFinderFrame(AXUIElementRef element,pid_t pid,uint32_t wid,AXError(*getWindow)(AXUIElementRef,uint32_t *),CFTimeInterval deadline,CGRect *frame){
@@ -148,7 +163,12 @@ typedef struct{CGRect own,lights;uint32_t wid;AXError(*getWindow)(AXUIElementRef
 static NSString *decorationCaptionWalk(AXUIElementRef element,int depth,DecorationCaption *c){
     if(--c->budget<0)return @"caption_node_budget";if(CACurrentMediaTime()>=c->deadline)return @"caption_deadline";if(depth>8)return @"caption_depth";
     uint32_t window=0;CGRect frame;
-    if(AXUIElementSetMessagingTimeout(element,.02)||c->getWindow(element,&window)||window!=c->wid||!decorationFrameRead(element,&frame,YES))return @"caption_geometry_or_owner";
+    if(AXUIElementSetMessagingTimeout(element,.02)||c->getWindow(element,&window)||!decorationFrameRead(element,&frame,YES))return @"caption_geometry_or_owner";
+    if(window!=c->wid){
+        if(!decorationSameProcessWindow(element,window))return @"caption_geometry_or_owner";
+        if(frame.size.width>0&&frame.size.height>0)[c->controls addObject:DWRectJSON(frame)];
+        return nil;
+    }
     if(frame.size.width<=0||frame.size.height<=0)return nil;
     if(CGRectGetMinY(frame)>=CGRectGetMaxY(c->lights)){[c->below addObject:DWRectJSON(frame)];return nil;}
     id role=decorationAttribute(element,kAXRoleAttribute,NULL);if(![role isKindOfClass:NSString.class])return @"caption_role";
@@ -343,7 +363,11 @@ static NSDictionary *decorationToolbar(AXUIElementRef window,CGRect own,CGRect l
         if(CACurrentMediaTime()>=deadline||CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return decorationRejected(reason,@"toolbar_root_deadline_or_type");
         if([chrome containsObject:value])continue;
         AXUIElementRef child=(__bridge AXUIElementRef)value;CGRect frame;uint32_t childWindow=0;
-        if(AXUIElementSetMessagingTimeout(child,.02)||getWindow(child,&childWindow)||childWindow!=wid||!decorationFrame(child,&frame))return decorationRejected(reason,@"toolbar_root_geometry_or_owner");
+        if(AXUIElementSetMessagingTimeout(child,.02)||getWindow(child,&childWindow)||!decorationFrame(child,&frame))return decorationRejected(reason,@"toolbar_root_geometry_or_owner");
+        if(childWindow!=wid){
+            if(!decorationSameProcessWindow(child,childWindow))return decorationRejected(reason,@"toolbar_root_geometry_or_owner");
+            [otherFrames addObject:DWRectJSON(frame)];continue;
+        }
         id role=decorationAttribute(child,kAXRoleAttribute,NULL);
         if([role isEqual:(__bridge NSString *)kAXToolbarRole]){
             if(toolbar||fabs(frame.origin.x-own.origin.x)>1||fabs(frame.origin.y-own.origin.y)>1||fabs(frame.size.width-own.size.width)>1
@@ -420,7 +444,13 @@ static NSDictionary *decorationTitle(AXUIElementRef window,CGRect own,uint32_t w
         if(CACurrentMediaTime()>=deadline||CFGetTypeID((__bridge CFTypeRef)value)!=AXUIElementGetTypeID())return decorationRejected(reason,@"child_deadline_or_type");
         if([chrome containsObject:value])continue;
         AXUIElementRef child=(__bridge AXUIElementRef)value;CGRect frame;uint32_t childWindow=0;
-        if(AXUIElementSetMessagingTimeout(child,.02)||getWindow(child,&childWindow)||childWindow!=wid||!decorationFrame(child,&frame))return decorationRejected(reason,@"child_geometry_or_owner");
+        if(AXUIElementSetMessagingTimeout(child,.02)||getWindow(child,&childWindow)||!decorationFrame(child,&frame))return decorationRejected(reason,@"child_geometry_or_owner");
+        if(childWindow!=wid){
+            if(!decorationSameProcessWindow(child,childWindow))return decorationRejected(reason,@"child_geometry_or_owner");
+            frame=CGRectIntersection(frame,own);
+            if(!CGRectIsNull(frame)&&!CGRectIsEmpty(frame))[excluded addObject:DWRectJSON(decorationLocal(CGRectInset(frame,-1,-1),own))];
+            continue;
+        }
         frame=CGRectIntersection(frame,own);if(CGRectIsNull(frame)||CGRectIsEmpty(frame))continue;
         // AppKit document actions and edited-title text can be siblings of
         // the primary title, rather than content. Accept only their observed
@@ -525,19 +555,24 @@ NSDictionary *DWNativeDecorationButtons(NSDictionary *identity){
     }
     if(!controlsKnown&&!buttons.count){CFRelease(window);return nil;}
     NSString *titleReason=nil;NSDictionary *titleDetail=nil;BOOL debug=getenv("INFINIFY_DEBUG")!=NULL;
+    decorationActiveOwner=selected;decorationActiveDeadline=deadline;
     NSDictionary *title=CACurrentMediaTime()<deadline?decorationTitle(window,own,selected.window,getWindow,deadline,&titleReason,debug?&titleDetail:NULL):nil;
     // Title support is optional. A timed-out title/child query must not withdraw
     // an already successful green-button lookup from this unchanged window.
-    if(CACurrentMediaTime()>=deadline){title=nil;if(debug)titleReason=@"title_deadline";}
+    BOOL titleIncomplete=NO;
+    if(CACurrentMediaTime()>=deadline){title=nil;titleIncomplete=YES;if(debug)titleReason=@"title_deadline";}
+    else if(!title&&([titleReason containsString:@"deadline"]||[titleReason hasSuffix:@"_error_-25204"]))titleIncomplete=YES;
     if(title&&[titleReason isEqual:@"accepted_unified_toolbar"]){
         CGRect toolbar=DWRectFromJSON(title[@"region"]);toolbar.origin.x+=own.origin.x;toolbar.origin.y+=own.origin.y;
         NSDictionary *header=decorationFinderSearchHeader(window,own,toolbar,selected.pid,selected.window,getWindow,deadline);
         // This optional audit never withdraws the independently valid toolbar.
         if(header){NSMutableDictionary *extended=[title mutableCopy];extended[@"additional_regions"]=@[header];title=extended.copy;titleReason=@"accepted_unified_toolbar_finder_search_header";}
     }
+    decorationActiveOwner=(DWFocusIdentity){0};decorationActiveDeadline=0;
     CFRelease(window);CGRect after;
     if(!dw_focus_owner(selected,&after)||!CGRectEqualToRect(own,after))return nil;
     NSMutableDictionary *report=[@{@"identity":[identity copy],@"native_bounds":DWRectJSON(own),@"buttons":buttons.copy,@"title":title?:@{},@"sampled_at":@(CACurrentMediaTime())}mutableCopy];
+    if(titleIncomplete)report[@"title_incomplete"]=@YES;
     if(debug)report[@"title_reason"]=titleReason?:@"unavailable";
     if(debug&&titleDetail)report[@"title_detail"]=titleDetail;
     return report;
@@ -567,22 +602,33 @@ static NSString *decorationRegionVerdict(NSDictionary *title,CGPoint local){
     if(inside)return nil;CGRect region=DWRectFromJSON(title[@"region"]);
     return [NSString stringWithFormat:@"outside title=%g,%g,%g,%g",region.origin.x,region.origin.y,region.size.width,region.size.height];
 }
+static NSDictionary *DWNativeOnDemandButtons;
 BOOL DWNativeWindowDragHit(NSDictionary *identity,NSDictionary *report,CGPoint point){
-    if(!NSThread.isMainThread||![report[@"identity"]isEqual:identity]||CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]>.5)return decorationDragMiss(identity,point,"stale_report");
-    NSDictionary *title=report[@"title"];CGRect region=DWRectFromJSON(title[@"region"]);if(CGRectIsEmpty(region))return decorationDragMiss(identity,point,"no_region");
+    if(!NSThread.isMainThread)return decorationDragMiss(identity,point,"stale_report");
     NSDictionary *recipient=DWNativeEventRecipientAtPoint(point);
     for(NSString *key in @[@"pid",@"wid",@"birth_sec",@"birth_usec"])if(!identity[key]||![identity[key]isEqual:recipient[key]])return decorationDragMiss(identity,point,"recipient_changed");
     DWFocusIdentity selected={.pid=[identity[@"pid"]intValue],.window=[identity[@"wid"]unsignedIntValue],.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
     CGRect own;if(!dw_focus_owner(selected,&own))return decorationDragMiss(identity,point,"native_unavailable");
+    NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,selected.window));
+    if(rows.count!=1)return decorationDragMiss(identity,point,"window_list_changed");NSDictionary *row=rows[0];CGRect displayed;
+    if([row[(id)kCGWindowOwnerPID]intValue]!=selected.pid||![row[(id)kCGWindowIsOnscreen]boolValue]||[row[(id)kCGWindowAlpha]doubleValue]<=0
+        ||!row[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)||CGRectIsEmpty(displayed)||!CGRectContainsPoint(displayed,point))return decorationDragMiss(identity,point,"not_in_displayed_window");
+    CFTimeInterval now=CACurrentMediaTime();
+    BOOL usable=report&&[report[@"identity"]isEqual:identity]&&now-[report[@"sampled_at"]doubleValue]<=.5&&CGRectEqualToRect(own,DWRectFromJSON(report[@"native_bounds"]));
+    if(!usable&&DWNativeOnDemandButtons&&[DWNativeOnDemandButtons[@"identity"]isEqual:identity]&&now-[DWNativeOnDemandButtons[@"sampled_at"]doubleValue]<=.5&&CGRectEqualToRect(own,DWRectFromJSON(DWNativeOnDemandButtons[@"native_bounds"]))){
+        report=DWNativeOnDemandButtons;usable=YES;
+    }
+    if(!usable){
+        NSDictionary *fresh=DWNativeDecorationButtons(identity);
+        if(fresh){DWNativeOnDemandButtons=fresh;report=fresh;usable=[report[@"identity"]isEqual:identity]&&CACurrentMediaTime()-[report[@"sampled_at"]doubleValue]<=.5;}
+    }
+    if(!usable)return decorationDragMiss(identity,point,"stale_report");
     CGRect cached=DWRectFromJSON(report[@"native_bounds"]);
     if(!CGRectEqualToRect(own,cached)){
         if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native title miss native=%g,%g,%g,%g cached=%g,%g,%g,%g\n",own.origin.x,own.origin.y,own.size.width,own.size.height,cached.origin.x,cached.origin.y,cached.size.width,cached.size.height);
         return decorationDragMiss(identity,point,"native_changed");
     }
-    NSArray *rows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,selected.window));
-    if(rows.count!=1)return decorationDragMiss(identity,point,"window_list_changed");NSDictionary *row=rows[0];CGRect displayed;
-    if([row[(id)kCGWindowOwnerPID]intValue]!=selected.pid||![row[(id)kCGWindowIsOnscreen]boolValue]||[row[(id)kCGWindowAlpha]doubleValue]<=0
-        ||!row[(id)kCGWindowBounds]||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds],&displayed)||CGRectIsEmpty(displayed)||!CGRectContainsPoint(displayed,point))return decorationDragMiss(identity,point,"not_in_displayed_window");
+    NSDictionary *title=report[@"title"];CGRect region=DWRectFromJSON(title[@"region"]);if(CGRectIsEmpty(region))return decorationDragMiss(identity,point,"no_region");
     CGPoint local=CGPointMake((point.x-displayed.origin.x)*own.size.width/displayed.size.width,(point.y-displayed.origin.y)*own.size.height/displayed.size.height);
     NSString *verdict=decorationRegionVerdict(title,local);
     if(verdict){
