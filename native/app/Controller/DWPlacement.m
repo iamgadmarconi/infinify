@@ -38,4 +38,12 @@
 - (CGRect)bufferCropOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"buffer_crop"],2)?self.bufferCrop:CGRectNull; }
 - (BOOL)isCurrentOutputPlacement { return self.window&&self.output&&self.isCurrentDrawnPlacement; }
 - (BOOL)isPinned { id pin=self.rawDictionary[@"pinned"];return DWNumber(pin).boolValue||DWDictionary(pin)!=nil; }
+- (CGRect)nativePresentationRect {
+    NSDictionary *origin=self.rawDictionary[@"screen_rect"][@"origin"],*size=self.rawDictionary[@"screen_rect"][@"size"];
+    return CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
+}
+- (double)nativePresentationClipArea {
+    NSDictionary *size=self.rawDictionary[@"clip_rect"][@"size"];
+    return [size[@"width"]doubleValue]*[size[@"height"]doubleValue];
+}
 @end

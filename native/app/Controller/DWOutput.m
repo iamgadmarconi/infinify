@@ -39,4 +39,8 @@
     NSDictionary *bounds=DWDictionary(self.rawDictionary[@"screen_bounds"]);
     return bounds&&DWDictionary(bounds[@"origin"])&&DWDictionary(bounds[@"size"]);
 }
+- (CGRect)nativePointerScreenBounds {
+    NSDictionary *bounds=self.rawDictionary[@"screen_bounds"],*origin=bounds[@"origin"],*size=bounds[@"size"];
+    return CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
+}
 @end

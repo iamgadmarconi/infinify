@@ -32,5 +32,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) CGRect bufferCropOrNull;
 @property(nonatomic,readonly) BOOL isCurrentOutputPlacement;
 @property(nonatomic,readonly) BOOL isPinned;
+// Presenter-only legacy coercion: direct doubleValue, distinct from typed scene geometry.
+@property(nonatomic,readonly) CGRect nativePresentationRect;
+@property(nonatomic,readonly) double nativePresentationClipArea;
 @end
 NS_ASSUME_NONNULL_END

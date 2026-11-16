@@ -23,5 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)hasSameCameraAndZoomAsFlight:(DWFlight *)flight;
 // Pick-motion needs dictionary containers, but deliberately zero-defaults missing scalar fields.
 @property(nonatomic,readonly) BOOL screenBoundsHasOriginAndSize;
+// Pointer-only legacy coercion; use after screenBoundsHasOriginAndSize.
+@property(nonatomic,readonly) CGRect nativePointerScreenBounds;
 @end
 NS_ASSUME_NONNULL_END
