@@ -124,7 +124,7 @@ static uint64_t DWClickRevertToken;
 }
 - (void)forgetNativeMouseOwner {
     self.nativeMouseOwner=nil;
-    for(LiveSource *source in self.desktop.sources.allValues){source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.desktop.observationEpoch;}
+    for(LiveSource *source in self.desktop.sources.allValues){[(NSTimer *)source.nativeMouseOwnership[@"watch"]invalidate];source.nativeMouseOwnership=nil;source.nativeMouseAdopting=NO;source.observationToken=++self.desktop.observationEpoch;}
 }
 - (BOOL)consume:(CGEventType)type event:(CGEventRef)event stage:(DWPressStage)stage {
     return stage==DWPressSession?[self earlyNativeTitle:type event:event]:[self nativeInput:type event:event];
