@@ -6,6 +6,7 @@
 #import "DWDockReloader.h"
 #import "DWOwnerFile.h"
 #import "DWLoaddRequest.h"
+#import "DWHelperLauncher.h"
 #import <ServiceManagement/ServiceManagement.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -161,6 +162,7 @@ static int daemonCommand(int argc,const char **argv) {
 }
 
 int DWNativeDesktopCommand(int argc,const char **argv) { @autoreleasepool {
+    if(argc>=1&&!strcmp(argv[0],"launcher"))return DWHelperLauncherMain(argc-1,argv+1);
     if(argc>=1&&!strcmp(argv[0],"daemon"))return daemonCommand(argc-1,argv+1);
     if(argc==1&&!strcmp(argv[0],"enable"))return enable();
     if(argc==1&&!strcmp(argv[0],"disable"))return disable();

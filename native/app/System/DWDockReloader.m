@@ -4,8 +4,8 @@
 // function by function (the line numbers are those of that file at that commit):
 //   lines 38-42   dockBundleID, dockSettle, answerTimeout   -> kDockBundleID, dockSettle, kAnswerTimeout
 //   lines 44-48   onDockRestarted, onPaused, crashGuard     -> the blocks and `guard`
-//   lines 50-56   pausedKey, pausedAfterDockCrashes         -> DWDockReloadPaused/-Pause (a file the launcher reads too,
-//                                                              in place of UserDefaults, which a shell script cannot read)
+//   lines 50-56   pausedKey, pausedAfterDockCrashes         -> DWDockReloadPaused/-Pause in Lifecycle/DWHelperLifecycle.m
+//                                                              (the existing shared file contract, not UserDefaults)
 //   lines 57-61   dockPID, tried, quietTriesPerDock         -> dock, tried, kQuietTriesPerDock
 //   lines 66-67   lastOutcome, timer                        -> the timer
 //   lines 68-71   currentDockPID()                          -> currentDock (pid and process start, the identity the loader pins)

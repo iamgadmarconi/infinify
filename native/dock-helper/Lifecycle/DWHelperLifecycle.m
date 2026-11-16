@@ -2,6 +2,9 @@
 // Pause semantics translated from Sunlight Sources/Canvas/RealWindows/AdditionReloader.swift
 // lines 50-56 at afeea74b18e70ca49bf462d6fe462cf65deb2b32, https://github.com/spacefarm-digital/sunlight
 // (MIT, Copyright (c) 2026 spacefarm; native/app/Resources/SUNLIGHT-NOTICE.txt).
+// Loader admission extracted from DWLoader.m (MIT), adapted from yabai src/osax/loader.m
+// at dd845723416f5fe92af49fad5ebab00369e07edd (Copyright (c) 2019 Åsmund Vikane).
+// The original copyright and MIT permission text remain in Loader/DWLoader.m.
 // Lifecycle rules extracted without policy changes from DWLoader.m, DWLoaddRequest.m,
 // DWDockReloader.m and native-desktop-launcher.sh. Injection remains in the MIT loader.
 #import "DWHelperLifecycle.h"

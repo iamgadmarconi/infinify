@@ -137,10 +137,7 @@ what a request can ask for: a load of the bundle's own payload into the pinned, 
 
 ### Launcher modes
 
-`launch.sh` (reached as `Infinify native-desktop`, `--login` or `--reload`) makes every check of the
-explicit launcher above: manifest and signature verification, the doctor, the Dock identity pin, `pending`/`ready`
-schema-3 records, payload hashes, the boot-session rule, the retired-Dock journal handoff, no
-automatic retry of an uncertain load. Its modes:
+`launch.sh` (reached as `Infinify native-desktop`, `--login` or `--reload`) retains manifest and signature verification before executing app code. It then hands only the mode and inherited reload descriptor to the compiled [helper lifecycle](../Lifecycle/README.md), which derives the bundle paths and payload digest itself and owns the doctor report consumption, Dock identity pin, `pending`/`ready` schema-3 records, boot-session rule and retired-journal handoff. There is still no automatic retry of an uncertain load. Its modes:
 
 - The loader step runs through the daemon when `Infinify native-desktop daemon status` says it is
   enabled, else through `sudo` in a terminal. In `--login` and `--reload` there is no

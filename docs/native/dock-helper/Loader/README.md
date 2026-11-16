@@ -39,6 +39,8 @@ checks pass.
 
 ### Updates while the recorded Dock lives
 
+The compiled [helper lifecycle](../Lifecycle/README.md) owns these launch-record and recovery decisions. `launch.sh` keeps its pre-execution integrity preflight; the loader keeps injection, artifact admission and the final pinned-Dock checks.
+
 An update (`brew upgrade --cask infinify`, a new disk image) replaces the bundle while the Dock keeps the
 earlier build's helper. Every release signs the payload again with the Developer ID and a secure timestamp, so its
 bytes and SHA-256 change even when its code does not: the 0.2.4 and 0.2.5 `payload-arm64e.dylib` differ in SHA-256
