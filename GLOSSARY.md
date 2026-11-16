@@ -29,3 +29,19 @@ _Avoid_: Fill handoff, resize presentation, snapshot bridge, resize animation
 **Press admission**:
 The decision, taken when a pointer button goes down, of who receives that press and everything that follows it until the release: the canvas, a window's title bar and buttons, or the application under the pointer.
 _Avoid_: Hit testing, input routing, event dispatch, click handling
+
+### Focus
+
+**Focus and arrival policy**:
+The rules that decide whether a window that appears, or an application that comes to the front, was asked for by the owner, and what follows from the answer: where the window is placed, whether it takes focus, and whether the camera moves to it.
+_Avoid_: Focus stealing prevention, activation filter, focus rules
+
+**Solicited**:
+Asked for by the owner through something they just did: a click, an application switch, a launch, or work in the application that opens the window. A window or activation that is not solicited is unsolicited, and neither takes focus nor moves the camera.
+_Avoid_: Authorized, user-initiated, expected
+
+### Dock helper
+
+**Helper lifecycle**:
+The rules that tie a private helper runtime and its credentials to one Dock process and decide, at each start, whether to reuse the helper already loaded there, recover the state a retired one left behind, or load a new one.
+_Avoid_: Launcher logic, injection flow, bootstrap
