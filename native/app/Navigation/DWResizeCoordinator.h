@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "DWNavigationCoordinator.h"
+#import "DWController.h"
+typedef DWControllerReply *(^DWResizeRequest)(id<DWResizeController> controller);
 @protocol DWResizeDriver <NSObject>
-- (NSDictionary *)perform:(NSDictionary *)effect;
+- (DWNativeResult *)perform:(DWSizeEffect *)effect;
 @end
 @interface DWResizeCoordinator : NSObject
-- (instancetype)initWithCommand:(DWCommand)command driver:(id<DWResizeDriver>)driver worker:(DWSchedule)worker main:(DWSchedule)main;
+- (instancetype)initWithController:(id<DWResizeController>)controller driver:(id<DWResizeDriver>)driver worker:(DWSchedule)worker main:(DWSchedule)main;
 @property BOOL enabled;
 // A different transaction may wait behind the previous picture's reveal.
 // Not admitted: no worker/preparation watchdog. Retry after presentation retires.
-@property (copy) BOOL (^beforeAdmission)(NSDictionary *effect);
+@property (copy) BOOL (^beforeAdmission)(DWSizeEffect *effect);
 - (void)retryAdmission;
 // Includes timed-out native jobs until their actual worker completion.
 - (BOOL)hasNativeWorkForTransaction:(NSNumber *)transaction;
 // Main-only asynchronous admission, before worker dispatch or its watchdog.
 // Reply once; NO settles an unattempted effect. Preparation is capped at 2.5 s.
-@property (copy) void (^prepare)(NSDictionary *effect, void (^ready)(BOOL));
+@property (copy) void (^prepare)(DWSizeEffect *effect, void (^ready)(BOOL));
 // Seconds after which an effect nobody has answered is reported as timed out. 0, the default, never.
 @property NSTimeInterval timeout;
 // Runs a job on the main thread after a delay: the watchdog's clock. The default is dispatch_after on the main queue.
@@ -22,8 +24,10 @@
 @property (readonly) NSUInteger obligations;
 @property (copy) DWJob changed;
 @property (readonly) NSString *failure;
-- (NSDictionary *)request:(NSDictionary *)command;
-- (void)consume:(NSDictionary *)reply;
+- (DWControllerReply *)request:(DWResizeRequest)operation;
+@property (copy) DWControllerReply *(^reportResult)(DWNativeResult *result,DWSizeEffect *effect);
+- (void)consume:(DWControllerReply *)reply;
+- (void)consumeEffect:(DWSizeEffect *)effect;
 - (void)cancel;
 - (void)shutdown;
 // nil asks about every window. Reads the controller's current transaction every time (no cache).
@@ -41,7 +45,7 @@
 // An exact pending baseline may wait for navigation before any worker/watchdog
 // starts. The owner must eventually consume it or discard it; ordinary orphans
 // and held pointer transactions keep their existing recovery policy.
-@property (copy) BOOL (^deferred)(NSDictionary *effect);
+@property (copy) BOOL (^deferred)(DWSizeEffect *effect);
 // Retire only an exact, never-admitted pending baseline without native work.
 // Setters, superseded effects and effects with running obligations are refused.
 - (void)discardDeferredEffect:(NSDictionary *)effect;

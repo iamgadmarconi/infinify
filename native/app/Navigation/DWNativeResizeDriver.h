@@ -29,7 +29,7 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 @property BOOL nativeFill;
 // Optional main-thread ownership gate. Refusal returns an ordinary unattempted
 // unavailable result, so the controller still completes its pending effect.
-@property (copy) BOOL (^canPerform)(NSDictionary *effect);
+@property (copy) BOOL (^canPerform)(DWSizeEffect *effect);
 // Main-only. Pin one exact initial read for an explicit snapshot handoff. Its
 // main-queue admission may wait until 2.5s after preparation; ordinary reads and
 // every setter keep .25s. Validation and canPerform must both still allow it.
@@ -39,8 +39,8 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 // Explicit snapshot handoffs may extend preparation to 2.5s. Zero keeps the
 // ordinary .75s budget; the screen-update lease remains independently capped.
 @property (atomic) NSTimeInterval fillPreparationTimeout;
-@property (copy) DWNativeFillReadiness (^fillReady)(NSDictionary *effect);
-@property (copy) DWNativeFillRebase *(^fillRebase)(NSDictionary *effect);
+@property (copy) DWNativeFillReadiness (^fillReady)(DWSizeEffect *effect);
+@property (copy) DWNativeFillRebase *(^fillRebase)(DWSizeEffect *effect);
 // Ready requires an explicit fullscreen-exit snapshot handoff. Unsupported
 // keeps ordinary exact-frame restore; cleanup/background paths never opt in.
 // Every prepared Restore waits here, including an enter that used ordinary
@@ -49,14 +49,14 @@ typedef NS_ENUM(NSInteger,DWNativeFillReadiness) {
 // one ordinary full-frame correction follows before the driver returns.
 // ReadyForFrameRestore instead uses the exact frame setter without Unfill,
 // even when native Fill succeeded; the snapshot owns the visible animation.
-@property (copy) DWNativeFillReadiness (^restoreReady)(NSDictionary *effect);
+@property (copy) DWNativeFillReadiness (^restoreReady)(DWSizeEffect *effect);
 // Safe from main or worker: only a successful actual app Fill qualifies.
 - (BOOL)hasNativeFillForEffect:(NSDictionary *)effect;
 // Called on the resize worker and an independent watchdog. NO starts one hold;
 // YES balances it. Missing/failed hold support refuses rebasing before AX.
 @property (copy) CGError (^screenUpdates)(BOOL enabled);
 // Readback resizing keeps the adapter's fresh identity checks before and after every native call.
-@property (copy) void (^didPerform)(NSDictionary *effect, NSDictionary *result);
+@property (copy) void (^didPerform)(DWSizeEffect *effect, DWNativeResult *result, NSString *method, BOOL moved);
 @end
 
 @interface DWNativeResizeDriver : NSObject <DWSizeTransitionResizeDriver>

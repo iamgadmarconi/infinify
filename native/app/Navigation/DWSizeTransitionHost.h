@@ -25,12 +25,12 @@ typedef id<DWSizeTransitionCaptureRequest> (^DWSizeTransitionCapture)(
 @property (readonly) uint64_t nativeSessionEpoch;
 @property (readonly) DWNativePresenter *native;
 @property (readonly) DWNativeViews *nativeViews;
-@property (readonly) NSDictionary *nativeOwnerSnapshot;
-@property NSDictionary *nativeViewSnapshot;
+@property (readonly) DWScene *nativeOwnerSnapshot;
+@property DWScene *nativeViewSnapshot;
 @property NSString *statusText;
-- (NSDictionary *)call:(NSDictionary *)command;
-- (NSDictionary *)presentationSnapshot;
-- (NSDictionary *)sizeTransitionSnapshot;
+@property (readonly) id<DWResizeController> sizeController;
+- (DWScene *)presentationSnapshot;
+- (DWScene *)sizeTransitionSnapshot;
 - (LiveSource *)sizeTransitionSource:(NSNumber *)window;
 - (BOOL)sizeTransitionHeld:(NSNumber *)transaction;
 - (BOOL)sizeTransitionRemovalAllowed:(NSNumber *)window allowed:(BOOL *)allowed;
@@ -39,7 +39,7 @@ typedef id<DWSizeTransitionCaptureRequest> (^DWSizeTransitionCapture)(
 - (void)resizeCapability;
 - (void)track:(LiveSource *)source;
 - (void)saveScene;
-- (void)applyReply:(NSDictionary *)reply;
+- (void)applyReply:(DWControllerReply *)reply;
 - (void)flashStatus:(NSString *)text;
 - (void)cancelNativeHoverForWindow:(NSNumber *)window;
 - (void)cancelCapturedInputForWindow:(NSNumber *)window;

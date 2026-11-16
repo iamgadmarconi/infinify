@@ -54,7 +54,7 @@ static id onMain(double deadline,DWNativeUpdateLease *lease,id (^work)(void)){
     double left=deadline-monotonic();if(left<=0||dispatch_semaphore_wait(answered,dispatch_time(DISPATCH_TIME_NOW,(int64_t)(left*NSEC_PER_SEC))))return nil;
     return value;
 }
-static DWResizeIdentity identity(NSDictionary *i){return (DWResizeIdentity){[i[@"pid"]intValue],[i[@"birth_sec"]unsignedLongLongValue],[i[@"birth_usec"]unsignedLongLongValue],[i[@"wid"]unsignedIntValue]};}
+static DWResizeIdentity identity(DWIdentity *i){return (DWResizeIdentity){i.pid.intValue,i.birthSeconds.unsignedLongLongValue,i.birthMicroseconds.unsignedLongLongValue,i.wid.unsignedIntValue};}
 static DWResizeResult withMutation(DWResizeResult result,DWResizeResult previous){
     result.mutation_attempted|=previous.mutation_attempted;result.moved|=previous.moved;
     if(result.mutation_attempted&&result.outcome==DWResizeTimedOut)result.observed=false;
@@ -62,7 +62,7 @@ static DWResizeResult withMutation(DWResizeResult result,DWResizeResult previous
     return result;
 }
 @interface DWPreparedBaselineAdmission : NSObject
-@property NSDictionary *effect;
+@property DWSizeEffect *effect;
 @property (copy) BOOL (^validate)(void);
 @property double deadline;
 @property BOOL cancelled;
@@ -77,23 +77,21 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
     DWResizeAdmissionExpired,
 };
 @interface DWNativeResizeDriver ()
-@property NSMutableDictionary<NSNumber *,NSDictionary *> *filled;
+@property NSMutableDictionary<NSNumber *,DWSizeEffect *> *filled;
 @property DWPreparedBaselineAdmission *preparedBaseline;
 @end
 @implementation DWNativeResizeDriver
 @synthesize nativeFill=_nativeFill, canPerform=_canPerform, fillPreparationTimeout=_fillPreparationTimeout;
 @synthesize fillReady=_fillReady, fillRebase=_fillRebase, restoreReady=_restoreReady;
 @synthesize screenUpdates=_screenUpdates, didPerform=_didPerform;
-- (void)prepareBaseline:(NSDictionary *)effect validate:(BOOL (^)(void))validate {
+- (void)prepareBaseline:(DWSizeEffect *)effect validate:(BOOL (^)(void))validate {
     NSAssert(NSThread.isMainThread,@"baseline preparation is main-only");
     [self clearPreparedBaseline];
     double deadline=monotonic()+2.5;
-    if(!validate||![effect[@"op"]isEqual:@"observe_resize_source"]||[effect[@"requested"]isKindOfClass:NSDictionary.class])return;
-    // Effects are JSON. Copy all nested containers so caller mutation cannot
-    // turn a prepared baseline into a different identity, generation or action.
-    NSData *json=[NSJSONSerialization dataWithJSONObject:effect options:0 error:nil];
-    NSDictionary *pinned=json?[NSJSONSerialization JSONObjectWithData:json options:0 error:nil]:nil;
-    if(![pinned isKindOfClass:NSDictionary.class])return;
+    if(!validate||!(effect.kind==DWEffectObserveResizeSource)||(effect.requestedPresence==DWValuePresent))return;
+    // Controller effects are immutable decoded values, including their nested
+    // identity and geometry. Retaining the value pins the complete effect.
+    DWSizeEffect *pinned=[effect copy];
     DWPreparedBaselineAdmission *prepared=[DWPreparedBaselineAdmission new];
     prepared.effect=pinned;prepared.validate=validate;prepared.deadline=deadline;
     @synchronized(self){self.preparedBaseline=prepared;}
@@ -104,18 +102,17 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
     // not fall back to ordinary admission for this same cancelled effect.
     @synchronized(self){self.preparedBaseline.cancelled=YES;self.preparedBaseline.validate=nil;}
 }
-- (BOOL)hasNativeFillForEffect:(NSDictionary *)effect {
-    NSNumber *window=effect[@"window"],*generation=effect[@"generation"];NSDictionary *who=effect[@"identity"];
-    if(![window isKindOfClass:NSNumber.class]||![generation isKindOfClass:NSNumber.class]||![who isKindOfClass:NSDictionary.class])return NO;
-    @synchronized(self){NSDictionary *filled=_filled[window];return [filled[@"generation"]isEqual:generation]&&[filled[@"identity"]isEqual:who];}
+- (BOOL)hasNativeFillForEffect:(DWSizeEffect *)effect {
+    NSNumber *window=effect.window,*generation=effect.generation;DWIdentity *who=effect.identity;
+    if(!window||!generation||!who)return NO;
+    @synchronized(self){DWSizeEffect *filled=_filled[window];return [filled.generation isEqual:generation]&&[filled.identity isEqual:who];}
 }
-- (void)forgetFill:(NSDictionary *)effect {id window=effect[@"window"];if([window isKindOfClass:NSNumber.class])@synchronized(self){[_filled removeObjectForKey:window];}}
-- (void)rememberFill:(NSDictionary *)effect {
-    NSNumber *window=effect[@"window"],*generation=effect[@"generation"];NSDictionary *who=effect[@"identity"];
-    if(![window isKindOfClass:NSNumber.class]||![generation isKindOfClass:NSNumber.class]||![who isKindOfClass:NSDictionary.class])return;
-    @synchronized(self){if(!_filled)_filled=[NSMutableDictionary dictionary];_filled[window]=@{@"generation":generation,@"identity":who.copy};}
+- (void)forgetFill:(DWSizeEffect *)effect {NSNumber *window=effect.window;if(window)@synchronized(self){[_filled removeObjectForKey:window];}}
+- (void)rememberFill:(DWSizeEffect *)effect {
+    NSNumber *window=effect.window;if(!window||!effect.generation||!effect.identity)return;
+    @synchronized(self){if(!_filled)_filled=[NSMutableDictionary dictionary];_filled[window]=effect;}
 }
-- (DWNativeFillReadiness)await:(NSDictionary *)effect readiness:(DWNativeFillReadiness (^)(NSDictionary *))ready deadline:(double)deadline {
+- (DWNativeFillReadiness)await:(DWSizeEffect *)effect readiness:(DWNativeFillReadiness (^)(DWSizeEffect *))ready deadline:(double)deadline {
     if(!ready)return DWNativeFillPending;
     do {
         NSNumber *answer=onMain(deadline,nil,^id{return @(ready(effect));});
@@ -126,12 +123,12 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
     } while(monotonic()<deadline);
     return DWNativeFillPending;
 }
-- (void)traceRebase:(NSDictionary *)effect stage:(NSString *)stage preparation:(double)preparation result:(DWResizeResult *)result lease:(DWNativeUpdateLease *)lease {
+- (void)traceRebase:(DWSizeEffect *)effect stage:(NSString *)stage preparation:(double)preparation result:(DWResizeResult *)result lease:(DWNativeUpdateLease *)lease {
     if(!self.didPerform)return;
     [lease.condition lock];NSInteger state=lease?lease.state:-1;CGError acquire=lease.acquireError,release=lease.releaseError;BOOL expired=lease.expired;[lease.condition unlock];
-    fprintf(stderr,"debug: native fill rebase stage=%s transaction=%llu effect=%llu preparation_left_ms=%.1f lease_state=%ld expired=%d acquire_error=%d release_error=%d outcome=%s ax_error=%d attempted=%d observed=%d moved=%d actual=%g,%g %gx%g\n",stage.UTF8String,[effect[@"transaction"]unsignedLongLongValue],[effect[@"effect_id"]unsignedLongLongValue],(preparation-monotonic())*1000,(long)state,expired,acquire,release,dw_resize_outcome_name(result->outcome),result->ax_error,result->mutation_attempted,result->observed,result->moved,result->actual_cg.origin.x,result->actual_cg.origin.y,result->actual_cg.size.width,result->actual_cg.size.height);
+    fprintf(stderr,"debug: native fill rebase stage=%s transaction=%llu effect=%llu preparation_left_ms=%.1f lease_state=%ld expired=%d acquire_error=%d release_error=%d outcome=%s ax_error=%d attempted=%d observed=%d moved=%d actual=%g,%g %gx%g\n",stage.UTF8String,[effect.transaction unsignedLongLongValue],[effect.effectID unsignedLongLongValue],(preparation-monotonic())*1000,(long)state,expired,acquire,release,dw_resize_outcome_name(result->outcome),result->ax_error,result->mutation_attempted,result->observed,result->moved,result->actual_cg.origin.x,result->actual_cg.origin.y,result->actual_cg.size.width,result->actual_cg.size.height);
 }
-- (BOOL)rebase:(NSDictionary *)effect plan:(DWNativeFillRebase *)plan deadline:(double)preparation result:(DWResizeResult *)result {
+- (BOOL)rebase:(DWSizeEffect *)effect plan:(DWNativeFillRebase *)plan deadline:(double)preparation result:(DWResizeResult *)result {
     if(!self.fillRebase||!self.screenUpdates){[self traceRebase:effect stage:@"missing_callbacks" preparation:preparation result:result lease:nil];return NO;}
     if(!plan||!plan.publish||!plan.ready||!plan.cancel){[self traceRebase:effect stage:monotonic()>=preparation?@"plan_deadline":(plan?@"incomplete_plan":@"plan_refused") preparation:preparation result:result lease:nil];return NO;}
     double deadline=fmin(preparation,monotonic()+.65);
@@ -143,7 +140,7 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
         if([lease begin]){
             // Leave 100ms for the two helper ACKs. The adapter reserves its own
             // <=50ms setter timeout within this absolute CLOCK_MONOTONIC limit.
-            *result=dw_resize_reposition(identity(effect[@"identity"]),plan.native,plan.displayed.origin,deadline-.1);
+            *result=dw_resize_reposition(identity(effect.identity),plan.native,plan.displayed.origin,deadline-.1);
             stage=@"reposition_refused";
             if(result->outcome==DWResizeApplied&&result->observed&&result->ax_error==kAXErrorSuccess&&[lease live]){
                 CGRect observed=result->actual_cg;NSNumber *published=onMain(deadline,lease,^id{return @(plan.publish(observed,^{return [lease live];}));});
@@ -165,12 +162,12 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
     return complete&&released;
 }
 
-- (NSDictionary *)perform:(NSDictionary *)e {
+- (DWNativeResult *)perform:(DWSizeEffect *)e {
     // Retain adapter timeout evidence and merge any earlier normalization mutation
     // into a valid controller result, without replacing its saved baseline.
-    NSDictionary *s=e[@"requested"];BOOL setter=[s isKindOfClass:NSDictionary.class];
+    CGSize size=e.nativeRequestedSize;BOOL setter=e.requestedPresence==DWValuePresent;
     DWResizeResult r;NSString *method=setter?@"resize":@"size read";
-    BOOL (^allowed)(NSDictionary *)=self.canPerform;
+    BOOL (^allowed)(DWSizeEffect *)=self.canPerform;
     DWPreparedBaselineAdmission *prepared=nil;
     @synchronized(self){if(!setter&&[self.preparedBaseline.effect isEqual:e])prepared=self.preparedBaseline;}
     double admissionStarted=monotonic();
@@ -194,19 +191,19 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
     if(prepared&&monotonic()>=admissionDeadline)admission=DWResizeAdmissionExpired;
     BOOL timedOut=admission==DWResizeAdmissionExpired;
     const char *admissionName=!permission?"queue_timeout":admission==DWResizeAdmissionAllowed?"allowed":admission==DWResizeAdmissionOwnerDenied?"owner_denied":admission==DWResizeAdmissionPreparedCancelled?"prepared_cancelled":admission==DWResizeAdmissionPreparedRefused?"prepared_refused":"admission_expired";
-    if(self.didPerform)fprintf(stderr,"debug: native resize admission transaction=%llu effect=%llu window=%llu result=%s wait_ms=%.3f setter=%d prepared=%d\n",[e[@"transaction"]unsignedLongLongValue],[e[@"effect_id"]unsignedLongLongValue],[e[@"window"]unsignedLongLongValue],admissionName,(monotonic()-admissionStarted)*1000,setter,prepared!=nil);
-    if(admission!=DWResizeAdmissionAllowed){r=(DWResizeResult){.outcome=timedOut?DWResizeTimedOut:DWResizeUnavailable,.ax_error=timedOut?kAXErrorCannotComplete:kAXErrorSuccess,.requested=setter?CGSizeMake([s[@"width"]doubleValue],[s[@"height"]doubleValue]):CGSizeZero};method=timedOut?@"native admission timed out":admission==DWResizeAdmissionOwnerDenied?@"native owner refused":@"prepared baseline refused";}
-    else if(!setter)r=dw_resize_observe(identity(e[@"identity"]));
+    if(self.didPerform)fprintf(stderr,"debug: native resize admission transaction=%llu effect=%llu window=%llu result=%s wait_ms=%.3f setter=%d prepared=%d\n",[e.transaction unsignedLongLongValue],[e.effectID unsignedLongLongValue],[e.window unsignedLongLongValue],admissionName,(monotonic()-admissionStarted)*1000,setter,prepared!=nil);
+    if(admission!=DWResizeAdmissionAllowed){r=(DWResizeResult){.outcome=timedOut?DWResizeTimedOut:DWResizeUnavailable,.ax_error=timedOut?kAXErrorCannotComplete:kAXErrorSuccess,.requested=setter?size:CGSizeZero};method=timedOut?@"native admission timed out":admission==DWResizeAdmissionOwnerDenied?@"native owner refused":@"prepared baseline refused";}
+    else if(!setter)r=dw_resize_observe(identity(e.identity));
     else {
-        CGSize size=CGSizeMake([s[@"width"]doubleValue],[s[@"height"]doubleValue]);
-        id raw=e[@"native_origin"];
-        if(raw==NSNull.null&&self.nativeFill&&[e[@"native_action"]isEqual:@"fill"]){
+
+
+        if(e.nativeOriginPresence==DWValueNull&&self.nativeFill&&[e.nativeAction isEqual:@"fill"]){
             [self forgetFill:e];
             double timeout=self.fillPreparationTimeout;
             timeout=isfinite(timeout)&&timeout>0?fmin(2.5,fmax(.75,timeout)):.75;
             double preparation=monotonic()+timeout;
             __block DWNativeFillRebase *plan=nil;
-            DWNativeFillReadiness allowed=[self await:e readiness:^DWNativeFillReadiness(NSDictionary *effect){
+            DWNativeFillReadiness allowed=[self await:e readiness:^DWNativeFillReadiness(DWSizeEffect *effect){
                 // The omission ACK and plan must be inspected in one main
                 // turn. An unrelated frame can invalidate that ACK between
                 // turns without changing this window's withheld placement.
@@ -223,19 +220,19 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
                 allowed=ready?DWNativeFillReady:DWNativeFillPending;
             }
             method=allowed==DWNativeFillReady?(normalized.mutation_attempted?@"fill rebased":@"fill"):@"fill gate refused";
-            if(allowed==DWNativeFillReadyForSnapshotFill){method=@"snapshot fill";r=dw_resize_apply(identity(e[@"identity"]),size);}
-            else if(allowed==DWNativeFillUnsupportedGeometry){method=@"fill transformed, resize fallback";r=dw_resize_apply(identity(e[@"identity"]),size);}
-            else r=allowed==DWNativeFillReady?dw_resize_fill(identity(e[@"identity"]),size):(DWResizeResult){.outcome=DWResizeUnavailable,.requested=size};
+            if(allowed==DWNativeFillReadyForSnapshotFill){method=@"snapshot fill";r=dw_resize_apply(identity(e.identity),size);}
+            else if(allowed==DWNativeFillUnsupportedGeometry){method=@"fill transformed, resize fallback";r=dw_resize_apply(identity(e.identity),size);}
+            else r=allowed==DWNativeFillReady?dw_resize_fill(identity(e.identity),size):(DWResizeResult){.outcome=DWResizeUnavailable,.requested=size};
             if(allowed==DWNativeFillReady&&r.observed&&r.mutation_attempted&&r.ax_error==kAXErrorSuccess&&(r.outcome==DWResizeApplied||r.outcome==DWResizeClamped))[self rememberFill:e];
             // Only a positively unsupported, unattempted menu action permits
             // the ordinary size setter. An attempted press is never replayed.
-            if(allowed==DWNativeFillReady&&r.outcome==DWResizeUnsupported&&!r.mutation_attempted){method=@"fill unsupported, resize fallback";r=dw_resize_apply(identity(e[@"identity"]),size);}
+            if(allowed==DWNativeFillReady&&r.outcome==DWResizeUnsupported&&!r.mutation_attempted){method=@"fill unsupported, resize fallback";r=dw_resize_apply(identity(e.identity),size);}
             if(allowed==DWNativeFillPending&&normalized.mutation_attempted){r=normalized;r.requested=size;r.observed=false;if(r.outcome!=DWResizeTimedOut&&r.outcome!=DWResizeStaleIdentity)r.outcome=DWResizeReadbackFailed;method=@"fill rebase failed";}
             r=withMutation(r,normalized);
         }
-        else if(raw==NSNull.null)r=dw_resize_apply(identity(e[@"identity"]),size);
-        else if([raw isKindOfClass:NSDictionary.class]&&[raw count]==2&&[raw[@"x"]isKindOfClass:NSNumber.class]&&[raw[@"y"]isKindOfClass:NSNumber.class]){
-            CGRect saved={CGPointMake([raw[@"x"]doubleValue],[raw[@"y"]doubleValue]),size};
+        else if(e.nativeOriginPresence==DWValueNull)r=dw_resize_apply(identity(e.identity),size);
+        else if(e.nativeOriginIsExactPoint){
+            CGRect saved={e.nativeOrigin,size};
             BOOL prepared=self.nativeFill&&self.restoreReady;
             BOOL qualified=prepared&&[self hasNativeFillForEffect:e];
             // The shell gives explicit snapshot handoffs a seven-second
@@ -244,25 +241,24 @@ typedef NS_ENUM(NSInteger,DWResizeAdmission) {
             // for its hidden ACK even though it cannot use the app's Unfill.
             DWNativeFillReadiness allowed=prepared?[self await:e readiness:self.restoreReady deadline:monotonic()+2.25]:DWNativeFillUnsupportedGeometry;
             if(allowed==DWNativeFillReady&&qualified){
-                method=@"unfill";r=dw_resize_unfill(identity(e[@"identity"]),saved);
+                method=@"unfill";r=dw_resize_unfill(identity(e.identity),saved);
                 if(r.mutation_attempted)[self forgetFill:e];
-                if(r.outcome==DWResizeUnsupported&&!r.mutation_attempted){method=@"unfill unsupported, frame fallback";r=dw_resize_apply_frame(identity(e[@"identity"]),saved);[self forgetFill:e];}
+                if(r.outcome==DWResizeUnsupported&&!r.mutation_attempted){method=@"unfill unsupported, frame fallback";r=dw_resize_apply_frame(identity(e.identity),saved);[self forgetFill:e];}
                 else if(r.mutation_attempted&&r.observed&&r.ax_error==kAXErrorSuccess&&(r.outcome==DWResizeApplied||r.outcome==DWResizeClamped||r.outcome==DWResizeRejected)&&(!CGRectEqualToRect(r.actual_ax,saved)||!CGRectEqualToRect(r.actual_cg,saved))){
                     // The app may restore its rebased starting origin. Animation
                     // completion, including a one-point near match, does not
                     // discharge the controller's exact saved frame.
                     DWResizeResult unfilled=r;method=@"unfill corrected frame";
-                    r=withMutation(dw_resize_apply_frame(identity(e[@"identity"]),saved),unfilled);
+                    r=withMutation(dw_resize_apply_frame(identity(e.identity),saved),unfilled);
                 }
-            }else if(allowed==DWNativeFillReady||allowed==DWNativeFillReadyForFrameRestore||allowed==DWNativeFillUnsupportedGeometry){method=allowed==DWNativeFillReadyForFrameRestore?@"snapshot frame restore":@"frame restore";r=dw_resize_apply_frame(identity(e[@"identity"]),saved);[self forgetFill:e];}
+            }else if(allowed==DWNativeFillReady||allowed==DWNativeFillReadyForFrameRestore||allowed==DWNativeFillUnsupportedGeometry){method=allowed==DWNativeFillReadyForFrameRestore?@"snapshot frame restore":@"frame restore";r=dw_resize_apply_frame(identity(e.identity),saved);[self forgetFill:e];}
             else {method=@"restore gate refused";r=(DWResizeResult){.outcome=DWResizeUnavailable,.requested=size};}
         }
         else r=(DWResizeResult){.outcome=DWResizeInvalidRequest,.requested=size};
     }
-    NSDictionary *result=@{@"outcome":@(dw_resize_outcome_name(r.outcome)),@"ax_error":@(r.ax_error),@"mutation_attempted":r.mutation_attempted?@YES:@NO,@"observed":r.observed?@YES:@NO,@"requested":@{@"width":@(r.requested.width),@"height":@(r.requested.height)},@"actual_ax":DWRectJSON(r.actual_ax),@"actual_cg":DWRectJSON(r.actual_cg)};
-    // The controller's result names its fields exactly, and where the window sits is in actual_ax: that a native position write
-    // made room for the size first is for the trace alone.
-    if(self.didPerform){NSMutableDictionary *traced=[result mutableCopy];traced[@"moved"]=r.moved?@YES:@NO;traced[@"method"]=method;self.didPerform(e,traced);}
+    DWNativeResult *result=[DWNativeResult resultWithNativeResize:r];
+    // Method and movement are native diagnostic facts, never controller payload.
+    if(self.didPerform)self.didPerform(e,result,method,r.moved);
     return result;
 }
 @end

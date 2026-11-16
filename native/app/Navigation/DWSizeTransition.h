@@ -24,16 +24,16 @@
 @property (readonly) NSString *failure;
 - (BOOL)canRemove:(NSNumber *)window;
 - (NSNumber *)busyWindow;
-- (NSDictionary *)request:(NSDictionary *)command;
-- (void)consume:(NSDictionary *)reply;
+- (DWControllerReply *)request:(DWResizeRequest)operation;
+- (void)consume:(DWControllerReply *)reply;
 // Returns the sizing effect (or nil), preserving the action reply continuation.
-- (NSDictionary *)consumeSize:(NSDictionary *)reply;
+- (DWSizeEffect *)consumeSize:(DWControllerReply *)reply;
 - (BOOL)sizing;
 - (void)cancel;
 - (void)shutdown;
 - (void)reap;
 - (void)interruptFillForVisibility:(LiveSource *)source;
-- (NSDictionary *)nativeFillBackground:(NSDictionary *)snapshot;
+- (DWScene *)nativeFillBackground:(DWScene *)snapshot;
 // Before changing session/outputs, retire pictures without admitting successors.
 - (void)suspendPresentation;
 - (void)cancelPresentation;

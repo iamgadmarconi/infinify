@@ -2,6 +2,7 @@
 #import "DWNativePresenter.h"
 #import "DWNativeTransition.h"
 #import "DWNavigationCoordinator.h"
+#import "DWController.h"
 
 // Internal picture adapter contracts. The whole handoff is exercised through
 // DWSizeTransition; callers do not wire presentation policy at this lower seam.
@@ -35,9 +36,9 @@ typedef struct {
 // No native setter is admitted until the picture is visible AND hide is ACKed.
 @interface DWNativeResizePresentation : NSObject
 // Right/bottom-only drags do not need compensation or capture permission.
-+ (BOOL)requiresBridgeForTransaction:(NSDictionary *)transaction;
++ (BOOL)requiresBridgeForTransaction:(DWResizeTransaction *)transaction;
 - (instancetype)initWithPresenter:(id<DWNativeResizePresenter>)presenter capture:(DWResizeCapture)capture;
-@property (readonly) NSDictionary *effect;
+@property (readonly) DWSizeEffect *effect;
 @property (readonly) BOOL active;
 // Invalid includes generation/output/session/camera/identity changes.
 // Recoverable is separate: a healthy current identity/session can still ACK
@@ -47,10 +48,10 @@ typedef struct {
 @property (copy) void (^failed)(NSString *reason);
 @property (copy) NSTimeInterval (^clock)(void);
 @property (copy) void (^delay)(NSTimeInterval seconds, DWJob job);
-- (void)prepareEffect:(NSDictionary *)effect ready:(void (^)(BOOL))ready;
+- (void)prepareEffect:(DWSizeEffect *)effect ready:(void (^)(BOOL))ready;
 - (void)update;
 // Main-thread worker gate: freshly checks root-only hide eligibility.
-- (BOOL)allowsEffect:(NSDictionary *)effect;
+- (BOOL)allowsEffect:(DWSizeEffect *)effect;
 // Invalidate callbacks first, settle preparation NO, resume the exact root and
 // remove the picture. Emergency recovery, not successful optical completion.
 - (void)cancel;

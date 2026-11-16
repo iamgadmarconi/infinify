@@ -25,9 +25,9 @@ static CGRect DWResizePictureRect(CGRect rect) {
     NSTimeInterval _deadline;
     CGRect _target;
 }
-+ (BOOL)requiresBridgeForTransaction:(NSDictionary *)transaction {
-    if(![transaction[@"interactive"]boolValue])return NO;
-    return ![@[@"right",@"bottom",@"bottom_right"]containsObject:transaction[@"edges"]?:NSNull.null];
++ (BOOL)requiresBridgeForTransaction:(DWResizeTransaction *)transaction {
+    if(![transaction.interactive boolValue])return NO;
+    return ![@[@"right",@"bottom",@"bottom_right"]containsObject:transaction.edges ?:NSNull.null];
 }
 - (instancetype)initWithPresenter:(id<DWNativeResizePresenter>)presenter capture:(DWResizeCapture)capture {
     if((self=[super init])){_presenter=presenter;_capture=[capture copy];
@@ -47,23 +47,20 @@ static CGRect DWResizePictureRect(CGRect rect) {
     [self settle:NO];if(self.failed)self.failed(reason);
     if(!_picture)[self cancel];
 }
-- (void)prepareEffect:(NSDictionary *)effect ready:(void (^)(BOOL))ready {
+- (void)prepareEffect:(DWSizeEffect *)effect ready:(void (^)(BOOL))ready {
     NSAssert(NSThread.isMainThread,@"resize presentation is main-only");
     if(self.active){
-        BOOL same=[_effect[@"transaction"]isEqual:effect[@"transaction"]]&&[_effect[@"generation"]isEqual:effect[@"generation"]]&&[_effect[@"identity"]isEqual:effect[@"identity"]];
+        BOOL same=[_effect.transaction isEqual:effect.transaction]&&[_effect.generation isEqual:effect.generation]&&[_effect.identity isEqual:effect.identity];
         [self update];ready(same&&[self allowsEffect:effect]);return;
     }
     _resumed=NO;_effect=[effect copy];_ready=[ready copy];_deadline=self.clock()+2.5;
     // Rust serializes owner:null; the native presenter intentionally binds
     // only these four local-process fields. Preserve the full effect identity
     // for controller fencing, and never admit a named remote/native owner.
-    NSDictionary *identity=effect[@"identity"];
-    if(identity[@"owner"]&&identity[@"owner"]!=NSNull.null){[self abort:@"Resize cancelled: nonlocal source identity"];return;}
-    NSMutableDictionary *native=[NSMutableDictionary dictionary];
-    for(NSString *key in @[@"pid",@"birth_sec",@"birth_usec",@"wid"]){
-        if(![identity[key]isKindOfClass:NSNumber.class]){[self abort:@"Resize cancelled: invalid source identity"];return;}
-        native[key]=identity[key];
-    }
+    DWIdentity *identity=effect.identity;
+    if(identity.ownerPresence!=DWValueAbsent&&identity.ownerPresence!=DWValueNull){[self abort:@"Resize cancelled: nonlocal source identity"];return;}
+    if(!identity.pid||!identity.birthSeconds||!identity.birthMicroseconds||!identity.wid){[self abort:@"Resize cancelled: invalid source identity"];return;}
+    NSDictionary *native=@{@"pid":identity.pid,@"birth_sec":identity.birthSeconds,@"birth_usec":identity.birthMicroseconds,@"wid":identity.wid};
     _identity=native.copy;
     [self tick:++_epoch];
 }
@@ -90,10 +87,10 @@ static CGRect DWResizePictureRect(CGRect rect) {
     __weak DWNativeResizePresentation *weak=self;
     self.delay(1.0/60,^{[weak tick:epoch];});
 }
-- (BOOL)allowsEffect:(NSDictionary *)effect {
-    BOOL read=![effect[@"requested"]isKindOfClass:NSDictionary.class];
-    return self.active&&!_revealing&&(!_recovering||read)&&[_effect[@"transaction"]isEqual:effect[@"transaction"]]
-        &&[_effect[@"identity"]isEqual:effect[@"identity"]]&&[_effect[@"generation"]isEqual:effect[@"generation"]]
+- (BOOL)allowsEffect:(DWSizeEffect *)effect {
+    BOOL read=!(effect.requestedPresence==DWValuePresent);
+    return self.active&&!_revealing&&(!_recovering||read)&&[_effect.transaction isEqual:effect.transaction]
+        &&[_effect.identity isEqual:effect.identity]&&[_effect.generation isEqual:effect.generation]
         &&((_recovering&&read)||(_hidden&&[_presenter isTransitionHideOwned:_root]));
 }
 - (void)update {
@@ -138,7 +135,7 @@ static CGRect DWResizePictureRect(CGRect rect) {
 }
 - (void)cancel {
     ++_epoch;DWJob cancel=_cancelCapture;_cancelCapture=nil;
-    NSDictionary *effect=_effect,*identity=_identity;_effect=nil;_identity=nil;_root=nil;
+    DWSizeEffect *effect=_effect,*identity=_identity;_effect=nil;_identity=nil;_root=nil;
     id<DWNativeResizePicture> picture=_picture;_picture=nil;
     _hiding=NO;_hidden=NO;_revealing=NO;_recovering=NO;_deadline=0;
     // Retire before cancellation invokes any capture or coordinator completion.
