@@ -35,4 +35,8 @@
     return flight&&[self.rawDictionary[@"camera"]isEqual:flight.rawDictionary[@"camera_target"]]
         &&[self.rawDictionary[@"zoom"]isEqual:flight.rawDictionary[@"zoom_target"]];
 }
+- (BOOL)screenBoundsHasOriginAndSize {
+    NSDictionary *bounds=DWDictionary(self.rawDictionary[@"screen_bounds"]);
+    return bounds&&DWDictionary(bounds[@"origin"])&&DWDictionary(bounds[@"size"]);
+}
 @end

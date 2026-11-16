@@ -21,5 +21,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) BOOL isDrawable;
 - (BOOL)hasSameScreenBoundsAsOutput:(DWOutput *)other;
 - (BOOL)hasSameCameraAndZoomAsFlight:(DWFlight *)flight;
+// Pick-motion needs dictionary containers, but deliberately zero-defaults missing scalar fields.
+@property(nonatomic,readonly) BOOL screenBoundsHasOriginAndSize;
 @end
 NS_ASSUME_NONNULL_END
