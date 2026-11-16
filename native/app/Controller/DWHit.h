@@ -25,6 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSDictionary *nativeMember;
 @property(nonatomic,readonly,nullable) DWIdentity *rootIdentity;
 - (DWHit *)hitWithPick:(BOOL)pick;
+- (DWHit *)hitWithPlaceholder:(BOOL)placeholder;
 - (DWHit *)hitWithNativeMember:(NSDictionary *)member;
 + (instancetype)hitWithWindow:(nullable NSNumber *)window identity:(nullable DWIdentity *)identity generation:(nullable NSNumber *)generation local:(nullable NSValue *)local nativeMember:(nullable NSDictionary *)member pick:(nullable NSNumber *)pick widget:(nullable NSNumber *)widget pinned:(nullable NSNumber *)pinned;
 @end

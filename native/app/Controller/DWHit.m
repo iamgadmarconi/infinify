@@ -29,4 +29,5 @@
     return DWProject(self,[raw copy]);
 }
 - (NSNumber *)placeholder { return DWNumber(self.rawDictionary[@"placeholder"]); }
+- (DWHit *)hitWithPlaceholder:(BOOL)placeholder { NSMutableDictionary *copy=[self.rawDictionary mutableCopy];copy[@"placeholder"]=@(placeholder);return DWProject(DWHit.class,[copy copy]); }
 @end
