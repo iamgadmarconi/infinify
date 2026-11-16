@@ -19,7 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) uint64_t currentEpoch;
 - (void)navigationCancelNativeClick;
 - (void)navigationAdvanceReleasingHold:(BOOL)releaseHold;
-- (void)navigationAnswerEffect:(nullable DWFocusEffect *)effect logical:(BOOL)logical epoch:(uint64_t)epoch;
+- (void)navigationAnswerEffect:(nullable DWEffect *)effect logical:(BOOL)logical epoch:(uint64_t)epoch;
 - (void)navigationPerformReply:(nullable DWControllerReply *)reply correction:(nullable DWFocusCorrection *)correction prepared:(BOOL)prepared;
 - (void)navigationChanged;
 @end
@@ -29,7 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
 // Compatibility selection after size postprocessing: ANY dictionary top-level
 // effect wins, even an unexpected kind; otherwise the last native-focus effect.
 // This deliberately differs from the reply's strict separated focusEffect view.
-- (nullable DWFocusEffect *)navigationFocusEffectForReply:(DWControllerReply *)reply;
+- (nullable DWEffect *)navigationEffectForReply:(DWControllerReply *)reply;
 - (nullable DWControllerReply *)navigationExecute:(DWControllerReply * _Nullable (^)(void))execute;
 - (nullable DWControllerReply *)attach:(DWAttachRequest *)request arrived:(BOOL)arrived adopted:(BOOL)adopted utility:(BOOL)utility context:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution;
 - (void)observeIdentity:(DWIdentity *)actual familyBinding:(nullable DWSourceBinding *)family eventAt:(uint64_t)observedAt output:(nullable NSNumber *)output capturedEpoch:(uint64_t)epoch context:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution;
@@ -43,9 +43,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)resetFocusPolicyWithContext:(DWFocusPolicyContext *)context;
 - (void)resetFocusRestoresWithContext:(DWFocusPolicyContext *)context;
 - (nullable DWFocusCorrection *)prepareFocusReply:(DWControllerReply *)reply protect:(BOOL)protect context:(DWFocusPolicyContext *)context;
-- (void)focusAnswerBegan:(DWFocusEffect *)effect success:(BOOL)success context:(DWFocusPolicyContext *)context;
+- (void)focusAnswerBegan:(DWEffect *)effect success:(BOOL)success context:(DWFocusPolicyContext *)context;
 - (void)focusConfirmed:(DWIdentity *)identity context:(DWFocusPolicyContext *)context;
-- (nullable DWControllerReply *)navigationAnswerFocus:(DWFocusEffect *)effect logical:(BOOL)logical success:(BOOL)success;
+- (nullable DWControllerReply *)navigationAnswerFocus:(DWEffect *)effect logical:(BOOL)logical success:(BOOL)success;
 - (nullable DWControllerReply *)navigationCancelFocusCycle;
 - (nullable DWControllerReply *)navigationEndFocusCycle;
 - (nullable DWControllerReply *)navigationCancelOnOutput:(NSNumber *)output;

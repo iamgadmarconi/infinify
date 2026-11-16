@@ -24,8 +24,8 @@
 - (DWScene *)navigationScene {
     return [DWScene sceneWithDictionary:[self navigationCommandDictionary:@{@"op":@"snapshot"}].rawDictionary];
 }
-- (DWFocusEffect *)navigationFocusEffectForReply:(DWControllerReply *)reply {
-    return DWProject(DWFocusEffect.class,reply.navigationEffect.rawDictionary);
+- (DWEffect *)navigationEffectForReply:(DWControllerReply *)reply {
+    return reply.navigationEffect;
 }
 - (DWControllerReply *)navigationExecute:(DWControllerReply * (^)(void))execute {
     DWControllerReply *reply=execute();
@@ -46,7 +46,7 @@
             }
         }else if([kind isEqual:@"answer"]){
             uint64_t answerEpoch=[step[@"captured_epoch"]boolValue]?epoch:execution.currentEpoch;
-            [execution navigationAnswerEffect:DWProject(DWFocusEffect.class,step[@"effect"]) logical:[step[@"logical"]boolValue] epoch:answerEpoch];
+            [execution navigationAnswerEffect:DWProject(DWEffect.class,step[@"effect"]) logical:[step[@"logical"]boolValue] epoch:answerEpoch];
         }else if([kind isEqual:@"perform_reply"]){
             [execution navigationPerformReply:received correction:DWProject(DWFocusCorrection.class,step[@"correction"]) prepared:YES];
         }else if([kind isEqual:@"changed"])[execution navigationChanged];
@@ -107,13 +107,13 @@
     NSDictionary *decision=[self navigationPolicyFact:@{@"kind":@"reply",@"reply":reply.rawDictionary,@"protect":@(protect)} context:context];
     return DWProject(DWFocusCorrection.class,decision);
 }
-- (void)focusAnswerBegan:(DWFocusEffect *)effect success:(BOOL)success context:(DWFocusPolicyContext *)context {
+- (void)focusAnswerBegan:(DWEffect *)effect success:(BOOL)success context:(DWFocusPolicyContext *)context {
     [self navigationPolicyFact:@{@"kind":@"answer",@"effect_id":effect.effectID,@"success":@(success)} context:context];
 }
 - (void)focusConfirmed:(DWIdentity *)identity context:(DWFocusPolicyContext *)context {
     [self navigationPolicyFact:@{@"kind":@"confirmed",@"identity":identity.rawDictionary} context:context];
 }
-- (DWControllerReply *)navigationAnswerFocus:(DWFocusEffect *)effect logical:(BOOL)logical success:(BOOL)success {
+- (DWControllerReply *)navigationAnswerFocus:(DWEffect *)effect logical:(BOOL)logical success:(BOOL)success {
     NSMutableDictionary *command=[effect.rawDictionary mutableCopy];
     command[@"op"]=logical?@"focus_logical":@"focus_result";
     if(!logical)command[@"success"]=@(success);
