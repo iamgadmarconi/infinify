@@ -49,14 +49,22 @@ static NSString *v2SpaceDisplay(uint64_t space,BOOL target) {
     }
     return nil;
 }
-static BOOL v2CanMoveSpace(uint32_t wid,uint64_t target,uint64_t *source,NSString **display) {
+static NSString *v2SpaceDisplayCached(uint64_t space,BOOL target,NSMutableDictionary<NSNumber *,id> *cache) {
+    if(!target||!cache||!space)return v2SpaceDisplay(space,target);
+    NSNumber *key=@(space);id cached=cache[key];
+    if(cached)return cached==NSNull.null?nil:cached;
+    NSString *resolved=v2SpaceDisplay(space,YES);
+    cache[key]=resolved?:NSNull.null;
+    return resolved;
+}
+static BOOL v2CanMoveSpaceCached(uint32_t wid,uint64_t target,uint64_t *source,NSString **display,NSMutableDictionary<NSNumber *,id> *cache) {
     uint64_t current=v2WindowSpace(wid);
     if(!current)return NO;
-    NSString *targetDisplay=v2SpaceDisplay(target,YES);
+    NSString *targetDisplay=v2SpaceDisplayCached(target,YES,cache);
     if(!targetDisplay)return NO;
     // For the common same-Space frame, the target check already validates
     // the window's observed Space and its current display.
-    NSString *sourceDisplay=current==target?targetDisplay:v2SpaceDisplay(current,YES);
+    NSString *sourceDisplay=current==target?targetDisplay:v2SpaceDisplayCached(current,YES,cache);
     if(!sourceDisplay||(current!=target&&[sourceDisplay isEqual:targetDisplay]))return NO;
     if(source)*source=current;if(display)*display=sourceDisplay;return YES;
 }

@@ -65,35 +65,45 @@ static FamilyParentQuery readFamilyParent(uint32_t wid) {
     return (FamilyParentQuery){.actual=actual,.parent=parent,.count=count,.present=YES,.exact=advanced&&!extra&&actual==wid};
 }
 
-static NSDictionary *queryOwnedParent(uint32_t wid,pid_t pid,NSArray *enrolledBirth) {
+static NSDictionary *queryOwnedParentWithInfo(uint32_t wid,pid_t pid,NSArray *enrolledBirth,NSDictionary **outInfo) {
+    if(outInfo)*outInfo=nil;
     if(!loadFamilyAPI()||!ownedCGWindow(wid,pid,enrolledBirth))return @{@"valid":@NO,@"error":@"Private ABI unavailable or source identity invalid"};
     FamilyParentQuery query=readFamilyParent(wid);
     if(!query.present)return @{@"valid":@NO,@"error":@"WindowServer query returned no result"};
-    BOOL valid=query.exact&&ownedCGWindow(wid,pid,enrolledBirth)!=nil;
-    if(query.parent&&!ownedCGWindow(query.parent,pid,enrolledBirth))valid=NO;
+    NSDictionary *after=query.exact?ownedCGWindow(wid,pid,enrolledBirth):nil;
+    BOOL valid=after!=nil;
+    if(valid&&query.parent&&!ownedCGWindow(query.parent,pid,enrolledBirth))valid=NO;
+    if(valid&&outInfo)*outInfo=after;
     return @{@"valid":@(valid),@"id":@(wid),@"iterator_id":@(query.actual),@"parent_id":@(query.parent),@"iterator_count":@(query.count),
         @"error":valid?@"":@"Ambiguous iterator result or ownership changed"};
+}
+static NSDictionary *queryOwnedParent(uint32_t wid,pid_t pid,NSArray *enrolledBirth) {
+    return queryOwnedParentWithInfo(wid,pid,enrolledBirth,NULL);
 }
 
 static NSDictionary *discoverOwnedFamily(uint32_t root,pid_t pid,NSArray *enrolledBirth) {
     NSMutableDictionary *result=[@{@"valid":@NO,@"root":@(root),@"pid":@(pid),@"process_birth":enrolledBirth?:@[],
         @"route":@"SLSCopyAssociatedWindows + exact SLSWindowQueryWindows parent IDs + CG bounds",@"members":@[]}mutableCopy];
-    NSDictionary *rootQuery=queryOwnedParent(root,pid,enrolledBirth);result[@"root_query"]=rootQuery;
+    NSDictionary *rootInfo=nil;
+    NSDictionary *rootQuery=queryOwnedParentWithInfo(root,pid,enrolledBirth,&rootInfo);result[@"root_query"]=rootQuery;
     if(![rootQuery[@"valid"]boolValue]||[rootQuery[@"parent_id"]unsignedIntValue]){result[@"error"]=@"Selected window is not a verified WindowServer root";return result;}
     CFArrayRef associated=familyAPI.associated(familyAPI.mainConnection(),root);
     if(!associated||CFGetTypeID(associated)!=CFArrayGetTypeID()||CFArrayGetCount(associated)>64){if(associated)CFRelease(associated);result[@"error"]=@"Missing or unbounded association result";return result;}
     NSArray *raw=CFBridgingRelease(associated);
     NSMutableOrderedSet<NSNumber *> *ids=[NSMutableOrderedSet orderedSetWithObject:@(root)];
     for(id wid in raw){
-        if(![wid isKindOfClass:NSNumber.class]||[wid longLongValue]<=0||[wid unsignedLongLongValue]>UINT32_MAX||!ownedCGWindow([wid unsignedIntValue],pid,enrolledBirth)){
+        if(![wid isKindOfClass:NSNumber.class]||[wid longLongValue]<=0||[wid unsignedLongLongValue]>UINT32_MAX){
             result[@"error"]=@"Association contains an unowned, vanished, or invalid identity";return result;
         }
         if(![wid isEqual:@(root)]&&[ids containsObject:wid]){result[@"error"]=@"Duplicate child association";return result;}
         [ids addObject:wid];
     }
     result[@"associated_ids"]=raw;
-    NSMutableDictionary<NSNumber *,NSDictionary *> *queries=[NSMutableDictionary dictionary];queries[@(root)]=rootQuery;
-    for(NSNumber *wid in ids)if(wid.unsignedIntValue!=root){NSDictionary *q=queryOwnedParent(wid.unsignedIntValue,pid,enrolledBirth);queries[wid]=q;
+    NSMutableDictionary<NSNumber *,NSDictionary *> *queries=[NSMutableDictionary dictionary],*infos=[NSMutableDictionary dictionary];
+    queries[@(root)]=rootQuery;if(rootInfo)infos[@(root)]=rootInfo;
+    for(NSNumber *wid in ids)if(wid.unsignedIntValue!=root){
+        NSDictionary *childInfo=nil,*q=queryOwnedParentWithInfo(wid.unsignedIntValue,pid,enrolledBirth,&childInfo);queries[wid]=q;
+        if(childInfo)infos[wid]=childInfo;
         if(![q[@"valid"]boolValue]||![q[@"parent_id"]unsignedIntValue]){result[@"error"]=@"Associated child has no verified native parent";result[@"queries"]=queries.allValues;return result;}}
     // Require every association's actual ancestry to end at this root. No title,
     // geometry, AppKit fixture parent field, or process-wide grouping is used.
@@ -104,7 +114,7 @@ static NSDictionary *discoverOwnedFamily(uint32_t root,pid_t pid,NSArray *enroll
         }
     }
     CGRect extent=CGRectNull;NSMutableArray *members=[NSMutableArray array];
-    for(NSNumber *wid in ids){NSDictionary *info=ownedCGWindow(wid.unsignedIntValue,pid,enrolledBirth);CGRect bounds=CGRectZero;
+    for(NSNumber *wid in ids){NSDictionary *info=infos[wid];CGRect bounds=CGRectZero;
         BOOL valid=info&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],&bounds)&&
             isfinite(bounds.origin.x)&&isfinite(bounds.origin.y)&&isfinite(bounds.size.width)&&isfinite(bounds.size.height)&&bounds.size.width>0&&bounds.size.height>0;
         if(!valid){result[@"error"]=@"Native member disappeared or has invalid bounds";return result;}

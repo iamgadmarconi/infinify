@@ -104,8 +104,9 @@ static inline uint64_t uptime(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_
     NSMutableSet<NSString *> *_said;
     NSUUID *_placementSession;
     NSDictionary<NSNumber *,DWNativePlacementDescription *> *_desiredPlacements,*_acknowledgedPlacements;
+    NSMutableDictionary<NSNumber *,DWNativePlacementDescription *> *_settledParked;
     NSMutableDictionary<NSNumber *,NSDictionary<NSNumber *,DWNativePlacementDescription *> *> *_framePlacements;
-    uint64_t _acknowledgedSequence,_placementRevision;
+    uint64_t _acknowledgedSequence,_placementRevision,_stateRevision;
 }
 - (dw_client *)takeActivity:(id __strong *)activity;
 - (NSArray<NSNumber *> *)admittedBirth:(NSDictionary *)identity;

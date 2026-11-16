@@ -49,9 +49,19 @@ static NSArray<NSNumber *> *DWNativeDockBirth(pid_t pid,uid_t uid) {
     if(object==self)return YES;
     if(![object isKindOfClass:DWNativePlacementDescription.class])return NO;
     DWNativePlacementDescription *other=object;
-    return parked==other->parked&&!memcmp(&binding,&other->binding,sizeof(binding))&&[members isEqualToData:other->members];
+    if(parked!=other->parked||memcmp(&binding,&other->binding,sizeof(binding))||members.length!=other->members.length)return NO;
+    const DWNativePlacementMember *a=members.bytes,*b=other->members.bytes;
+    NSUInteger count=members.length/sizeof(*a);
+    for(NSUInteger i=0;i<count;i++)
+        if(memcmp(&a[i].record,&b[i].record,sizeof(a[i].record))||a[i].targetSpace!=b[i].targetSpace
+            ||!CGRectEqualToRect(a[i].native,b[i].native)||a[i].parent!=b[i].parent)return NO;
+    return YES;
 }
-- (NSUInteger)hash { return members.hash; }
+- (NSUInteger)hash {
+    NSUInteger h=(NSUInteger)(binding.window^binding.generation^binding.revision^(parked?0x9e3779b9u:0u)^members.length);
+    if(members.length>=sizeof(DWNativePlacementMember)){const DWNativePlacementMember *m=members.bytes;h^=m[0].record.id.wid;}
+    return h;
+}
 @end
 @implementation DWNativeAppliedPlacement {
     NSUUID *_session;uint64_t _sequence;DWNativePlacementDescription *_placementDescription;
@@ -107,11 +117,12 @@ static void DWCloseNativeClient(dw_client *client,id activity) {
         _windows=[NSMutableDictionary dictionary];_releases=[NSMutableDictionary dictionary];_families=[NSMutableDictionary dictionary];_withheld=[NSMutableDictionary dictionary];_rebases=[NSMutableDictionary dictionary];_rebased=[NSMutableSet set];_transitions=[NSMutableDictionary dictionary];
         _spaceReflows=[NSMutableDictionary dictionary];
         _records=[NSMutableData data];_frames=[NSMutableDictionary dictionary];_said=[NSMutableSet set];
-        _placementSession=[NSUUID UUID];_desiredPlacements=@{};_acknowledgedPlacements=@{};_framePlacements=[NSMutableDictionary dictionary];
+        _placementSession=[NSUUID UUID];_desiredPlacements=@{};_acknowledgedPlacements=@{};_settledParked=[NSMutableDictionary dictionary];_framePlacements=[NSMutableDictionary dictionary];
     }
     return self;
 }
 - (BOOL)ended { return atomic_load(&_ended); }
+- (uint64_t)stateRevision { return _stateRevision+_placementRevision; }
 // Library threads. Neither takes the lock or closes anything: they leave a note for the main thread.
 static void frameResult(void *context,uint64_t seq,const uint8_t *status,uint32_t count) {
     @autoreleasepool {

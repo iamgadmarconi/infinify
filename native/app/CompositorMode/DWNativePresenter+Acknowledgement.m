@@ -21,13 +21,21 @@ static const char *statusName(uint8_t status) {
         NSMutableDictionary *acknowledged=[NSMutableDictionary dictionary];
         for(NSNumber *logical in _framePlacements[@(seq)]){
             DWNativePlacementDescription *description=_framePlacements[@(seq)][logical];
-            if(![description isEqual:_desiredPlacements[logical]]||![self placementDescriptionCurrent:description])continue;
+            if(![description isEqual:_desiredPlacements[logical]]||![self placementDescriptionCurrent:description]){[_settledParked removeObjectForKey:logical];continue;}
             const DWNativePlacementMember *members=description->members.bytes;BOOL applied=YES;
             for(NSUInteger i=0;i<description->members.length/sizeof(*members);i++){
                 uint32_t index=members[i].index;
+                if(index==UINT32_MAX){
+                    if(!description->parked||![description isEqual:_settledParked[logical]]){applied=NO;break;}
+                    continue;
+                }
                 if(index>=statuses.length||status[index]!=DW2_APPLIED||memcmp(&members[i].record,&records[index],sizeof(*records))){applied=NO;break;}
             }
-            if(applied)acknowledged[logical]=description;
+            if(applied){
+                acknowledged[logical]=description;
+                if(description->parked)_settledParked[logical]=description;
+                else [_settledParked removeObjectForKey:logical];
+            }else [_settledParked removeObjectForKey:logical];
         }
         _acknowledgedPlacements=acknowledged.copy;_acknowledgedSequence=seq;
         for(DWNativePlacementDescription *description in acknowledged.objectEnumerator){
@@ -83,7 +91,7 @@ static const char *statusName(uint8_t status) {
     // A rebind can race the helper's pending restoration. Once input stops, keep
     // retrying the latest complete frame until that restore no longer blocks it.
     // Old acknowledgements must not clear a newer frame's retry requirement.
-    if(frame&&seq==_submittedSeq)atomic_store(&_retrying,retry);
+    if(frame&&seq==_submittedSeq){if(retry)[_settledParked removeAllObjects];atomic_store(&_retrying,retry);}
     // The client accepts a complete reply only for a written frame and accounts
     // for every older unanswered write as superseded before calling us. Those
     // frames can never receive another result. Keep the acknowledged placement
@@ -98,7 +106,7 @@ static const char *statusName(uint8_t status) {
     if(currentFrame&&!self.ended&&self.transitionFrameAcknowledged)self.transitionFrameAcknowledged();
 }
 - (void)invalidatePlacementReadiness {
-    _acknowledgedPlacements=@{};_acknowledgedSequence=0;++_placementRevision;
+    _acknowledgedPlacements=@{};[_settledParked removeAllObjects];_acknowledgedSequence=0;++_placementRevision;
 }
 - (void)requireFreshPlacementAcknowledgement {
     if(!NSThread.isMainThread||self.ended)return;

@@ -101,7 +101,7 @@ NSDictionary *DWNativeWindowFamily(NSDictionary *identity,NSString *__autoreleas
     NSMutableArray *members=[NSMutableArray array];
     for(NSDictionary *member in family[@"members"]){
         uint32_t wid=[member[@"id"]unsignedIntValue];CGRect native=CGRectZero;
-        if(!ownedCGWindow(wid,pid,enrolled)||!DWNativeBounds(wid,&native)){if(why)*why=@"Native family changed or its own bounds are unavailable";return nil;}
+        if((wid!=root&&!ownedCGWindow(wid,pid,enrolled))||!DWNativeBounds(wid,&native)){if(why)*why=@"Native family changed or its own bounds are unavailable";return nil;}
         NSDictionary *who=@{@"pid":@(pid),@"wid":@(wid),@"birth_sec":seconds,@"birth_usec":microseconds};
         [members addObject:@{@"identity":who,@"native_bounds":DWRectJSON(native),@"parent":member[@"parent_id"]}];
     }

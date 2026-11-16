@@ -27,7 +27,9 @@ placement; additional placements use a shared live capture with each output's
 camera, zoom and clip. The protocol v2 client sends the selected placements as transforms
 and alpha values, plus the destination display's current ordinary Space when
 the helper advertises that capability. Windows outside every output are parked beyond the union of
-the physical displays. Native bounds are read independently of the transform,
+the physical displays, and once a parked family's placement is acknowledged by
+the helper later frames omit its unchanged records while keeping its parking
+receipt current until its geometry, family or visibility changes. Native bounds are read independently of the transform,
 so camera movement does not change world geometry, focus bounds or resize
 readback. The helper frame limit is enforced by selecting whole groups, never
 splitting a logical family. Focus/enter families rank first; restores, changed

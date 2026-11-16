@@ -36,6 +36,7 @@
     }
     return NO;
 }
+- (uint64_t)stateRevision { uint64_t total=0;for(DWNativePresenter *session in self.sessions)total+=session.stateRevision;return total; }
 - (BOOL)familiesNeeded { for(DWNativePresenter *session in self.sessions)if(session.familiesNeeded)return YES;return NO; }
 - (BOOL)allowsWindow:(NSDictionary *)identity { return !self.ended&&[self.owners[identity[@"pid"]]allowsWindow:identity]; }
 - (NSNumber *)rootWindowFor:(CGWindowID)window {

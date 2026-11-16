@@ -59,6 +59,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         if(r->flags!=DW2_RECORD_RESTORE&&![releasing containsObject:@(r->id.wid)]&&v2InScope(&r->id)
             &&entry&&entry->pendingSpace&&v2SameProcess(&entry->who,&r->id))prior[i]=v2ConfirmSpace(entry);
     }
+    NSMutableDictionary<NSNumber *,id> *targetDisplays=[NSMutableDictionary dictionary];
     BOOL changed=NO;
     for(uint32_t i=0;i<count;i++) {
         const struct dw2_record *r=&records[i];
@@ -80,7 +81,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         int owner=0;struct dw2_identity now={0};uid_t uid=0;
         if(!v2Resolve(r->id.wid,&owner,&now,&uid) || !v2SameProcess(&now,&r->id) || uid!=getuid()){status[i]=DW2_IDENTITY;continue;}
         uint64_t source=0;NSString *sourceDisplay=nil;
-        if(target&&!v2CanMoveSpace(r->id.wid,target,&source,&sourceDisplay)){status[i]=DW2_SPACE;continue;}
+        if(target&&!v2CanMoveSpaceCached(r->id.wid,target,&source,&sourceDisplay,targetDisplays)){status[i]=DW2_SPACE;continue;}
         sources[i]=source;
         NSNumber *key=@(r->id.wid);
         DW2Entry *e=v2Table[key];
@@ -151,39 +152,81 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
         }
         for(DW2Entry *e in v2Table.objectEnumerator)e->fresh=e->alphaFresh=e->sublevelFresh=e->veilBareCleared=e->veilAlphaCleared=NO;
         if(!saved){v2JournalStale=YES;v2ScheduleRetry();}
+        // Journal sync may span display/Space changes; re-read target displays afresh below.
+        [targetDisplays removeAllObjects];
     }
+    int cid=mainConnection();
     BOOL spaceAttempted=NO;
+    NSMutableData *appliedTransformData=[NSMutableData dataWithLength:count],*txQueuedData=[NSMutableData dataWithLength:count];
+    uint8_t *transformApplied=appliedTransformData.mutableBytes,*txQueued=txQueuedData.mutableBytes;
+    uint32_t transformWritesNeeded=0;
     for(uint32_t i=0;i<count;i++) {
         DW2Entry *e=entries[i];
         if((id)e==NSNull.null)continue;
         const struct dw2_record *r=&records[i];
         uint64_t target=targets?targets[i]:0;
-        if(!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;continue;}
-        if(target){
+        // When no journal sync or Space move intervened and Pass 1 already observed
+        // the window on its target Space, skip the duplicate pre-write Space/identity
+        // RPCs; the post-write Space and identity fences below still decide APPLIED.
+        BOOL sameVerifiedSpace=!changed&&!spaceAttempted&&target&&sources[i]==target&&!e->pendingSpace;
+        if((changed||spaceAttempted||!target)&&!sameVerifiedSpace){
+            if((changed||spaceAttempted)&&!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;entries[i]=NSNull.null;continue;}
+        }
+        if(target&&!sameVerifiedSpace){
+            if(!changed&&!spaceAttempted&&!v2EntryCurrent(e)){v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;entries[i]=NSNull.null;continue;}
             uint64_t current=0;
-            if(!v2CanMoveSpace(e->who.wid,target,&current,NULL)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_SPACE;continue;}
+            if(!v2CanMoveSpaceCached(e->who.wid,target,&current,NULL,targetDisplays)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_SPACE;entries[i]=NSNull.null;continue;}
             if(current!=target){
-                if(current!=sources[i]||e->pendingSpace!=target||!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;continue;}
-                e->pendingSpaceFresh=e->spaceFresh=NO;spaceAttempted=YES;
-                moveWindowsToSpace(mainConnection(),(__bridge CFArrayRef)@[@(e->who.wid)],target);
+                if(current!=sources[i]||e->pendingSpace!=target||!v2EntryCurrent(e)){if(!spaceAttempted)v2ForgetUnsentSpace(e);status[i]=DW2_IDENTITY;entries[i]=NSNull.null;continue;}
+                e->pendingSpaceFresh=e->spaceFresh=NO;spaceAttempted=YES;[targetDisplays removeAllObjects];
+                moveWindowsToSpace(cid,(__bridge CFArrayRef)@[@(e->who.wid)],target);
             } // A preceding root move may have carried this member already.
               // Its observed target confirms, but never erases, its original.
             uint8_t confirmed=v2ConfirmSpace(e);
-            if(confirmed!=DW2_APPLIED){status[i]=confirmed;continue;}
-            if(v2WindowSpace(e->who.wid)!=target||!v2EntryCurrent(e)){status[i]=DW2_NOT_APPLIED;continue;}
+            if(confirmed!=DW2_APPLIED){status[i]=confirmed;entries[i]=NSNull.null;continue;}
+            if(v2WindowSpace(e->who.wid)!=target||!v2EntryCurrent(e)){status[i]=DW2_NOT_APPLIED;entries[i]=NSNull.null;continue;}
         }
         CGAffineTransform requested=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]),actual=CGAffineTransformIdentity;
-        // Frames stay complete, but moving one window need not rewrite every
-        // unchanged neighbour. Only a previously applied request is eligible,
-        // and it still needs a fresh native read and the final identity fence.
         BOOL repeated=e->appliedTransformKnown && v2SameTransform(e->appliedTransform,requested);
-        BOOL ok=repeated && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
+        BOOL ok=repeated && getTransform(cid,e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
         e->appliedTransformKnown=NO;
+        if(!ok&&repeated&&!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;entries[i]=NSNull.null;continue;}
+        transformApplied[i]=ok;
+        if(!ok)transformWritesNeeded++;
+    }
+    // Commit multiple placement-1 layer updates in one SkyLight transaction so
+    // WindowServer composites the frame atomically instead of per window.
+    if(transformWritesNeeded>=2&&setTransform==dwWriteAbsolute&&v2TransactionCreate&&v2TransactionCommit&&v2TransactionTransform){
+        CFTypeRef transaction=v2TransactionCreate(cid);
+        if(transaction){
+            uint32_t queued=0;
+            for(uint32_t i=0;i<count;i++){
+                DW2Entry *e=entries[i];if((id)e==NSNull.null||transformApplied[i])continue;
+                const struct dw2_record *r=&records[i];
+                CGAffineTransform requested=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]);
+                CGAffineTransform base=CGAffineTransformIdentity,layer=CGAffineTransformIdentity;
+                if(skyGetPlacement(cid,e->who.wid,DW_BASE_PLACEMENT,NULL,&base)||!dwComputeLayer(base,requested,&layer))continue;
+                v2TransactionTransform(transaction,e->who.wid,DW_LAYER_PLACEMENT,0,layer);
+                txQueued[i]=1;queued++;
+            }
+            if(queued)v2TransactionCommit(transaction,0);
+            CFRelease(transaction);
+        }
+    }
+    [targetDisplays removeAllObjects];
+    for(uint32_t i=0;i<count;i++) {
+        DW2Entry *e=entries[i];
+        if((id)e==NSNull.null)continue;
+        const struct dw2_record *r=&records[i];
+        uint64_t target=targets?targets[i]:0;
+        CGAffineTransform requested=CGAffineTransformMake(r->m[0],r->m[1],r->m[2],r->m[3],r->m[4],r->m[5]),actual=CGAffineTransformIdentity;
+        BOOL ok=transformApplied[i]!=0;
+        if(!ok&&txQueued[i]){
+            ok=getTransform(cid,e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
+            if(!ok&&!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
+        }
         if(!ok){
-            // The extra read above may have outlived this window. Never use its
-            // cached request to authorize the corrective write to a replacement.
-            if(repeated && !v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
-            ok=setTransform(mainConnection(),e->who.wid,requested)==0 && getTransform(mainConnection(),e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
+            ok=setTransform(cid,e->who.wid,requested)==0 && getTransform(cid,e->who.wid,&actual)==0 && v2SameTransform(actual,requested);
         }
         // Alpha is deduplicated only after a fresh native read proves the wanted value; the final identity fence still decides APPLIED.
         BOOL alphaOK=YES;float wantAlpha=0;
@@ -192,12 +235,12 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
             if(!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
             float actualAlpha=-1;
             BOOL repeatedAlpha=e->appliedAlphaKnown&&e->appliedAlpha==wantAlpha;
-            alphaOK=repeatedAlpha&&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==wantAlpha;
+            alphaOK=repeatedAlpha&&!getAlpha(cid,e->who.wid,&actualAlpha)&&actualAlpha==wantAlpha;
             e->appliedAlphaKnown=NO;
             if(!alphaOK) {
                 if(repeatedAlpha&&!v2EntryCurrent(e)){status[i]=DW2_IDENTITY;continue;}
-                alphaOK=!setAlpha(mainConnection(),e->who.wid,wantAlpha)
-                    &&!getAlpha(mainConnection(),e->who.wid,&actualAlpha)&&actualAlpha==wantAlpha;
+                alphaOK=!setAlpha(cid,e->who.wid,wantAlpha)
+                    &&!getAlpha(cid,e->who.wid,&actualAlpha)&&actualAlpha==wantAlpha;
             }
             if(!alphaOK)ok=NO;else e->veiled=NO;
         }
@@ -205,7 +248,7 @@ static void v2ApplyWithSpaces(const struct dw2_record *records,const uint64_t *t
             int requestedSublevel=(r->flags&DW2_RECORD_PINNED)?CGWindowLevelForKey(kCGFloatingWindowLevelKey):e->originalSublevel;
             int sublevelStatus=0;if(!v2ApplySublevel(e,requestedSublevel,&sublevelStatus))ok=NO;
         }
-        BOOL spaceOK=!target||(v2WindowSpace(e->who.wid)==target&&v2SpaceDisplay(target,YES));
+        BOOL spaceOK=!target||(v2WindowSpace(e->who.wid)==target&&v2SpaceDisplayCached(target,YES,targetDisplays));
         if(!v2EntryCurrent(e))status[i]=DW2_IDENTITY;
         else if(!spaceOK||!ok)status[i]=DW2_NOT_APPLIED;
         else {

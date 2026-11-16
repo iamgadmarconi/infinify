@@ -53,6 +53,10 @@ static uint64_t (*displayCurrentSpace)(int,CFStringRef);
 static int (*getSpaceType)(int,uint64_t);
 static void (*moveWindowsToSpace)(int,CFArrayRef,uint64_t);
 static CFUUIDRef (*createDisplayUUID)(CGDirectDisplayID);
+// Optional SkyLight transaction calls, resolved in DWPayloadMove.m (Sunlight MIT provenance there).
+static CFTypeRef (*v2TransactionCreate)(int);
+static CGError (*v2TransactionCommit)(CFTypeRef,int);
+static CGError (*v2TransactionTransform)(CFTypeRef,uint32_t,int,int,CGAffineTransform);
 static NSDictionary *fixtureIdentity;
 static NSString *secret;
 static NSArray *allowlist;
@@ -95,14 +99,19 @@ static CGError dwReadAbsolute(int cid,uint32_t wid,CGAffineTransform *absolute) 
 // Writes the absolute matrix A by leaving placement 0 as it is (T0, read now) and setting the layer L that composes with it to A:
 // A = L after T0, so L = A after T0^-1. For a window that is where its native frame is (T0 = [1,0,0,1,-x,-y]) and A = T0 (a
 // restore of an untransformed window) L is the identity, which is written as exactly the identity. Placement 0 is never written.
-static CGError dwWriteAbsolute(int cid,uint32_t wid,CGAffineTransform absolute) {
-    CGAffineTransform base=CGAffineTransformIdentity;
-    CGError status=skyGetPlacement(cid,wid,DW_BASE_PLACEMENT,NULL,&base);
-    if(status)return status;
-    if(!finiteMatrix(base))return kCGErrorFailure;
+static BOOL dwComputeLayer(CGAffineTransform base,CGAffineTransform absolute,CGAffineTransform *out) {
+    if(!finiteMatrix(base))return NO;
     CGAffineTransform layer=CGAffineTransformConcat(CGAffineTransformInvert(base),absolute);
+    if(!finiteMatrix(layer))return NO;
     if(fabs(layer.a-1)<DW_LINEAR_TOLERANCE&&fabs(layer.d-1)<DW_LINEAR_TOLERANCE&&fabs(layer.b)<DW_LINEAR_TOLERANCE&&fabs(layer.c)<DW_LINEAR_TOLERANCE
         &&fabs(layer.tx)<DW_TRANSLATION_TOLERANCE&&fabs(layer.ty)<DW_TRANSLATION_TOLERANCE)layer=CGAffineTransformIdentity;
+    *out=layer;return YES;
+}
+static CGError dwWriteAbsolute(int cid,uint32_t wid,CGAffineTransform absolute) {
+    CGAffineTransform base=CGAffineTransformIdentity,layer=CGAffineTransformIdentity;
+    CGError status=skyGetPlacement(cid,wid,DW_BASE_PLACEMENT,NULL,&base);
+    if(status)return status;
+    if(!dwComputeLayer(base,absolute,&layer))return kCGErrorFailure;
     return skySetPlacement(cid,wid,DW_LAYER_PLACEMENT,0,&layer);
 }
 // The placement-1 layer, as the window server holds it. Reading an untouched window gives the identity; a restore writes the layer

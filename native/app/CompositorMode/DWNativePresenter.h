@@ -89,6 +89,7 @@
 // The helper is gone, the watchdog closed the session, or -finish ran. Nothing is
 // described or sent from then on. Recovery creates a separately audited object.
 @property (readonly) BOOL ended;
+@property (readonly) uint64_t stateRevision;
 @end
 // Each category below is implemented in DWNativePresenter+<Category>.m.
 @interface DWNativePresenter (Families)

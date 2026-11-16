@@ -305,8 +305,7 @@ two functions, `dwReadAbsolute` and `dwWriteAbsolute`, which `getTransform` and 
   settlement) accepts a translation within 1/256 pt and a linear part within 1e-6.
 - Originals are not absolute: they are the placement-1 layer (`dwReadLayer`, `dwWriteLayer`), journalled in schema 4, see "The
   original is the layer". (The first version of this change kept absolute originals and the journal at schema 3; that is what the
-  foreign-placement failure above showed to be wrong.) There is no optional transaction or list-batch transform path in the tree (`SLSTransactionSetWindowTransform`,
-  `SLSSetWindowTransforms` are not used), so none had to be moved.
+  foreign-placement failure above showed to be wrong.) Frames with two or more changed placement-1 layers batch those writes in one `SLSTransaction` (`SLSTransactionSetWindowTransform` at placement 1, flags 0, then `SLSTransactionCommit`) before verifying readback and falling back to `dwWriteAbsolute` on mismatch; `SLSSetWindowTransforms` is not used.
 
 **What the guest showed** (real TextEdit, Safari and Finder windows, build of this change, read from an ordinary process with
 `SLSGetWindowTransformAtPlacement` for placements 0 and 1, `SLSGetCatenatedWindowTransform`, `SLSGetWindowBounds` and

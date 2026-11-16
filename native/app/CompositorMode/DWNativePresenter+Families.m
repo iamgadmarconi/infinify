@@ -36,10 +36,13 @@ static const uint64_t DWNativeFamilyGraceMS=500;
 - (void)bound:(NSDictionary *)identity bounds:(CGRect)native family:(NSDictionary *)family {
     NSNumber *wid=identity[@"wid"];NSArray *born=[self admittedBirth:identity];
     if(!wid.unsignedIntValue || born.count!=2 || ![born[0]isEqual:identity[@"birth_sec"]] || ![born[1]isEqual:identity[@"birth_usec"]])return;
-    if(_desktopWide&&![self allowsWindow:identity])return;
     DWNativeWindow *window=_windows[wid];
-    if(window && (window->identity.pid!=[identity[@"pid"]intValue] || window->identity.birth_sec!=[identity[@"birth_sec"]unsignedLongLongValue] || window->identity.birth_usec!=[identity[@"birth_usec"]unsignedLongLongValue])){[self unbound:@{@"pid":@(window->identity.pid),@"wid":wid,@"birth_sec":@(window->identity.birth_sec),@"birth_usec":@(window->identity.birth_usec)}];window=nil;}
-    if(_releases[wid]){[_releases removeObjectForKey:wid];atomic_store(&_releasing,_releases.count!=0);_forced=YES;}
+    BOOL sameBoundRoot=window&&window->root==wid.unsignedIntValue&&window->identity.pid==[identity[@"pid"]intValue]
+        &&window->identity.birth_sec==[identity[@"birth_sec"]unsignedLongLongValue]
+        &&window->identity.birth_usec==[identity[@"birth_usec"]unsignedLongLongValue];
+    if(_desktopWide&&!sameBoundRoot&&![self allowsWindow:identity])return;
+    if(window&&!sameBoundRoot){[self unbound:@{@"pid":@(window->identity.pid),@"wid":wid,@"birth_sec":@(window->identity.birth_sec),@"birth_usec":@(window->identity.birth_usec)}];window=nil;}
+    if(_releases[wid]){[_releases removeObjectForKey:wid];atomic_store(&_releasing,_releases.count!=0);_forced=YES;++_stateRevision;}
     if(!window){window=_windows[wid]=[DWNativeWindow new];window->identity=(struct dw2_identity){.pid=[identity[@"pid"]intValue],.wid=wid.unsignedIntValue,.birth_sec=[identity[@"birth_sec"]unsignedLongLongValue],.birth_usec=[identity[@"birth_usec"]unsignedLongLongValue]};window->bounds=CGRectNull;window->root=wid.unsignedIntValue;_families[wid]=[NSSet setWithObject:wid];}
     // A window that moved or took a new size by itself: what the window server then does to its transform is not known, so the frame is sent again.
     if(!CGRectEqualToRect(window->bounds,native)){[self invalidatePlacementReadiness];window->bounds=native;_forced=YES;}
@@ -83,7 +86,8 @@ static const uint64_t DWNativeFamilyGraceMS=500;
             ||![who[@"pid"]isEqual:identity[@"pid"]]||![who[@"birth_sec"]isEqual:born[0]]||![who[@"birth_usec"]isEqual:born[1]]
             ||(existing&&existing->root!=wid.unsignedIntValue)||[members containsObject:child]
             ||([child isEqual:wid]&&!CGRectEqualToRect(CGRectMake(x,y,w,h),native))
-            ||(_desktopWide&&(![self admittedBirth:who]||!DWNativeWindowBelongsToRoot(who,identity)))){sound=NO;break;}
+            ||(_desktopWide&&!([child isEqual:wid]||(window->familyKnown&&[_families[wid]containsObject:child]&&existing&&existing->root==wid.unsignedIntValue&&existing->parent==parent))
+                &&(![self admittedBirth:who]||!DWNativeWindowBelongsToRoot(who,identity)))){sound=NO;break;}
         [members addObject:child];parents[child]=@(parent);
     }
     // Preserve the reported topology, rather than treating missing parents as
@@ -102,8 +106,8 @@ static const uint64_t DWNativeFamilyGraceMS=500;
         NSDictionary *who=member[@"identity"];NSNumber *child=who[@"wid"];
         NSDictionary *origin=member[@"native_bounds"][@"origin"],*size=member[@"native_bounds"][@"size"];
         CGRect frame=CGRectMake([origin[@"x"]doubleValue],[origin[@"y"]doubleValue],[size[@"width"]doubleValue],[size[@"height"]doubleValue]);
-        DWNativeWindow *attached=_windows[child];if(!attached){attached=_windows[child]=[DWNativeWindow new];attached->identity=window->identity;attached->identity.wid=child.unsignedIntValue;attached->root=wid.unsignedIntValue;attached->bounds=CGRectNull;_forced=YES;}
-        if(_releases[child]){[_releases removeObjectForKey:child];atomic_store(&_releasing,_releases.count!=0);_forced=YES;}
+        DWNativeWindow *attached=_windows[child];if(!attached){attached=_windows[child]=[DWNativeWindow new];attached->identity=window->identity;attached->identity.wid=child.unsignedIntValue;attached->root=wid.unsignedIntValue;attached->bounds=CGRectNull;_forced=YES;++_stateRevision;}
+        if(_releases[child]){[_releases removeObjectForKey:child];atomic_store(&_releasing,_releases.count!=0);_forced=YES;++_stateRevision;}
         uint32_t parent=[parents[child]unsignedIntValue];
         if(attached->parent!=parent){[self invalidatePlacementReadiness];attached->parent=parent;_forced=YES;}
         if(!CGRectEqualToRect(attached->bounds,frame)){[self invalidatePlacementReadiness];attached->bounds=frame;_forced=YES;}

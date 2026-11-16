@@ -173,6 +173,48 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
         }
         description->members=data.copy;
     }
+    // Omit parked families whose exact placement and native family are already
+    // acknowledged by the helper, keeping motion frames bounded by visible/changed windows.
+    if(atomic_load(&_retrying))[_settledParked removeAllObjects];
+    else if(_settledParked.count){
+        NSMutableIndexSet *omitted=[NSMutableIndexSet indexSet];
+        for(NSNumber *logical in _settledParked.allKeys){
+            DWNativePlacementDescription *description=desired[logical],*settled=_settledParked[logical];
+            if(!description||!description->parked||![description isEqual:settled]||![self placementDescriptionCurrent:description]){
+                [_settledParked removeObjectForKey:logical];continue;
+            }
+            NSMutableData *members=description->members.mutableCopy;
+            DWNativePlacementMember *items=members.mutableBytes;
+            for(NSUInteger i=0;i<members.length/sizeof(*items);i++){[omitted addIndex:items[i].index];items[i].index=UINT32_MAX;}
+            description->members=members.copy;
+        }
+        if(omitted.count){
+            NSUInteger fullTotal=_records.length/sizeof(struct dw2_record);
+            const struct dw2_record *old=_records.bytes;const uint64_t *oldSpaces=_recordSpaces.bytes;
+            NSMutableData *keptRecords=[NSMutableData data],*keptSpaces=[NSMutableData data];
+            NSMutableArray<NSNumber *> *keptOrder=[NSMutableArray array];
+            NSMutableDictionary<NSNumber *,NSNumber *> *remap=[NSMutableDictionary dictionary];
+            for(NSUInteger i=0;i<fullTotal;i++){
+                if([omitted containsIndex:i])continue;
+                remap[@(i)]=@(keptOrder.count);
+                [keptRecords appendBytes:&old[i] length:sizeof(*old)];
+                [keptSpaces appendBytes:&oldSpaces[i] length:sizeof(*oldSpaces)];
+                [keptOrder addObject:order[i]];
+            }
+            for(NSNumber *logical in desired.allKeys){
+                DWNativePlacementDescription *description=desired[logical];
+                NSMutableData *members=description->members.mutableCopy;
+                DWNativePlacementMember *items=members.mutableBytes;BOOL remapped=NO;
+                for(NSUInteger i=0;i<members.length/sizeof(*items);i++){
+                    if(items[i].index==UINT32_MAX)continue;
+                    NSNumber *mapped=remap[@(items[i].index)];
+                    if(mapped){items[i].index=mapped.unsignedIntValue;remapped=YES;}
+                }
+                if(remapped)description->members=members.copy;
+            }
+            _records=keptRecords;_recordSpaces=keptSpaces.copy;order=keptOrder;
+        }
+    }
     // Select complete logical families, not a prefix of the records. Keep the
     // original order and remap placement receipt indices to the selected frame.
     NSUInteger limit=_info.max_records,total=_records.length/sizeof(struct dw2_record);
@@ -239,13 +281,16 @@ static BOOL DWNativePlacementSourceMatches(id value,NSDictionary *identity) {
         for(NSNumber *logical in desired.allKeys){
             DWNativePlacementDescription *description=desired[logical];NSMutableData *members=description->members.mutableCopy;
             DWNativePlacementMember *items=members.mutableBytes;BOOL complete=YES;
-            for(NSUInteger i=0;i<members.length/sizeof(*items);i++){NSNumber *index=indices[@(items[i].index)];if(!index){complete=NO;break;}items[i].index=index.unsignedIntValue;}
+            for(NSUInteger i=0;i<members.length/sizeof(*items);i++){
+                if(items[i].index==UINT32_MAX)continue;
+                NSNumber *index=indices[@(items[i].index)];if(!index){complete=NO;break;}items[i].index=index.unsignedIntValue;
+            }
             if(!complete||!members.length)[desired removeObjectForKey:logical];else description->members=members.copy;
         }
         _records=records;_recordSpaces=spaces.copy;order=newOrder;
     }
     if(![_desiredPlacements isEqualToDictionary:desired]){
-        [self invalidatePlacementReadiness];_forced=YES;for(DWNativePlacementDescription *description in desired.objectEnumerator)description->binding.revision=_placementRevision;
+        _acknowledgedPlacements=@{};_acknowledgedSequence=0;_forced=YES;
     }
     _desiredPlacements=desired.copy;_order=order;_described=YES;
 }

@@ -16,10 +16,8 @@
 // about 70 000 times a second: a direct SLSMoveWindow of 200 points drew it at the moved place until the layer was written again;
 // the move and the layer for the new origin in one transaction, in either order, drew it at one place throughout.
 
-static CFTypeRef (*v2TransactionCreate)(int);
-static CGError (*v2TransactionCommit)(CFTypeRef,int);
+// v2TransactionCreate, v2TransactionCommit and v2TransactionTransform are declared in DWPayloadState.m so frame batches share them.
 static CGError (*v2TransactionMove)(CFTypeRef,uint32_t,CGPoint);
-static CGError (*v2TransactionTransform)(CFTypeRef,uint32_t,int,int,CGAffineTransform);
 static CGError (*v2DirectMove)(int,uint32_t,CGPoint *);
 static void v2ResolveMove(void) {
     void *sky=v2Sky();
