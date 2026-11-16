@@ -8,6 +8,7 @@ mod command_lookup;
 mod effects;
 mod ffi;
 mod ffi_resize;
+mod focus_policy;
 mod fullscreen;
 mod gestures;
 mod ipc;
@@ -193,6 +194,8 @@ pub(crate) struct FocusEffect {
 }
 #[derive(Clone, Debug, Default, Serialize)]
 struct FocusRuntime {
+    #[serde(skip)]
+    policy: focus_policy::FocusPolicy,
     observed_native: Option<FocusEffect>,
     pending_effect: Option<FocusEffect>,
     last_result: Option<Value>,
@@ -738,6 +741,10 @@ pub(crate) enum Command {
     },
     EndFocusCycle {},
     CancelFocusCycle {},
+    FocusPolicy {
+        timestamp_ns: u64,
+        fact: focus_policy::FocusFact,
+    },
     FocusLost {},
     FocusResult {
         effect_id: u64,
@@ -1011,6 +1018,9 @@ impl Controller {
             _ => {}
         }
         match command {
+            Command::FocusPolicy { timestamp_ns, fact } => {
+                return self.focus_policy_fact(timestamp_ns, fact);
+            }
             // `execute` answers these from the controller itself, before it
             // clones one to mutate.
             Command::Snapshot {}
