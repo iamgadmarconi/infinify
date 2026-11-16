@@ -236,7 +236,7 @@ static void observeStats(NSUInteger sources,BOOL all) {
     [self.windowObserver requestSources:requests scope:self.scope nativeDiscoveryExclusions:self.native?manager.offeredWindows:nil discovery:^(DWWindowObservationSnapshot *snapshot){
         Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
         if(!d||d.cleaning||d.sessionInactive||d.manager!=manager||d.native!=presenter||d.native.ended||d.nativeSessionEpoch!=session
-            ||!snapshot.listSucceeded||now-snapshot.startedAt>.1||now-snapshot.finishedAt>.1)return;
+            ||!snapshot.listSucceeded||now-snapshot.finishedAt>.1)return;
         // Timely discovery does not wait behind audits of already bound roots.
         // Adoption still performs its fresh native identity/authority checks.
         // Only a batch that audits every source spends the periodic deadline; the exclusions above already cover every managed/offered root.
@@ -245,7 +245,11 @@ static void observeStats(NSUInteger sources,BOOL all) {
         Desktop *d=weak;CFTimeInterval now=CACurrentMediaTime();
         if(!d||d.cleaning||d.sessionInactive||d.manager!=manager||d.native!=presenter||d.native.ended||d.nativeSessionEpoch!=session)return;
         @try {
-        if(!snapshot.listSucceeded||now-snapshot.startedAt>.1||now-snapshot.finishedAt>.1){
+        for(NSDictionary *deferred in snapshot.deferredRequests){
+            NSNumber *logical=DWTyped(deferred[@"logical"],NSNumber.class);
+            if(logical)[d wantWindowAudit:NO pid:0 logical:logical];
+        }
+        if(!snapshot.listSucceeded||now-snapshot.finishedAt>.1){
             BOOL changed=NO;
             for(DWWindowObservation *observation in snapshot.sources){NSDictionary *request=observation.request;LiveSource *source=d.sources[request[@"logical"]];
                 if(source&&source.observationToken==[request[@"generation"]unsignedLongLongValue]&&[source.identity isEqual:request[@"identity"]]&&source.nativeFamily){
@@ -263,22 +267,51 @@ static void observeStats(NSUInteger sources,BOOL all) {
                         &&[asArray(cached[@"members"])isEqual:asArray(observation.family[@"members"])];
                     if(unchanged)continue;
                     [d forgetNativeFamily:source];changed=YES;}}
-            // Audits that were not read are still owed, not failed: the next poll asks for them again.
-            if(auditAll)d.auditAllWanted=YES;else{for(NSNumber *pid in auditPIDs)[d wantWindowAudit:NO pid:pid.intValue logical:nil];for(NSNumber *logical in auditLogicals)[d wantWindowAudit:NO pid:0 logical:logical];}
+            // Re-queue failed list reads and explicit targeted audits; a periodic
+            // sweep whose delivery stalled resumes at its next scheduled deadline
+            // instead of livelocking back-to-back.
+            if(!snapshot.listSucceeded&&auditAll)d.auditAllWanted=YES;
+            for(NSNumber *pid in auditPIDs)[d wantWindowAudit:NO pid:pid.intValue logical:nil];
+            for(NSNumber *logical in auditLogicals)[d wantWindowAudit:NO pid:0 logical:logical];
             if(changed&&!d.frameFlying)[d render];return;
         }
         BOOL describe=NO;
         for(DWWindowObservation *observation in snapshot.sources){
             NSDictionary *request=observation.request;LiveSource *source=d.sources[request[@"logical"]];
-            if(!source||source.detached||source.observationToken!=[request[@"generation"]unsignedLongLongValue]||![source.identity isEqual:request[@"identity"]]||![source.router.bounds isEqual:request[@"prior_bounds"]]||CACurrentMediaTime()-observation.sampledAt>.1)continue;
+            if(!source||source.detached||source.observationToken!=[request[@"generation"]unsignedLongLongValue]||![source.identity isEqual:request[@"identity"]]||![source.router.bounds isEqual:request[@"prior_bounds"]])continue;
+            if(CACurrentMediaTime()-observation.sampledAt>.1){
+                if(source.nativeFamily){
+                    NSDictionary *cached=source.nativeFamily;
+                    BOOL unchanged=observation.state==DWWindowObservationPresent&&observation.hasBounds
+                        &&boundIdentity(cached[@"identity"],source.identity)&&boundIdentity(observation.family[@"identity"],source.identity)
+                        &&[observation.family[@"root"]isEqual:source.identity[@"wid"]]
+                        &&CGRectEqualToRect(DWRectFromJSON(cached[@"native_bounds"]),observation.bounds)
+                        &&[asArray(cached[@"members"])isEqual:asArray(observation.family[@"members"])];
+                    if(!unchanged){[d forgetNativeFamily:source];describe=YES;}
+                }
+                if([auditPIDs containsObject:@(source.router.pid)]||[auditLogicals containsObject:source.logical])
+                    [d wantWindowAudit:NO pid:0 logical:source.logical];
+                continue;
+            }
             // Discovery can stay eager after an appearance hint without asking
             // the controller to observe every unchanged overlay root again.
             if(!presenter&&!reconcile&&!source.error&&!source.destroyed)continue;
+            NSString *beforeTitle=source.title;NSDictionary *beforeBounds=source.router.bounds;
+            uint64_t beforeFamilyRev=d.nativeFamilyRevision,beforePresenterRev=presenter.stateRevision;
+            BOOL beforeVisHeld=source.nativeVisibilityHeld,beforeMinimized=source.nativeMinimized;
             [d observeVisibility:observation source:source];
-            if(observation.state==DWWindowObservationReadFailed){[d forgetNativeFamily:source];continue;}
+            if(observation.state==DWWindowObservationReadFailed){
+                uint64_t rev=d.nativeFamilyRevision;[d forgetNativeFamily:source];
+                if(d.nativeFamilyRevision!=rev)describe=YES;
+                continue;
+            }
             if(observation.state!=DWWindowObservationPresent){[d track:source];describe=YES;continue;}
             if(!DWInScope(d.scope,source.router.pid))continue;
-            [d track:source info:observation.info observation:observation];describe=YES;
+            [d track:source info:observation.info observation:observation];
+            if(d.sources[source.logical]!=source||source.detached||!d.controllerVisualSnapshot||source.title!=beforeTitle
+                ||source.router.bounds!=beforeBounds||d.nativeFamilyRevision!=beforeFamilyRev
+                ||presenter.stateRevision!=beforePresenterRev||source.nativeVisibilityHeld!=beforeVisHeld
+                ||source.nativeMinimized!=beforeMinimized)describe=YES;
         }
         if(!d.frameFlying&&(describe||d.sceneDirty))[d render];
         } @finally {if(!d.cleaning&&d.observationFollowUp)[d requestWindowObservation];}

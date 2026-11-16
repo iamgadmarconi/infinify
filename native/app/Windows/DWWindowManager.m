@@ -130,14 +130,16 @@ static void creationTrace(NSUInteger *lines,const char *stage,pid_t pid,CGWindow
     if(!getenv("INFINIFY_DEBUG")||*lines>=128)return;(*lines)++;CFTimeInterval at=CACurrentMediaTime();
     fprintf(stderr,"debug: native creation trace stage=%s pid=%d wid=%u at=%.6f elapsed_ms=%.3f detail=%s\n",stage,pid,wid,at,started?(at-started)*1000:0,detail?:"none");
 }
-static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,NSArray *born,NSDictionary **verified,const char **refusal,CGWindowID *observedWindow) {
+static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,NSArray *born,NSSet<NSNumber *> *alreadyOffered,NSDictionary **verified,const char **refusal,CGWindowID *observedWindow) {
     *refusal="birth_or_trust";
     if(born.count!=2||![preservationBirth(pid)isEqual:born]||!AXIsProcessTrusted())return nil;
     AXError (*get)(AXUIElementRef,uint32_t *)=(AXError (*)(AXUIElementRef,uint32_t *))dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
     uint32_t wid=0;pid_t owner=0;
     *refusal="ax_identity";
     if(!get||AXUIElementSetMessagingTimeout(element,.1)||AXUIElementGetPid(element,&owner)||owner!=pid||get(element,&wid)||!wid)return nil;
-    *observedWindow=wid;*refusal="canonical_before";
+    *observedWindow=wid;
+    if([alreadyOffered containsObject:@(wid)]){*refusal="already_offered";return nil;}
+    *refusal="canonical_before";
     NSDictionary *identity=@{@"pid":@(pid),@"wid":@(wid),@"birth_sec":born[0],@"birth_usec":born[1]};
     CFTypeRef role=NULL,subrole=NULL,title=NULL;
     *refusal="role";BOOL known=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role)==kAXErrorSuccess&&role&&CFEqual(role,kAXWindowRole);
@@ -241,10 +243,10 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
     if(skip){creationTrace(&_creationTraceLines,"ingress_skip",pid,0,0,skip);return;}
     NSDictionary *ticket=@{@"pid":@(pid),@"started":@(CACurrentMediaTime())};self.creationTicket=ticket;self.creationReading=YES;
     creationTrace(&_creationTraceLines,"started",pid,0,[ticket[@"started"]doubleValue],NULL);
-    NSArray *original=[born copy];CFRetain(element);__weak DWWindowManager *weak=self;
+    NSArray *original=[born copy];NSSet<NSNumber *> *alreadyOffered=[self.offered copy];CFRetain(element);__weak DWWindowManager *weak=self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         NSDictionary *basis=nil;const char *refusal=NULL;CGWindowID observedWindow=0;
-        DWWindowCandidate *candidate=createdNativeWindow(element,pid,original,&basis,&refusal,&observedWindow);CFRelease(element);
+        DWWindowCandidate *candidate=createdNativeWindow(element,pid,original,alreadyOffered,&basis,&refusal,&observedWindow);CFRelease(element);
         dispatch_async(dispatch_get_main_queue(),^{DWWindowManager *manager=weak;if(!manager)return;manager.creationReading=NO;
             CFTimeInterval started=[ticket[@"started"]doubleValue];
             creationTrace(&manager->_creationTraceLines,"worker",pid,observedWindow,started,refusal);
@@ -288,6 +290,10 @@ static DWWindowCandidate *createdNativeWindow(AXUIElementRef element,pid_t pid,N
 - (void)invalidateNativeMetadata:(CGWindowID)window pid:(pid_t)pid {
     [self windowCreationInvalidated:pid];
     for(NSNumber *wid in self.nativeMetadata.allKeys)if((!window||wid.unsignedIntValue==window)&&(!pid||[self.nativeMetadata[wid][@"basis"][@"identity"][@"pid"]intValue]==pid))[self.nativeMetadata removeObjectForKey:wid];
+}
+- (BOOL)windowEventKnown:(CGWindowID)window pid:(pid_t)pid {
+    if(self.stopped||!window)return NO;
+    return [self.offered containsObject:@(window)]||[self.declined containsObject:@(window)]||[self.host managesWindow:window pid:pid];
 }
 - (void)windowsChanged:(pid_t)pid { if(self.stopped)return;[self invalidateNativeMetadata:0 pid:pid];self.eager=NSProcessInfo.processInfo.systemUptime+1;if([self.host respondsToSelector:@selector(windowFamilyChanged:)])[self.host windowFamilyChanged:pid]; }
 - (void)windowMoved:(CGWindowID)window pid:(pid_t)pid {

@@ -51,6 +51,10 @@
 // Miniaturized/deminiaturized is a hint to read AXMinimized for the exact
 // current binding. Neither the notification nor its boolean establishes state.
 - (void)windowVisibilityChanged:(CGWindowID)window pid:(pid_t)pid;
+// Read-only check whether the sink already tracks, offered or declined this CGWindowID
+// for pid, so non-window child notifications inside an already-known window do not
+// re-trigger process-wide appearance or family invalidation.
+- (BOOL)windowEventKnown:(CGWindowID)window pid:(pid_t)pid;
 @end
 // Event-driven window tracking, the way yabai does it. NSWorkspace says when an application launches, ends, is activated,
 // hidden or shown, and when the active Space changes; with Accessibility access one AXObserver per regular application says

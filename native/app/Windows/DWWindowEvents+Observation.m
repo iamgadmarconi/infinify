@@ -25,15 +25,25 @@ static void notified(AXObserverRef observer,AXUIElementRef element,CFStringRef n
 // ax_retry case, as in -observe:), or answered with no window number, as a window announced before it has one would. yabai
 // drops such an element for good (src/event_loop.c, WINDOW_CREATED); here it is asked about again. Left as it was for an element
 // that answered and is no window. One whose notifications were all refused is returned too: it still names the element's window.
-static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWObservedApplication *application,BOOL *unanswered) {
+static DWObservedWindow *watchElement(AXObserverRef observer,AXUIElementRef element,DWObservedApplication *application,BOOL *unanswered,uint32_t *outWindow) {
+    if(outWindow)*outWindow=0;
     GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");uint32_t wid=0;CFTypeRef role=NULL;
     if(!get||AXUIElementSetMessagingTimeout(element,answer))return nil;
     AXError error=get(element,&wid);if(error||!wid){if(!error||error==kAXErrorCannotComplete)*unanswered=YES;return nil;}
+    if(outWindow)*outWindow=wid;
     error=AXUIElementCopyAttributeValue(element,kAXRoleAttribute,&role);BOOL window=error==kAXErrorSuccess&&role&&CFGetTypeID(role)==CFStringGetTypeID()&&CFEqual(role,kAXWindowRole);
     if(role)CFRelease(role);if(!window){if(error==kAXErrorCannotComplete)*unanswered=YES;return nil;}
     DWObservedWindow *watched=[DWObservedWindow new];watched.application=application;watched.window=wid;watched.element=(AXUIElementRef)CFRetain(element);uint8_t mask=0;
     for(int i=0;i<windowCount;i++)if(AXObserverAddNotification(observer,element,windowNotifications[i],(__bridge void *)watched)==kAXErrorSuccess)mask|=(uint8_t)(1<<i);
     watched.registered=mask;return watched;
+}
+static DWObservedWindow *watch(AXObserverRef observer,AXUIElementRef element,DWObservedApplication *application,BOOL *unanswered) {
+    return watchElement(observer,element,application,unanswered,NULL);
+}
+static BOOL applicationWatchesWindowID(DWObservedApplication *application,CGWindowID wid) {
+    if(!wid)return NO;
+    for(DWObservedWindow *w in application.contexts)if(!w.destroyed&&w.window==wid)return YES;
+    return NO;
 }
 @implementation DWWindowEvents (Observation)
 // yabai's application_observe: one observer per application, every application notification with the application as its
@@ -175,18 +185,93 @@ void DWWindowEventsUnobserve(DWObservedApplication *application,BOOL ended) {
     }
     // WINDOW_FOCUSED: which window has the focus is the navigation coordinator's to read.
     if(CFEqual(notification,kAXFocusedWindowChangedNotification)){[self resolve:element application:application];[self changed:0 pid:0];return;}
-    // WINDOW_CREATED: its own notifications are registered, and the sink looks for it on screen. Coalesced like the rest: an
-    // application may report elements at any rate, and both names may announce one window.
-    if(CFEqual(notification,kAXCreatedNotification)||CFEqual(notification,kAXWindowCreatedNotification)){
+    // WINDOW_CREATED: kAXWindowCreatedNotification names a window directly; kAXCreatedNotification is posted for every UI/DOM
+    // child element as well, so resolve its element on the PID lane first and report an appearance unless it positively names a
+    // non-window child of an already-watched or already-known window.
+    if(CFEqual(notification,kAXWindowCreatedNotification)){
         [self resolve:element application:application];[self changed:appeared pid:pid];
         if(!self.stopped&&!application.gone&&[sink respondsToSelector:@selector(windowCreatedElement:pid:birth:)])
             [sink windowCreatedElement:element pid:pid birth:@[@(application.seconds),@(application.microseconds)]];
         return;
     }
-    // WINDOW_MOVED, WINDOW_RESIZED, WINDOW_TITLE_CHANGED. A title change is reported for elements that are no window too.
+    if(CFEqual(notification,kAXCreatedNotification)){
+        if(CFDictionaryContainsKey(application.windows,element)){
+            [self changed:appeared pid:pid];
+            if(!self.stopped&&!application.gone&&[sink respondsToSelector:@selector(windowCreatedElement:pid:birth:)])
+                [sink windowCreatedElement:element pid:pid birth:@[@(application.seconds),@(application.microseconds)]];
+            return;
+        }
+        if(!application.observer||CFSetContainsValue(application.asked,element))return;
+        if(CFSetGetCount(application.asked)>=256)CFSetRemoveAllValues(application.asked);
+        CFSetAddValue(application.asked,element);
+        AXObserverRef observer=(AXObserverRef)CFRetain(application.observer);CFRetain(element);
+        NSArray<NSNumber *> *born=@[@(application.seconds),@(application.microseconds)];__weak DWWindowEvents *weak=self;
+        DWWindowEventsAsync(pid,^{
+            BOOL unanswered=NO;uint32_t wid=0;
+            DWObservedWindow *watched=watchElement(observer,element,application,&unanswered,&wid);
+            dispatch_async(dispatch_get_main_queue(),^{
+                DWWindowEvents *events=weak;id<DWWindowEventSink> currentSink=events.sink;
+                if(events&&!events.stopped&&!application.gone){
+                    if(watched){
+                        [events watched:@[watched] application:application];
+                        [events changed:appeared pid:pid];
+                        if(!events.stopped&&!application.gone&&[currentSink respondsToSelector:@selector(windowCreatedElement:pid:birth:)])
+                            [currentSink windowCreatedElement:element pid:pid birth:born];
+                    }else if(unanswered){
+                        CFSetRemoveValue(application.asked,element);application.unanswered=YES;
+                        [events changed:appeared pid:pid];
+                    }else{
+                        BOOL knownWindow=applicationWatchesWindowID(application,wid)
+                            ||([currentSink respondsToSelector:@selector(windowEventKnown:pid:)]&&[currentSink windowEventKnown:wid pid:pid]);
+                        if(!knownWindow){
+                            // Keep unverified non-AXWindow roots eligible for a later role transition.
+                            CFSetRemoveValue(application.asked,element);
+                            [events changed:appeared pid:pid];
+                        }
+                    }
+                }
+                CFRelease(observer);CFRelease(element);
+            });
+        });
+        return;
+    }
+    // WINDOW_MOVED, WINDOW_RESIZED, WINDOW_TITLE_CHANGED. Child controls and DOM nodes post title/geometry notifications too:
+    // known watched windows report immediately, while unknown elements resolve on the PID lane so child elements inside an
+    // already-watched AXWindow do not re-audit every window of the process on main.
     DWObservedWindow *known=(__bridge DWObservedWindow *)CFDictionaryGetValue(application.windows,element);
-    if(!known&&!CFEqual(notification,kAXTitleChangedNotification))[self resolve:element application:application];
-    if(known&&CFEqual(notification,kAXWindowMovedNotification))[self changed:known.window pid:pid moveOnly:YES];
-    else [self changed:known?known.window:0 pid:pid];
+    if(known){
+        if(CFEqual(notification,kAXWindowMovedNotification))[self changed:known.window pid:pid moveOnly:YES];
+        else [self changed:known.window pid:pid];
+        return;
+    }
+    if(!application.observer)return;
+    BOOL isTitle=CFEqual(notification,kAXTitleChangedNotification)!=0;
+    BOOL moved=CFEqual(notification,kAXWindowMovedNotification)!=0;
+    if(isTitle&&CFSetContainsValue(application.asked,element))return;
+    AXObserverRef observer=(AXObserverRef)CFRetain(application.observer);CFRetain(element);__weak DWWindowEvents *weak=self;
+    DWWindowEventsAsync(pid,^{
+        BOOL unanswered=NO;uint32_t wid=0;
+        DWObservedWindow *watched=watchElement(observer,element,application,&unanswered,&wid);
+        dispatch_async(dispatch_get_main_queue(),^{
+            DWWindowEvents *events=weak;id<DWWindowEventSink> currentSink=events.sink;
+            if(events&&!events.stopped&&!application.gone){
+                if(watched){
+                    [events watched:@[watched] application:application];
+                    [events changed:watched.window pid:pid moveOnly:moved];
+                }else if(wid){
+                    if(applicationWatchesWindowID(application,wid)){
+                        if(CFSetGetCount(application.asked)>=256)CFSetRemoveAllValues(application.asked);
+                        CFSetAddValue(application.asked,element);
+                    }else if(!isTitle||![currentSink respondsToSelector:@selector(windowEventKnown:pid:)]||[currentSink windowEventKnown:wid pid:pid]){
+                        [events changed:wid pid:pid moveOnly:moved];
+                    }
+                }else if(unanswered){
+                    application.unanswered=YES;
+                    if(!isTitle)[events changed:0 pid:pid];
+                }
+            }
+            CFRelease(observer);CFRelease(element);
+        });
+    });
 }
 @end

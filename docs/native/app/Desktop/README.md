@@ -103,8 +103,11 @@ before its final synchronous save.
 Native idle reconciliation batches the on-screen list, untransformed bounds and
 missing/parked source metadata on a serial read-only worker, with at most one
 batch outstanding. Immutable PID/birth/WID and binding tokens accompany each
-request; the main consumer rejects batches older than 100 ms and revalidates
-scope, identity, prior bounds and event/resize tokens before applying results.
+request; the worker time-slices large source audits, timestamps each source
+when read and leaves any unread tail queued for the next slice, while the main
+consumer rejects late deliveries (> 100 ms after completion) or individual
+samples older than 100 ms and revalidates scope, identity, prior bounds and
+event/resize tokens before applying results.
 Discovery retains the CG list's actual window order. Failed reads retain the
 source, while absence or identity changes trigger a fresh synchronous check.
 Event, input and resize reads remain synchronous and fresh. Native

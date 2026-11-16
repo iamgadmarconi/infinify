@@ -39,6 +39,9 @@ typedef NS_ENUM(NSUInteger,DWWindowObservationState) {
 // retain their real visibility/order; missing bases withhold native adoption.
 @property(nonatomic,copy,readonly) NSDictionary<NSNumber *,NSDictionary *> *nativeCandidateBases;
 @property(nonatomic,copy,readonly) NSArray<DWWindowObservation *> *sources;
+// Unread tail when a large source batch stops after its worker time slice so
+// completed observations settle promptly instead of aging past 100 ms.
+@property(nonatomic,copy,readonly) NSArray<NSDictionary *> *deferredRequests;
 @property(nonatomic,readonly) CFTimeInterval startedAt,finishedAt,deliveredAt;
 @end
 

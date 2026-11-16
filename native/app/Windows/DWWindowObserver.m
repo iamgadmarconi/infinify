@@ -26,6 +26,7 @@
 @property(nonatomic,copy,readwrite) NSArray<NSDictionary *> *orderedOnScreen;
 @property(nonatomic,copy,readwrite) NSDictionary<NSNumber *,NSDictionary *> *nativeCandidateBases;
 @property(nonatomic,copy,readwrite) NSArray<DWWindowObservation *> *sources;
+@property(nonatomic,copy,readwrite) NSArray<NSDictionary *> *deferredRequests;
 @property(nonatomic,readwrite) CFTimeInterval startedAt,finishedAt,deliveredAt;
 @end
 @implementation DWWindowObservationSnapshot @end
@@ -88,26 +89,35 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
     snapshot.nativeCandidateBases=nativeBases.copy;
     if(discovered){
         DWWindowObservationSnapshot *metadata=[DWWindowObservationSnapshot new];metadata.generation=generation;metadata.listSucceeded=snapshot.listSucceeded;
-        metadata.startedAt=snapshot.startedAt;metadata.finishedAt=CACurrentMediaTime();metadata.onScreen=snapshot.onScreen;metadata.orderedOnScreen=snapshot.orderedOnScreen;metadata.nativeCandidateBases=snapshot.nativeCandidateBases;metadata.sources=@[];
+        metadata.startedAt=snapshot.startedAt;metadata.finishedAt=CACurrentMediaTime();metadata.onScreen=snapshot.onScreen;metadata.orderedOnScreen=snapshot.orderedOnScreen;metadata.nativeCandidateBases=snapshot.nativeCandidateBases;metadata.sources=@[];metadata.deferredRequests=@[];
         discovered(metadata);
     }
+    static const NSUInteger DWMinimumSourceSlice=8;
+    static const CFTimeInterval DWSourceSliceBudget=.045;
+    CFTimeInterval sliceStarted=CACurrentMediaTime();
     NSMutableArray<DWWindowObservation *> *sources=[NSMutableArray arrayWithCapacity:requests.count];
-    for(NSDictionary *request in requests){
+    NSArray<NSDictionary *> *deferred=@[];
+    for(NSUInteger index=0;index<requests.count;index++){
+        if(index>=DWMinimumSourceSlice&&CACurrentMediaTime()-sliceStarted>=DWSourceSliceBudget){
+            deferred=[requests subarrayWithRange:NSMakeRange(index,requests.count-index)];
+            break;
+        }
+        NSDictionary *request=requests[index];
         DWWindowObservation *source=[DWWindowObservation new];source.request=request;source.state=DWWindowObservationReadFailed;
-        // Metadata and cached births may have been read before this source's
-        // own bounds. Dating it at batch start gives a conservative upper bound
-        // on age, including any slow family queries in the same batch.
-        source.sampledAt=snapshot.startedAt;
+        CFTimeInterval sourceStart=CACurrentMediaTime();
+        BOOL reuseBatchList=sourceStart-snapshot.startedAt<=.03;
+        source.sampledAt=reuseBatchList?snapshot.startedAt:sourceStart;
         NSDictionary *identity=request[@"identity"];NSNumber *wid=identity[@"wid"],*pid=identity[@"pid"];NSArray *expected=@[identity[@"birth_sec"],identity[@"birth_usec"]];
         if(scope&&![scope[pid]isEqual:expected])source.failure=@"requested process is outside the observation scope";
         else {
-            NSArray *born=observedBirth(pid.intValue,births);
+            uint64_t sec=0,usec=0;
+            NSArray *born=reuseBatchList?observedBirth(pid.intValue,births):(DWProcessBirth(pid.intValue,&sec,&usec)?@[@(sec),@(usec)]:nil);
             if(!born)source.failure=@"process identity could not be read";
             else if(![born isEqual:expected]){source.state=DWWindowObservationIdentityChanged;source.failure=@"process instance changed";}
             else {
-                NSDictionary *info=onScreen[wid];BOOL read=YES;
+                NSDictionary *info=reuseBatchList?onScreen[wid]:nil;BOOL read=YES;
                 // A bound window may be parked, minimized or otherwise absent
-                // from discovery. A worker-only individual read preserves it.
+                // from discovery, or read after the batch-start list aged.
                 if(!info){CFArrayRef rows=CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,wid.unsignedIntValue);read=rows!=NULL;
                     for(NSDictionary *row in (__bridge NSArray *)rows)if([row[(id)kCGWindowNumber]isEqual:wid]){info=[row copy];break;}
                     if(rows)CFRelease(rows);}
@@ -128,7 +138,7 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
         }
         [sources addObject:source];
     }
-    snapshot.sources=[sources copy];snapshot.finishedAt=CACurrentMediaTime();return snapshot;
+    snapshot.sources=[sources copy];snapshot.deferredRequests=deferred;snapshot.finishedAt=CACurrentMediaTime();return snapshot;
 }
 
 @implementation DWWindowObserver {
