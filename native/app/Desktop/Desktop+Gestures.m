@@ -113,27 +113,27 @@
 // The finger counts a [gestures] binding takes, for the Dock guard: after every config load, and when set-trackpad switches gestures off or on.
 - (void)refreshGestureFingers {
     if(!self.dockGuard)return;
-    NSDictionary *reply=[self call:@{@"op":@"gesture_fingers"}];uint32_t mask=0;
-    for(id count in asArray(reply[@"fingers"])){NSUInteger n=[DWTyped(count,NSNumber.class)unsignedIntegerValue];if(n>0&&n<32)mask|=1u<<n;}
+    DWControllerReply *reply=[self.controller gestureFingers];uint32_t mask=0;
+    for(id count in reply.fingers){NSUInteger n=[DWTyped(count,NSNumber.class)unsignedIntegerValue];if(n>0&&n<32)mask|=1u<<n;}
     // Five or more fingers are held back too, bound or not: the system's five-finger spread (Show Desktop) and pinch fling every
     // window to the screen's edges under a canvas that draws them elsewhere (owner, 2026-10-30, after the first real-Mac run).
     mask|=~((1u<<5)-1);
     [self.dockGuard setBound:mask];
 }
 // The recogniser's gesture in progress, for the Dock guard: it holds the system's gestures back for its finger count until it ends.
-- (void)noteDockGesture:(NSDictionary *)event {
-    NSString *op=event[@"op"];
-    // INFINIFY_DEBUG: every gesture the recogniser begins or ends, with the source that fed it and what the guard held at that moment.
-    if(DWDebugTrace()&&([op isEqual:@"gesture_begin"]||[op isEqual:@"gesture_end"])){
+- (void)noteDockGesture:(DWTrackpadGestureEvent *)event {
+    BOOL begin=event.phase==DWTrackpadGestureBegin,end=event.phase==DWTrackpadGestureEnd;
+    // Keep the recognizer diagnostics byte-for-byte without protocol operations.
+    if(DWDebugTrace()&&(begin||end)){
         DWDockGuardState g=[self.dockGuard state];
-        fprintf(stderr,"debug: gestures: %s%s%s fingers=%s path=%s%s guard{live=%d fingers=%u gesture=%u bound=0x%x refused=%d}\n",op.UTF8String,
-            [op isEqual:@"gesture_begin"]?" kind=":"",[op isEqual:@"gesture_begin"]?[DWTyped(event[@"kind"],NSString.class)UTF8String]?:"?":"",
-            [op isEqual:@"gesture_begin"]?[[DWTyped(event[@"fingers"],NSNumber.class)stringValue]UTF8String]?:"?":"-",self.touchPath.UTF8String?:"?",
-            [op isEqual:@"gesture_end"]?([event[@"cancelled"]boolValue]?" cancelled=1":" cancelled=0"):"",
+        fprintf(stderr,"debug: gestures: gesture_%s%s%s fingers=%s path=%s%s guard{live=%d fingers=%u gesture=%u bound=0x%x refused=%d}\n",begin?"begin":"end",
+            begin?" kind=":"",begin?event.kind.UTF8String?:"?":"",
+            begin?[@(event.fingers).stringValue UTF8String]?:"?":"-",self.touchPath.UTF8String?:"?",
+            end?(event.cancelled?" cancelled=1":" cancelled=0"):"",
             g.live,g.fingers,g.gesture,g.bound,g.refused);
     }
-    if([op isEqual:@"gesture_begin"])[self.dockGuard gesture:[DWTyped(event[@"fingers"],NSNumber.class)unsignedIntegerValue] at:CACurrentMediaTime()];
-    else if([op isEqual:@"gesture_end"])[self.dockGuard gesture:0 at:CACurrentMediaTime()];
+    if(begin)[self.dockGuard gesture:event.fingers at:CACurrentMediaTime()];
+    else if(end)[self.dockGuard gesture:0 at:CACurrentMediaTime()];
 }
 // One libinput-shaped event, from the recogniser or the magnify stream, to the
 // controller. gesture_begin gains what only the shell knows: the modifiers held, the
@@ -141,18 +141,18 @@
 // An update or an end, which may fire an action, says whether a real modifier is down
 // as it does, as a hot key's action does. The reply is an action's, with what the
 // gesture fired and a note when it is refused (a resize of a screen-pinned window).
-- (void)gesture:(NSDictionary *)event owner:(NSInteger)owner {
-    NSString *op=event[@"op"];
+- (void)gesture:(DWTrackpadGestureEvent *)event owner:(NSInteger)owner {
+    BOOL begin=event.phase==DWTrackpadGestureBegin,end=event.phase==DWTrackpadGestureEnd;
     // Cancellation receipts still drain the old gesture; no new/update event can
     // move the logical scene while its native owner is unavailable.
-    if([self nativeUnavailable]&&(![op isEqual:@"gesture_end"]||![event[@"cancelled"]boolValue]))return;
-    BOOL begin=[op isEqual:@"gesture_begin"],end=[op isEqual:@"gesture_end"],held=[DWCycleHold modifiersDown]!=0;NSMutableDictionary *command=[event mutableCopy];
+    if([self nativeUnavailable]&&(!end||!event.cancelled))return;
+    BOOL held=[DWCycleHold modifiersDown]!=0;DWModifierFlags modifiers={0};BOOL windowContext=NO;NSNumber *gestureOutput=nil;CGPoint gesturePointer=CGPointZero;
     if(begin){
         [self cancelNativeTitleClick];
         // Upstream: a gesture that begins on top of a held modifier chord makes it a binding prefix, not a tap, whatever becomes of the gesture.
         [self.tapKeys taint];
         // The controller holds one gesture: a pinch that gains a third finger ends before the swipe it became begins.
-        if(self.gestureOwner)[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]} owner:self.gestureOwner];
+        if(self.gestureOwner)[self gesture:[DWTrackpadGestureEvent end:YES time:event.time] owner:self.gestureOwner];
         if(self.cleaning||self.sessionInactive)return;
         // Where a press or a scroll would land: over an output, and not during a button drag.
         CGPoint p=pointer();DesktopView *under=nil;NSNumber *output=nil;
@@ -167,27 +167,26 @@
         // end, or whichever of the two comes second, would then launch nothing. scrollPan stays: macOS's inertia is still
         // swallowed. A two-finger pinch and a hold hold no scroll back, and end none.
         if(owner==1&&self.trackpad.engaged){[self.panLaunch cancel];for(DesktopView *view in self.views)view.scrollPanTime=0;}
-        command[@"modifiers"]=modifiersJSON(NSEvent.modifierFlags);command[@"context"]=[[under hit:p output:output]isKindOfClass:NSDictionary.class]?@"window":@"canvas";command[@"output"]=output;command[@"pointer"]=pointJSON(p);
+        NSEventModifierFlags flags=NSEvent.modifierFlags;modifiers=(DWModifierFlags){(flags&NSEventModifierFlagControl)!=0,(flags&NSEventModifierFlagOption)!=0,(flags&NSEventModifierFlagShift)!=0,(flags&NSEventModifierFlagCommand)!=0};windowContext=[under hit:p output:output]!=nil;gestureOutput=output;gesturePointer=p;
         self.gestureOwner=owner;self.gestureOutput=output;self.gestureWatched=!self.globalGestureContact&&!self.globalGestureDelivery&&[[self outputUnderPointer:p]isEqual:output];self.gestureMove=self.gestureResize=NO;
     }else if(owner!=self.gestureOwner)return;
-    else command[@"held"]=held?@YES:@NO;
     if(end)self.gestureOwner=0;
-    NSDictionary *reply=[self call:command];
-    if(begin&&owner==2){NSString *state=DWTyped(DWTyped(reply[@"gesture"],NSDictionary.class)[@"state"],NSString.class);self.nativePinchAccepted=state&&![state isEqual:@"unbound"];}
+    DWControllerReply *reply=begin?[self.controller beginGesture:event.kind fingers:event.fingers modifiers:modifiers windowContext:windowContext output:gestureOutput pointer:gesturePointer doubleTap:event.doubleTap time:event.time.doubleValue]:end?[self.controller endGestureCancelled:event.cancelled time:event.time.doubleValue held:@(held)]:[self.controller updateGestureWithDelta:event.delta scale:event.scale rotation:event.rotation time:event.time.doubleValue held:held];
+    if(begin&&owner==2){NSString *state=reply.gesture.state;self.nativePinchAccepted=state&&![state isEqual:@"unbound"];}
     // A refusal is said once and ends the gesture on both sides. That end is a gesture reply too: a size transaction it carries is performed.
     if(!reply){
-        NSString *error=self.statusText;if(!begin&&!end)[self.sizeTransition consumeSize:[self call:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":event[@"time_ms"]}]];
+        NSString *error=self.statusText;if(!begin&&!end)[self.sizeTransition consumeSize:[self.controller endGestureCancelled:YES time:event.time.doubleValue held:nil]];
         self.gestureOwner=0;[self flashStatus:error];[self render];return;
     }
     // A pan that ends cancelled while still moving lost its touches: macOS took them, a button was pressed, the panels went away. (A finger lifting ahead of the others waits out the recogniser's count debounce, too long to launch.) The canvas stops there instead of coasting on as upstream's cancelled swipe does.
-    if(end&&[command[@"cancelled"]isEqual:@YES]&&self.gestureOutput&&[DWTyped(DWTyped(reply[@"gesture"],NSDictionary.class)[@"state"],NSString.class)isEqual:@"swipe_pan"])[self call:@{@"op":@"cancel_navigation",@"output":self.gestureOutput}];
+    if(end&&event.cancelled&&self.gestureOutput&&[reply.gesture.state isEqual:@"swipe_pan"])[self.controller cancelNavigationOnOutput:self.gestureOutput];
     // No gesture in the reply: trackpad gestures are off (set-trackpad), and the rest of this one has nowhere to go.
-    if(begin&&!DWTyped(reply[@"gesture"],NSDictionary.class))self.gestureOwner=0;
-    if(begin){NSString *state=DWTyped(DWTyped(reply[@"gesture"],NSDictionary.class)[@"state"],NSString.class);self.gestureResize=[state isEqual:@"swipe_resize"];self.gestureMove=self.gestureResize||[state isEqual:@"swipe_move"];}
-    NSDictionary *fired=DWTyped(reply[@"fired"],NSDictionary.class);NSString *action=DWTyped(fired[@"action"],NSString.class);
+    if(begin&&!reply.gesture)self.gestureOwner=0;
+    if(begin){NSString *state=reply.gesture.state;self.gestureResize=[state isEqual:@"swipe_resize"];self.gestureMove=self.gestureResize||[state isEqual:@"swipe_move"];}
+    DWGestureAction *fired=reply.fired;NSString *action=fired.action;
     // An action the gesture fired and the controller ran holds a cycle open, or ends one, as a hot key's does.
-    if(action&&!DWTyped(fired[@"error"],NSString.class))[self holdCycle:action held:held];
-    NSString *text=DWTyped(reply[@"note"],NSString.class)?:DWTyped(fired[@"error"],NSString.class)?:action?[self actionFeedback:action flight:DWTyped(reply[@"navigation"],NSDictionary.class) output:self.gestureOutput]:nil;
+    if(action&&!fired.error)[self holdCycle:action held:held];
+    NSString *text=reply.note?:fired.error?:action?[self actionFeedback:action flight:reply.navigation output:self.gestureOutput]:nil;
     if(text)[self flashStatus:text];
     [self applyReply:reply];
 }
@@ -226,12 +225,12 @@
     [self.compositor finishGeometryTransitions];
     if(self.compositor.hasGeometryTransitions)return;
     NSEventPhase phase=e.phase;NSNumber *time=DWGestureTime(e.timestamp);BOOL over=(phase&(NSEventPhaseEnded|NSEventPhaseCancelled))!=0;
-    if([self padBusy:e]){if(self.magnifying){self.magnifying=NO;[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":time} owner:2];}return;}
+    if([self padBusy:e]){if(self.magnifying){self.magnifying=NO;[self gesture:[DWTrackpadGestureEvent end:YES time:time] owner:2];}return;}
     if(phase&NSEventPhaseMayBegin)return;
-    if(!self.magnifying){if(over)return;self.magnifying=YES;self.magnifyScale=1;[self gesture:@{@"op":@"gesture_begin",@"kind":@"pinch",@"fingers":@2,@"time_ms":time} owner:2];}
-    if(e.magnification){self.magnifyScale*=MAX(.01,1+e.magnification);[self gesture:@{@"op":@"gesture_update",@"dx":@0,@"dy":@0,@"scale":@(self.magnifyScale),@"rotation":@0,@"time_ms":time} owner:2];}
+    if(!self.magnifying){if(over)return;self.magnifying=YES;self.magnifyScale=1;[self gesture:[DWTrackpadGestureEvent begin:@"pinch" fingers:2 time:time doubleTap:nil] owner:2];}
+    if(e.magnification){self.magnifyScale*=MAX(.01,1+e.magnification);[self gesture:[DWTrackpadGestureEvent update:CGPointZero scale:@(self.magnifyScale) rotation:@0 time:time] owner:2];}
     // An event with no phase is a whole gesture.
-    if(over||phase==NSEventPhaseNone){self.magnifying=NO;[self gesture:@{@"op":@"gesture_end",@"cancelled":phase&NSEventPhaseCancelled?@YES:@NO,@"time_ms":time} owner:2];}
+    if(over||phase==NSEventPhaseNone){self.magnifying=NO;[self gesture:[DWTrackpadGestureEvent end:(phase&NSEventPhaseCancelled)!=0 time:time] owner:2];}
 }
 // The touches stop being a gesture's: a press on the pad, or the panels going away.
 // The recogniser forgets its fingers, and a gesture the controller holds ends cancelled.
@@ -239,6 +238,6 @@
     [self.globalTrackpad cancel];self.globalGestureContact=NO;
     NSTimeInterval now=CACurrentMediaTime();
     [self.trackpadTimer invalidate];self.trackpadTimer=nil;self.trackpadDeadline=0;self.magnifying=NO;[self.trackpad cancel:now];[self.touchFeed cancel:now];
-    if(self.gestureOwner)[self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":DWGestureTime(now)} owner:self.gestureOwner];
+    if(self.gestureOwner)[self gesture:[DWTrackpadGestureEvent end:YES time:DWGestureTime(now)] owner:self.gestureOwner];
 }
 @end

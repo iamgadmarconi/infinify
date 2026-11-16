@@ -14,14 +14,12 @@
 #import "DWTypedValue.h"
 #import <QuartzCore/QuartzCore.h>
 
-static NSDictionary *pointJSON(CGPoint p) { return @{@"x":@(p.x),@"y":@(p.y)}; }
-BOOL DWPickOutput(NSDictionary *snapshot,NSNumber *output) {
-    for(id listed in DWTyped(snapshot[@"outputs"],NSArray.class)){NSDictionary *entry=DWTyped(listed,NSDictionary.class);if([entry[@"id"]isEqual:output]&&[entry[@"pick"]isEqual:@YES])return YES;}
+BOOL DWPickOutput(DWScene *snapshot,NSNumber *output) {
+    for(DWOutput *entry in snapshot.outputs)if([entry.identifier isEqual:output]&&[entry.pick isEqual:@YES])return YES;
     return NO;
 }
-NSDictionary *DWPickHit(NSDictionary *hit,NSDictionary *snapshot,NSNumber *output) {
-    if(!DWPickOutput(snapshot,output))return hit;
-    NSMutableDictionary *picked=[hit mutableCopy];picked[@"pick"]=@YES;return picked;
+DWHit *DWPickHit(DWHit *hit,DWScene *snapshot,NSNumber *output) {
+    return DWPickOutput(snapshot,output)?[hit hitWithPick:YES]:hit;
 }
 // A press the policy owns until its button comes up.
 typedef NS_ENUM(NSInteger,DWPress) {
@@ -94,31 +92,31 @@ typedef NS_ENUM(NSInteger,DWPress) {
     if(!output||[host pointerBusy]){[host pointerCursor:p output:output reply:nil];return;}
     // time_ms is now on the clock events are stamped with, as a timed pan's is its event's: the controller
     // tells from the two whether a scroll that panned is still to launch its coast.
-    NSDictionary *reply=[host pointerCommand:@{@"op":@"hover",@"output":output,@"screen":pointJSON(p),@"time_ms":@((uint32_t)(uint64_t)(_sent*1000))} quiet:YES];
+    DWControllerReply *reply=[host pointerHoverOnOutput:output screen:p time:@((uint32_t)(uint64_t)(_sent*1000)) quiet:YES];
     [host pointerCursor:p output:output reply:reply];if(!reply)return;
     // Upstream's order: the motion goes to the window under it, whoever holds the keyboard, then focus follows.
-    if(self.forwarding&&[reply[@"forward"]isEqual:@YES])[host pointerDeliver:motion at:p output:output];
+    if(self.forwarding&&[reply.forward isEqual:@YES])[host pointerDeliver:motion at:p output:output];
     // Sloppy focus moved: only then is there an effect to perform and anything to draw.
-    if([reply[@"dirty"]isEqual:@YES])[host pointerFocused:DWTyped(reply[@"effect"],NSDictionary.class)];
+    if([reply.dirty isEqual:@YES])[host pointerFocused:reply.primaryFocusEffect];
 }
-- (BOOL)pickPress:(NSDictionary *)hit button:(NSInteger)button claimed:(BOOL)claimed at:(CGPoint)screen output:(NSNumber *)output {
-    NSNumber *window=DWTyped(hit[@"window"],NSNumber.class);
-    if(claimed||!window||!output||![hit[@"pick"]isEqual:@YES])return NO;
+- (BOOL)pickPress:(DWHit *)hit button:(NSInteger)button claimed:(BOOL)claimed at:(CGPoint)screen output:(NSNumber *)output {
+    NSNumber *window=hit.window;
+    if(claimed||!window||!output||![hit.pick isEqual:@YES])return NO;
     // try_pick_button: any button is swallowed and focuses and raises its target; only the left one arms the pick.
     _press=button?DWPressSpent:DWPressPick;_window=window;_output=output;_start=screen;
-    NSView<DWPointerHost> *host=_host;[host pointerApply:[host pointerCommand:@{@"op":@"activate",@"window":window,@"output":output,@"cause":@"click"} quiet:NO]];
+    NSView<DWPointerHost> *host=_host;[host pointerApply:[host pointerCommand:^DWControllerReply *(id<DWInputController> c){return [(id<DWNavigationCommands>)c activateWindow:window output:output cause:@"click" identity:nil generation:nil];} quiet:NO]];
     return YES;
 }
 - (void)nearestPress:(CGPoint)screen output:(NSNumber *)output focus:(BOOL)focus { _press=DWPressNearest;_window=nil;_output=output;_start=screen;_focus=focus; }
 // held: whether a real modifier is down as the swipe fires, as every action the shell sends says.
-- (NSDictionary *)nearest:(CGPoint)screen { return @{@"op":@"pointer_nearest",@"output":_output?:NSNull.null,@"screen":pointJSON(screen),@"start":pointJSON(_start),@"held":[_host pointerHeld]?@YES:@NO,@"focus":_focus?@YES:@NO}; }
+- (DWControllerReply *(^)(id<DWInputController>))nearest:(CGPoint)screen { NSNumber *output=_output;CGPoint start=_start;BOOL held=[_host pointerHeld],focus=_focus;return ^DWControllerReply *(id<DWInputController> c){return [c pointerNearestOnOutput:output screen:screen start:start held:held focus:focus];}; }
 - (BOOL)pressDragged:(CGPoint)screen {
     NSView<DWPointerHost> *host=_host;double dx=_start.x-screen.x,dy=_start.y-screen.y,xx=dx*dx,yy=dy*dy;
     if(_press==DWPressNearest){
         // NavigateGrab fires once, on the first motion out of its dead zone, and ignores the rest of the drag.
         // The controller keeps the same dead zone, so the test is its own: the squared distance against 16².
         if(xx+yy<256)return NO;
-        NSDictionary *command=[self nearest:screen];_press=DWPressSpent;[host pointerApply:[host pointerCommand:command quiet:NO]];return NO;
+        DWControllerReply *(^command)(id<DWInputController>)=[self nearest:screen];_press=DWPressSpent;[host pointerApply:[host pointerCommand:command quiet:NO]];return NO;
     }
     // maybe_promote_pick: past the click slop, on the output of the press. The pick is dropped first, so a drag
     // out and back never picks as well; a refused move leaves the press spent.
@@ -126,16 +124,16 @@ typedef NS_ENUM(NSInteger,DWPress) {
     _press=DWPressSpent;
     // begin_drag raises and focuses its window, as the press did, and the focus request in its reply takes the place of the press's:
     // it is carried out the same way, or the controller would wait on a request nobody answers.
-    id reply=[host pointerCommand:@{@"op":@"begin_drag",@"window":_window,@"output":_output,@"group":@NO} quiet:NO];if(DWTyped(reply,NSDictionary.class))[host pointerApply:reply];
+    NSNumber *window=_window,*output=_output;DWControllerReply *reply=[host pointerCommand:^DWControllerReply *(id<DWInputController> c){return [c beginDragWindow:window output:output group:NO];} quiet:NO];if(reply)[host pointerApply:reply];
     return reply!=nil;
 }
 - (void)pressReleased:(CGPoint)screen {
     NSView<DWPointerHost> *host=_host;DWPress press=_press;NSNumber *window=_window,*output=_output;
-    NSDictionary *swipe=press==DWPressNearest?[self nearest:screen]:nil;
+    DWControllerReply *(^swipe)(id<DWInputController>)=press==DWPressNearest?[self nearest:screen]:nil;
     _press=DWPressNone;_window=_output=nil;
     if(swipe)[host pointerApply:[host pointerCommand:swipe quiet:NO]];
     // resolve_pick: the button came up on the output it went down on. Whether that output is still in pick mode is the controller's to check.
-    else if(press==DWPressPick&&[[host outputAt:screen]isEqual:output])[host pointerApply:[host pointerCommand:@{@"op":@"pick",@"window":window,@"output":output} quiet:NO]];
+    else if(press==DWPressPick&&[[host outputAt:screen]isEqual:output])[host pointerApply:[host pointerCommand:^DWControllerReply *(id<DWInputController> c){return [c pickWindow:window output:output];} quiet:NO]];
 }
 - (void)stop {
     [_flush invalidate];_flush=nil;_motion=nil;_press=DWPressNone;_window=_output=nil;

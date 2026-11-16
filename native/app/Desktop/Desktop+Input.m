@@ -83,7 +83,7 @@
     BOOL covered=self.gestureWatched&&![[self outputUnderPointer:pointer()]isEqual:self.gestureOutput],silent=self.gestureMove&&now-self.lastTouches>30;
     if(!covered&&!silent)return;
     fprintf(stderr,"A trackpad gesture lost its touches (%s): ended cancelled.\n",covered?"the canvas is no longer under the pointer":"none for thirty seconds during a window move or resize");
-    if(covered)[self cancelGestures];else [self gesture:@{@"op":@"gesture_end",@"cancelled":@YES,@"time_ms":DWGestureTime(now)} owner:1];
+    if(covered)[self cancelGestures];else [self gesture:[DWTrackpadGestureEvent end:YES time:DWGestureTime(now)] owner:1];
     [self render];
 }
 @end

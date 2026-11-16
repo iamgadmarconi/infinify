@@ -147,7 +147,7 @@ NSNumber *DWGestureTime(NSTimeInterval seconds) { return @(floor(MAX(0,seconds)*
 typedef NS_ENUM(NSInteger,DWGesturePhase){DWGestureNone,DWGestureUnknown,DWGestureHold,DWGestureSwipe,DWGesturePinch};
 
 @implementation DWTrackpadGestures {
-    void (^_emit)(NSDictionary *);
+    void (^_emit)(DWTrackpadGestureEvent *);
     NSMutableDictionary<id<NSCopying>,DWTouchPoint *> *_touches;
     DWTouchPoint *_far,*_near; // the two touches motion is read from
     DWGesturePhase _phase;
@@ -157,15 +157,15 @@ typedef NS_ENUM(NSInteger,DWGesturePhase){DWGestureNone,DWGestureUnknown,DWGestu
     double _distance,_angle,_scale,_cx,_cy; // pinch: distance at recognition, then the last angle, scale and midpoint
     NSUInteger _most;BOOL _tapping;NSTimeInterval _step,_tapped; // most fingers of this contact; still a tap; last landing or lift; when a three-finger tap ended
 }
-- (instancetype)initWithEmit:(void (^)(NSDictionary *))emit { if((self=[super init])){_emit=[emit copy];_touches=[NSMutableDictionary dictionary];}return self; }
+- (instancetype)initWithEmit:(void (^)(DWTrackpadGestureEvent *))emit { if((self=[super init])){_emit=[emit copy];_touches=[NSMutableDictionary dictionary];}return self; }
 - (BOOL)engaged { return _begun&&_phase!=DWGestureHold; }
 - (NSTimeInterval)deadline { NSTimeInterval hold=_phase==DWGestureUnknown&&!_pending?_hold:0;return _switch&&(!hold||_switch<hold)?_switch:hold; }
 - (void)begin:(NSString *)kind at:(NSTimeInterval)time {
-    NSMutableDictionary *event=[@{@"op":@"gesture_begin",@"kind":kind,@"fingers":@(_fingers),@"time_ms":DWGestureTime(time)}mutableCopy];
-    if([kind isEqual:@"swipe"]&&_tapped){if(time-_tapped<=doubletapTime)event[@"doubletap"]=@YES;_tapped=0;}
-    _begun=YES;_tapping=NO;_emit(event);
+    NSNumber *doubleTap=nil;
+    if([kind isEqual:@"swipe"]&&_tapped){if(time-_tapped<=doubletapTime)doubleTap=@YES;_tapped=0;}
+    _begun=YES;_tapping=NO;_emit([DWTrackpadGestureEvent begin:kind fingers:_fingers time:DWGestureTime(time) doubleTap:doubleTap]);
 }
-- (void)finish:(BOOL)cancelled at:(NSTimeInterval)time { if(_begun){_begun=NO;_emit(@{@"op":@"gesture_end",@"cancelled":cancelled?@YES:@NO,@"time_ms":DWGestureTime(time)});} }
+- (void)finish:(BOOL)cancelled at:(NSTimeInterval)time { if(_begun){_begun=NO;_emit([DWTrackpadGestureEvent end:cancelled time:DWGestureTime(time)]);} }
 - (void)reset:(BOOL)cancelled at:(NSTimeInterval)time { [self finish:cancelled at:time];_phase=DWGestureNone;_hold=0;_far=_near=nil; }
 // Recognition starts from where the fingers are now.
 - (void)pair:(NSTimeInterval)time {
@@ -216,7 +216,7 @@ typedef NS_ENUM(NSInteger,DWGesturePhase){DWGestureNone,DWGestureUnknown,DWGestu
         double dx=0,dy=0;for(DWTouchPoint *touch in _touches.objectEnumerator){dx+=touch->x-touch->px;dy+=touch->y-touch->py;}
         dx*=unitsPerMM/_touches.count;dy*=unitsPerMM/_touches.count;if(!dx&&!dy)return;
         if(!_begun)[self begin:@"swipe" at:time];
-        _emit(@{@"op":@"gesture_update",@"dx":@(dx),@"dy":@(dy),@"time_ms":DWGestureTime(time)});
+        _emit([DWTrackpadGestureEvent update:CGPointMake(dx,dy) scale:nil rotation:nil time:DWGestureTime(time)]);
     }else if(_phase==DWGesturePinch){
         double distance=hypot(_near->x-_far->x,_near->y-_far->y),angle=atan2(_near->y-_far->y,_near->x-_far->x)*180/M_PI,cx=(_far->x+_near->x)/2,cy=(_far->y+_near->y)/2;
         if(_distance<=0||distance<=0)return;
@@ -225,7 +225,7 @@ typedef NS_ENUM(NSInteger,DWGesturePhase){DWGestureNone,DWGestureUnknown,DWGestu
         if(scale==_scale&&!turn&&!dx&&!dy)return;
         _scale=scale;_angle=angle;_cx=cx;_cy=cy;
         if(!_begun)[self begin:@"pinch" at:time];
-        _emit(@{@"op":@"gesture_update",@"dx":@(dx),@"dy":@(dy),@"scale":@(scale),@"rotation":@(turn),@"time_ms":DWGestureTime(time)});
+        _emit([DWTrackpadGestureEvent update:CGPointMake(dx,dy) scale:@(scale) rotation:@(turn) time:DWGestureTime(time)]);
     }
 }
 - (void)advance:(NSTimeInterval)time {

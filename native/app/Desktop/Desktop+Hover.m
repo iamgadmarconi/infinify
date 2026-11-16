@@ -23,24 +23,24 @@
         &&DWInScope(self.scope,source.router.pid)&&[birth(source.router.pid)isEqual:source.router.processBirth]
         &&[windowInfo(source.router.wid)[(id)kCGWindowOwnerPID]intValue]==source.router.pid;
 }
-- (BOOL)nativeHoverSite:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point {
+- (BOOL)nativeHoverSite:(LiveSource *)source hit:(DWHit *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point {
     // A full replica can remain a replica by policy. Do not consume its press
     // for an ownership request that the view plan will refuse.
     // A cooperative singleton first needs the family observation requested by
     // requestNativeOwnershipAt:. Eligibility is checked again after that audit.
     if(source.nativeFamily&&![self.nativeViews canTransferWindow:source.logical output:output])return NO;
-    NSDictionary *intent=[view inputIntentForHit:hit output:output],*site=[self.nativeViews placement:source.logical output:output],*drawn=nil,*observed=nil;
-    for(NSDictionary *placement in self.renderedPresentation[@"placements"])if([placement[@"window"]isEqual:source.logical]&&[placement[@"output"]isEqual:output]){drawn=placement;break;}
-    for(NSDictionary *placement in self.nativeHoverPresentation[@"placements"])if([placement[@"window"]isEqual:source.logical]&&[placement[@"output"]isEqual:output]){observed=placement;break;}
-    return intent&&site&&drawn&&observed&&![site[@"family_only"]boolValue]&&![drawn[@"family_only"]boolValue]
-        &&boundIdentity(intent[@"identity"],source.identity)&&[drawn[@"source"]isEqual:site[@"source"]]
-        &&[observed[@"source"]isEqual:drawn[@"source"]]
-        &&CGRectEqualToRect(DWRectFromJSON(observed[@"screen_rect"]),DWRectFromJSON(drawn[@"screen_rect"]))
-        &&CGRectEqualToRect(DWRectFromJSON(observed[@"clip_rect"]),DWRectFromJSON(drawn[@"clip_rect"]))
-        &&CGRectEqualToRect(DWRectFromJSON(drawn[@"screen_rect"]),DWRectFromJSON(site[@"screen_rect"]))
-        &&CGRectEqualToRect(DWRectFromJSON(drawn[@"clip_rect"]),DWRectFromJSON(site[@"clip_rect"]))
-        &&CGRectEqualToRect(DWRectFromJSON(site[@"screen_rect"]),DWRectFromJSON(site[@"clip_rect"]))
-        &&CGRectContainsPoint(DWRectFromJSON(site[@"clip_rect"]),point);
+    NSDictionary *intent=[view inputIntentForHit:hit output:output];DWPlacement *site=[self.nativeViews placement:source.logical output:output],*drawn=nil,*observed=nil;
+    for(DWPlacement *placement in self.renderedPresentation.placements)if([placement.window isEqual:source.logical]&&[placement.output isEqual:output]){drawn=placement;break;}
+    for(DWPlacement *placement in self.nativeHoverPresentation.placements)if([placement.window isEqual:source.logical]&&[placement.output isEqual:output]){observed=placement;break;}
+    return intent&&site&&drawn&&observed&&![site.familyOnly boolValue]&&![drawn.familyOnly boolValue]
+        &&boundIdentity(intent[@"identity"],source.identity)&&[drawn.source isEqual:site.source]
+        &&[observed.source isEqual:drawn.source]
+        &&CGRectEqualToRect(observed.screenRect,drawn.screenRect)
+        &&CGRectEqualToRect(observed.clipRect,drawn.clipRect)
+        &&CGRectEqualToRect(drawn.screenRect,site.screenRect)
+        &&CGRectEqualToRect(drawn.clipRect,site.clipRect)
+        &&CGRectEqualToRect(site.screenRect,site.clipRect)
+        &&CGRectContainsPoint(site.clipRect,point);
 }
 - (void)cancelNativeHoverForWindow:(NSNumber *)window {
     DWNativeViewTransfer *transfer=self.nativeHoverTransfer;
@@ -75,18 +75,18 @@
     dispatch_async(dispatch_get_main_queue(),^{Desktop *desktop=weak;if(!desktop||desktop.nativeHoverEpoch!=epoch)return;
         desktop.nativeHoverQueued=NO;[desktop updateNativeHover];});
 }
-- (BOOL)queuedNativeHoverPress:(NSEvent *)event source:(LiveSource *)source hit:(NSDictionary *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point {
+- (BOOL)queuedNativeHoverPress:(NSEvent *)event source:(LiveSource *)source hit:(DWHit *)hit view:(DesktopView *)view output:(NSNumber *)output at:(CGPoint)point {
     NSDictionary *observation=self.nativeHoverObservation;
     NSArray *triggers=@[@"left",@"right",@"middle",@"back",@"forward"];NSInteger button=event.buttonNumber;
-    NSDictionary *binding=button>=0&&button<(NSInteger)triggers.count?[self mouseBinding:triggers[button] source:nil flags:event.modifierFlags window:YES under:source.logical pick:NO]:nil;
+    DWBinding *binding=button>=0&&button<(NSInteger)triggers.count?[self mouseBinding:triggers[button] source:nil flags:event.modifierFlags window:YES under:source.logical pick:NO]:nil;
     if(!observation||self.nativeHoverTransfer||CACurrentMediaTime()>=self.nativeHoverUntil
         ||![observation[@"eligible_window"]isEqual:@(view.window.windowNumber)]
         ||!CGPointEqualToPoint(point,jsonPoint(observation[@"point"]))||button<0||button>=32
-        ||event.subtype!=NSEventSubtypeMouseEvent||[hit[@"pick"]boolValue]||[hit[@"widget"]boolValue]
-        ||[hit[@"placeholder"]boolValue]||hit[@"native_member"]||![self nativeOwnershipReady:source]
+        ||event.subtype!=NSEventSubtypeMouseEvent||[hit.pick boolValue]||[hit.widget boolValue]
+        ||[hit.placeholder boolValue]||hit.nativeMember||![self nativeOwnershipReady:source]
         ||CGEventGetIntegerValueField(event.CGEvent,kCGEventTargetUnixProcessID)!=getpid()
         ||CGEventGetIntegerValueField(event.CGEvent,kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent)!=view.window.windowNumber
-        ||binding.count||[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output]
+        ||binding!=nil||[view resizeBorderForButton:button flags:event.modifierFlags hit:hit at:point output:output]
         ||(button==0&&[self replicaGreen:source at:point output:output]))return NO;
     return [self nativeHoverSite:source hit:hit view:view output:output at:point];
 }
@@ -98,7 +98,7 @@
     // Without a held transfer every no-replica outcome below is cancelNativeHoverForWindow:nil. When the cached
     // description is provably the one nativeDescription: would return (same keys), skip the snapshot, native hit tests
     // and validations. Any invalidation (nil snapshot) or other change falls through to the full path.
-    NSDictionary *latest=self.controllerVisualSnapshot;
+    DWScene *latest=self.controllerVisualSnapshot;
     BOOL enabled=!self.native.ended&&!self.sessionInactive&&!self.cleaning&&self.panels.count;
     BOOL current=self.native&&self.nativeViews&&latest&&self.nativeViewSnapshot==latest&&self.nativeViewPresenter==self.native
         &&self.nativeViewFamilyRevision==self.nativeFamilyRevision&&self.nativeViewEnabled==enabled
@@ -116,19 +116,19 @@
         if(!view||![self.views containsObject:view]||![view.outputs containsObject:@(held.output)]||![self nativeOwnershipReady:source]
             ||![self.nativeViews isTransferCurrent:held]||!boundIdentity(source.identity,held.identity)
             ||!CGRectContainsPoint(held.clipRect,point)||(!atCanvas&&!atMember)){[self cancelNativeHoverForWindow:nil];return;}
-        if(atCanvas){NSDictionary *hit=[view hit:point output:@(held.output)];
-            if(![hit[@"window"]isEqual:source.logical]||hit[@"native_member"]||[hit[@"pick"]boolValue]){[self cancelNativeHoverForWindow:nil];return;}}
+        if(atCanvas){DWHit *hit=[view hit:point output:@(held.output)];
+            if(![hit.window isEqual:source.logical]||hit.nativeMember||[hit.pick boolValue]){[self cancelNativeHoverForWindow:nil];return;}}
         return;
     }
     DesktopView *view=nil;for(DesktopView *candidate in self.views)if(candidate.window.windowNumber==[recipient[@"wid"]longLongValue]
         &&[recipient[@"pid"]intValue]==getpid()){view=candidate;break;}
     if(!view||![observation[@"eligible_window"]isEqual:@(view.window.windowNumber)]){[self cancelNativeHoverForWindow:nil];return;}
-    NSNumber *output=[view outputAt:point];NSDictionary *hit=output?[view hit:point output:output]:nil;
+    NSNumber *output=[view outputAt:point];DWHit *hit=output?[view hit:point output:output]:nil;
     NSNumber *logical=liveHit(hit);LiveSource *source=logical?self.sources[logical]:nil;NSEventModifierFlags flags=[observation[@"flags"]unsignedLongLongValue];
     if(!output||![self nativeOwnershipReady:source]||![self.nativeViews replica:source.logical output:output]
-        ||[hit[@"pick"]boolValue]||[hit[@"widget"]boolValue]||[hit[@"placeholder"]boolValue]||hit[@"native_member"]
+        ||[hit.pick boolValue]||[hit.widget boolValue]||[hit.placeholder boolValue]||hit.nativeMember
         ||self.nativeOwnershipTransfer||[self.nativeViews requiresPlacementAdmissionForWindow:source.logical]
-        ||[self mouseBinding:@"left" source:nil flags:flags window:YES under:source.logical pick:NO].count
+        ||[self mouseBinding:@"left" source:nil flags:flags window:YES under:source.logical pick:NO]
         ||[view resizeBorderForButton:0 flags:flags hit:hit at:point output:output]
         ||[self replicaGreen:source at:point output:output]){[self cancelNativeHoverForWindow:nil];return;}
     if(![self nativeHoverSite:source hit:hit view:view output:output at:point]){[self cancelNativeHoverForWindow:nil];return;}
@@ -143,9 +143,9 @@
 - (DWNativeViewTransfer *)requestNativeOwnershipAt:(CGPoint)point view:(DesktopView *)view {
     if(!self.native||self.native.ended||self.cleaning||self.sessionInactive||![self.views containsObject:view])return nil;
     NSNumber *output=[view outputAt:point];if(!output)return nil;
-    NSDictionary *hit=[view hit:point output:output];NSNumber *window=liveHit(hit);
+    DWHit *hit=[view hit:point output:output];NSNumber *window=liveHit(hit);
     LiveSource *source=window?self.sources[window]:nil;
-    if(![self nativeOwnershipReady:source]||[hit[@"pick"]boolValue]
+    if(![self nativeOwnershipReady:source]||[hit.pick boolValue]
         ||![self.nativeViews replica:window output:output])return nil;
     // Cooperative singleton helpers normally need no family polling. A transfer
     // does; ask the existing bounded observation worker, never invent root-only.
@@ -171,7 +171,7 @@
     if(!self.native||self.native.ended||self.cleaning||self.sessionInactive){[self cancelNativeHoverForWindow:nil];[self stopNativeTransferTimer];return;}
     CFTimeInterval now=CACurrentMediaTime();if(now<self.nativeTransferNextCheck)return;
     self.nativeTransferNextCheck=now+.02;
-    NSDictionary *snapshot=[self visualSnapshot];[self nativeDescription:snapshot];
+    DWScene *snapshot=[self visualSnapshot];[self nativeDescription:snapshot];
     if(self.nativeHoverObservation||self.nativeHoverTransfer)[self updateNativeHover];
     NSArray<DWNativeViewTransfer *> *pending=self.nativeViews.pendingTransfers;
     if(!pending.count){if(!self.nativeHoverObservation)[self stopNativeTransferTimer];self.nativeOwnershipTransfer=nil;return;}

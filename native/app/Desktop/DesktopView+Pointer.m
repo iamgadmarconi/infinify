@@ -7,43 +7,49 @@
 #import "DWGeometryJSON.h"
 @implementation DesktopView (Pointer)
 // Hover asks once a frame, and what the controller refuses it is not news for the resting status.
-- (NSDictionary *)pointerCommand:(NSDictionary *)command quiet:(BOOL)quiet {
-    Desktop *d=self.desktop;NSDictionary *childHover=nil,*childBounds=nil;
+- (DWControllerReply *)pointerCommand:(DWControllerReply *(^)(id<DWInputController> controller))operation quiet:(BOOL)quiet {
+    Desktop *d=self.desktop;if([d nativeUnavailable])return nil;
+    NSString *status=d.statusText;DWControllerReply *reply=operation(d.controller);if(quiet)d.statusText=status;return reply;
+}
+- (DWResizeBorder *)resizeBorderAt:(CGPoint)point output:(NSNumber *)output quiet:(BOOL)quiet {
+    return [self pointerCommand:^DWControllerReply *(id<DWInputController> c){return [c resizeBorderOnOutput:output screen:point];} quiet:quiet].border;
+}
+- (DWControllerReply *)pointerHoverOnOutput:(NSNumber *)output screen:(CGPoint)point time:(NSNumber *)time quiet:(BOOL)quiet {
+    Desktop *d=self.desktop;NSDictionary *childHover=nil,*childBounds=nil;LiveSource *hoverSource=nil;NSNumber *hoverGeneration=nil,*forwardMotion=nil;
     if([d nativeUnavailable])return nil;
-    if([command[@"op"]isEqual:@"hover"]){
+    {
         if(d.native.ended||d.sessionInactive)return nil;
-        CGPoint point=jsonPoint(command[@"screen"]);CGWindowID top=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
+        CGWindowID top=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
         LiveSource *source=[d nativeSource:top at:point];NSDictionary *replicaMember=nil;
         if(!source&&top==(CGWindowID)self.window.windowNumber){
-            if(![d.compositor appliedOrderForOutput:command[@"output"] snapshot:[d presentationSnapshot]])return nil;
-            NSDictionary *hit=[self hit:point output:command[@"output"]],*member=DWTyped(hit[@"native_member"],NSDictionary.class);NSNumber *window=DWTyped(hit[@"window"],NSNumber.class);LiveSource *candidate=window?d.sources[window]:nil;
+            if(![d.compositor appliedOrderForOutput:output snapshot:[d presentationSnapshot]])return nil;
+            DWHit *hit=[self hit:point output:output];NSDictionary *member=hit.nativeMember;NSNumber *window=hit.window;LiveSource *candidate=window?d.sources[window]:nil;
             if(member&&candidate&&[d.nativeFamilies contains:candidate.logical identity:member[@"identity"] generation:member[@"generation"] bounds:DWRectFromJSON(member[@"native_bounds"])]&&DWNativeWindowBelongsToRoot(member[@"identity"],candidate.identity)){source=candidate;replicaMember=member;}
         }
-        if(source){NSDictionary *binding=[d sourceBinding:source.logical];
-            if(!boundIdentity(source.identity,binding[@"identity"])||!binding[@"generation"])return nil;
-            if(replicaMember&&(![replicaMember[@"generation"]isEqual:binding[@"generation"]]||![binding[@"observation_known"]boolValue]))return nil;
-            if(replicaMember){childBounds=replicaMember[@"native_bounds"];childHover=@{@"window":source.logical,@"output":command[@"output"],@"generation":binding[@"generation"],@"identity":replicaMember[@"identity"],@"root_identity":source.identity,@"native_member":@YES};}
-            NSMutableDictionary *native=[command mutableCopy];native[@"op"]=@"hover_source";native[@"window"]=source.logical;native[@"identity"]=source.identity;native[@"generation"]=binding[@"generation"];if(replicaMember)native[@"forward_motion"]=@YES;command=native;
+        if(source){DWSource *binding=[d sourceBinding:source.logical];
+            if(!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||!binding.generation)return nil;
+            if(replicaMember&&(![replicaMember[@"generation"]isEqual:binding.generation]||![binding.observationKnown boolValue]))return nil;
+            if(replicaMember){childBounds=replicaMember[@"native_bounds"];childHover=@{@"window":source.logical,@"output":output,@"generation":binding.generation,@"identity":replicaMember[@"identity"],@"root_identity":source.identity,@"native_member":@YES};}
+            hoverSource=source;hoverGeneration=binding.generation;forwardMotion=replicaMember?@YES:nil;
         }else if(top!=(CGWindowID)self.window.windowNumber)return nil;
     }
-    NSString *status=d.statusText;NSDictionary *reply=[d call:command],*effect=DWTyped(reply[@"effect"],NSDictionary.class);
-    if(childHover&&[effect[@"op"]isEqual:@"focus_native_window"]){
+    NSString *status=d.statusText;DWControllerReply *reply=hoverSource?[d.controller hoverWindow:hoverSource.logical identity:DWControllerIdentity(hoverSource.identity) generation:hoverGeneration output:output screen:point time:time forwardMotion:forwardMotion]:[d.controller hoverOnOutput:output screen:point time:time];DWFocusEffect *effect=reply.primaryFocusEffect;
+    if(childHover&&effect.kind==DWEffectFocusNativeWindow){
         // Hover already changed focus in place. A captured child's root must
         // never reach the AX driver: native root focus can dismiss its popup.
-        BOOL current=[effect[@"window"]isEqual:childHover[@"window"]]&&[effect[@"generation"]isEqual:childHover[@"generation"]]
-            &&boundIdentity(childHover[@"root_identity"],DWTyped(effect[@"identity"],NSDictionary.class))&&[d validateInputTarget:childHover]
+        BOOL current=[effect.window isEqual:childHover[@"window"]]&&[effect.generation isEqual:childHover[@"generation"]]
+            &&boundIdentity(childHover[@"root_identity"],DWNativeIdentity(effect.identity))&&[d validateInputTarget:childHover]
             &&[d.nativeFamilies contains:childHover[@"window"] identity:childHover[@"identity"] generation:childHover[@"generation"] bounds:DWRectFromJSON(childBounds)];
-        NSMutableDictionary *answer=[effect mutableCopy];answer[@"op"]=current?@"focus_logical":@"focus_result";if(!current)answer[@"success"]=@NO;
-        BOOL settled=[d call:answer]!=nil;NSMutableDictionary *logical=[reply mutableCopy];logical[@"effect"]=NSNull.null;
-        if(!current||!settled)logical[@"forward"]=@NO;reply=logical;
+        BOOL settled=(current?[d.controller focusLogical:effect]:[d.controller focusResult:effect success:NO])!=nil;
+        reply=[reply replyWithNullEffectAndForward:!current||!settled?@NO:nil];
     }
     if(quiet)d.statusText=status;return reply;
 }
-- (void)pointerApply:(NSDictionary *)reply { [self.desktop applyReply:reply]; }
+- (void)pointerApply:(DWControllerReply *)reply { [self.desktop applyReply:reply]; }
 // As a window that took the focus by itself: the request is the coordinator's, which answers it focus_logical
 // under --no-native-focus, and with none only work for a request the controller has dropped is withdrawn.
 // The focus is saved on the next poll.
-- (void)pointerFocused:(NSDictionary *)effect { [self.desktop.navigation perform:effect?@{@"effect":effect}:@{}];self.desktop.sceneDirty=YES;[self.desktop render]; }
+- (void)pointerFocused:(DWFocusEffect *)effect { [self.desktop.navigation perform:[DWControllerReply replyWithFocusEffect:effect]];self.desktop.sceneDirty=YES;[self.desktop render]; }
 // Upstream's hover and its pointer delivery stand down under a pointer grab. Here that is whatever has the pointer or
 // the pad: a button down anywhere; a press any panel is handling, which is every drag there is (a pan, a window move
 // by a bound press or by a pick-mode press, a press in a native window, a policy press); a trackpad gesture the
@@ -75,7 +81,7 @@
         // fresh recipient check, as do render-time pick, border and grab states.
         if(!grab&&(!output||[self pointerBusy]
             ||(!DWPickOutput([desktop visualSnapshot],output)
-                &&!DWTyped([self pointerCommand:@{@"op":@"resize_border",@"output":output,@"screen":pointJSON(point)} quiet:YES][@"border"],NSDictionary.class)))){
+                &&![self resizeBorderAt:point output:output quiet:YES]))){
             [desktop.canvasCursor releaseOwner:self];return;
         }
     }
@@ -84,7 +90,7 @@
 // Only a canvas panel that would receive a physical click owns an override.
 // Real application windows, the menu bar, Dock and chooser keep their cursor.
 // This policy never guesses the cursor requested by a captured application.
-- (void)pointerCursor:(CGPoint)p output:(NSNumber *)output reply:(NSDictionary *)reply {
+- (void)pointerCursor:(CGPoint)p output:(NSNumber *)output reply:(DWControllerReply *)reply {
     Desktop *d=self.desktop;
     if(d.sizeTransition.fillHandoff||d.cleaning||d.sessionInactive||!output||![self.outputs containsObject:output]||!self.window.visible||self.window.ignoresMouseEvents||!CGRectContainsPoint(self.globalBounds,p)){
         [d.canvasCursor releaseOwner:self];return;
@@ -97,16 +103,16 @@
     NSCursor *cursor=NSCursor.arrowCursor;
     if(grab.gesture==1||grab.gesture==2)cursor=NSCursor.closedHandCursor;
     else if(grab.gesture==4){
-        NSDictionary *resize=DWTyped([d call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);
-        if([resize[@"transaction"]isEqual:grab.resizeTransaction])cursor=DWCanvasResizeCursor(DWTyped(resize[@"edges"],NSString.class))?:cursor;
+        DWResizeTransaction *resize=d.controller.scene.nativeResize;
+        if([resize.transaction isEqual:grab.resizeTransaction])cursor=DWCanvasResizeCursor(resize.edges)?:cursor;
     }else {
-        NSDictionary *hit=reply?DWTyped(reply[@"hit"],NSDictionary.class):[self hit:p output:output];
-        BOOL pick=reply?[reply[@"pick"]boolValue]:[hit[@"pick"]boolValue];
+        DWHit *hit=reply?reply.hit:[self hit:p output:output];
+        BOOL pick=reply?reply.pick.boolValue:hit.pick.boolValue;
         if(pick)cursor=NSCursor.pointingHandCursor;
-        else if(!hit[@"native_member"]){
-            NSDictionary *border=DWTyped([self pointerCommand:@{@"op":@"resize_border",@"output":output,@"screen":pointJSON(p)} quiet:YES][@"border"],NSDictionary.class);
-            NSDictionary *recipient=border?[self hit:p output:output]:nil;
-            if(!recipient[@"native_member"]&&(!recipient||[recipient[@"window"]isEqual:border[@"window"]]))cursor=DWCanvasResizeCursor(DWTyped(border[@"edges"],NSString.class))?:cursor;
+        else if(!hit.nativeMember){
+            DWResizeBorder *border=[self resizeBorderAt:p output:output quiet:YES];
+            DWHit *recipient=border?[self hit:p output:output]:nil;
+            if(!recipient.nativeMember&&(!recipient||[recipient.window isEqual:border.window]))cursor=DWCanvasResizeCursor(border.edges)?:cursor;
         }
     }
     [d.canvasCursor setCursor:cursor owner:self];

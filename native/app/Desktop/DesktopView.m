@@ -29,19 +29,14 @@
 - (CGPoint)screenPoint:(NSEvent *)e { if(self.nativePointValid)return self.nativePoint;CGPoint p=[self convertPoint:e.locationInWindow fromView:nil]; return CGPointMake(p.x+self.globalBounds.origin.x,p.y+self.globalBounds.origin.y); }
 - (NSNumber *)outputAt:(CGPoint)p {
     // Walk the controller's output order (the snapshot's) with typed queries: no snapshot, JSON or cache invalidation per input event.
-    DriftDesktop *c=self.desktop.controller;if(!c)return nil;
-    for(size_t i=0,n=driftwm_desktop_output_count(c);i<n;i++){uint64_t oid;DriftDesktopRect r;NSNumber *o;
-        if(!driftwm_desktop_output_id_at(c,i,&oid)||![self.outputs containsObject:(o=@(oid))]||!driftwm_desktop_output_screen_bounds(c,oid,&r))continue;
-        if(CGRectContainsPoint(CGRectMake(r.x,r.y,r.width,r.height),p))return o;
-    }
-    return nil;
+    return [self.desktop.controller outputAtPoint:p restrictedToOutputs:self.outputs];
 }
 - (NSNumber *)actionOutput { return [self.outputs containsObject:self.lastOutput]?self.lastOutput:self.outputs.firstObject; }
 // One compositor layer per output draws the background, the outlines of
 // the other outputs, the windows and the stand-ins from the snapshot: widgets below,
 // screen-pinned windows above at their own size, each at the controller's opacity (a
 // rule's, msg opacity's, or [decorations]').
-- (void)compose:(NSDictionary *)snapshot {
+- (void)compose:(DWScene *)snapshot {
     DWCanvasRenderer *canvas=[self.desktop canvasRenderer];CGPoint origin=self.globalBounds.origin;[CATransaction begin];[CATransaction setDisableActions:YES];
     CGFloat scale=self.window.backingScaleFactor,largest=scale;for(DesktopView *view in self.desktop.views)largest=MAX(largest,view.window.backingScaleFactor);
     [canvas render:snapshot outputs:self.outputs host:self.layer origin:origin scale:scale decorationScale:(NSInteger)ceil(largest)];
@@ -49,42 +44,40 @@
     [canvas flushDescribed];
     [CATransaction commit];
 }
-- (void)render:(NSDictionary *)snapshot {
+- (void)render:(DWScene *)snapshot {
     [self compose:snapshot];[self refreshCursor];
 }
 // A held root press is authorized by its own completed focus request, not by
 // the disappearance of any pending request. ObserveFocus may replace op/id while
 // retaining the same observed binding, so only the result uses full effect equality.
-static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,pid_t foreground,BOOL logicalOnly) {
+static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,DWFocus *focus,pid_t foreground,BOOL logicalOnly) {
     NSNumber *deadline=DWTyped(intent[@"focus_deadline"],NSNumber.class);double end=deadline.doubleValue;
     if(!deadline||!isfinite(end)||CACurrentMediaTime()>=end)return NO;
     // --no-native-focus deliberately retains the preexisting logical click path.
     if(logicalOnly)return YES;
-    focus=DWTyped(focus,NSDictionary.class);
-    NSDictionary *effect=DWTyped(intent[@"focus_effect"],NSDictionary.class),*result=DWTyped(focus[@"last_result"],NSDictionary.class),*observed=DWTyped(focus[@"observed_native"],NSDictionary.class);
-    if(![effect[@"op"]isEqual:@"focus_native_window"]||!DWTyped(effect[@"effect_id"],NSNumber.class)
-        ||![focus[@"intent"]isEqual:intent[@"window"]]
-        ||DWTyped(focus[@"pending_effect"],NSDictionary.class)||![DWTyped(result[@"success"],NSNumber.class)isEqual:@YES]
-        ||![result[@"effect"]isEqual:effect])return NO;
-    for(NSString *key in @[@"window",@"generation"])
-        if(![effect[key]isEqual:intent[key]]||![observed[key]isEqual:intent[key]])return NO;
+    DWFocusEffect *effect=intent[@"focus_effect"];DWNativeResult *result=focus.lastResult;DWFocusEffect *observed=focus.observedNative;
+    if(effect.kind!=DWEffectFocusNativeWindow||!effect.effectID
+        ||![focus.intent isEqual:intent[@"window"]]
+        ||focus.pendingEffect||![result.success isEqual:@YES]||![result.effect isEqual:effect])return NO;
+    if(![effect.window isEqual:intent[@"window"]]||![observed.window isEqual:intent[@"window"]]
+        ||![effect.generation isEqual:intent[@"generation"]]||![observed.generation isEqual:intent[@"generation"]])return NO;
     NSDictionary *identity=intent[@"root_identity"]?:intent[@"identity"];
-    return boundIdentity(effect[@"identity"],identity)&&boundIdentity(observed[@"identity"],identity)
+    return boundIdentity(DWNativeIdentity(effect.identity),identity)&&boundIdentity(DWNativeIdentity(observed.identity),identity)
         &&foreground==[identity[@"pid"]intValue];
 }
 // A provisional click recipient, captured before raising/focusing the window.
 // It prevents delayed delivery from changing recipients; posting still requires
 // the current hit, binding and native ancestry checks in -forwardCaptured:.
-- (NSDictionary *)inputIntentForHit:(NSDictionary *)hit output:(NSNumber *)output {
+- (NSDictionary *)inputIntentForHit:(DWHit *)hit output:(NSNumber *)output {
     NSNumber *windowID=liveHit(hit);if(!windowID)return nil;
     LiveSource *source=self.desktop.sources[windowID];if(!DWCapturedInputAvailable(source)||!output)return nil;
-    NSDictionary *binding=nil;for(NSDictionary *window in [self.desktop presentationSnapshot][@"windows"])if([window[@"window"]isEqual:source.logical]){binding=DWTyped(window[@"source"],NSDictionary.class);break;}
-    if(!binding[@"generation"]||!boundIdentity(source.identity,binding[@"identity"])||![binding[@"observation_known"]boolValue])return nil;
-    NSDictionary *member=DWTyped(hit[@"native_member"],NSDictionary.class),*identity=member?DWTyped(member[@"identity"],NSDictionary.class):source.identity;
-    if(!identity||(member&&![member[@"generation"]isEqual:binding[@"generation"]]))return nil;
-    return DWCapturedInputAvailable(source)?@{@"window":source.logical,@"output":output,@"generation":binding[@"generation"],@"identity":identity,@"root_identity":source.identity,@"native_member":@(member!=nil)}:nil;
+    DWSource *binding=[[self.desktop presentationSnapshot] windowWithID:source.logical].source;
+    if(!binding.generation||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||![binding.observationKnown boolValue])return nil;
+    NSDictionary *member=hit.nativeMember,*identity=member?DWTyped(member[@"identity"],NSDictionary.class):source.identity;
+    if(!identity||(member&&![member[@"generation"]isEqual:binding.generation]))return nil;
+    return DWCapturedInputAvailable(source)?@{@"window":source.logical,@"output":output,@"generation":binding.generation,@"identity":identity,@"root_identity":source.identity,@"native_member":@(member!=nil)}:nil;
 }
-- (NSDictionary *)hit:(CGPoint)p output:(NSNumber *)output {
+- (DWHit *)hit:(CGPoint)p output:(NSNumber *)output {
     return [self.desktop.pressAdmission hit:p output:output view:self];
 }
 // A child press may activate its application, but must never raise the root:
@@ -100,10 +93,10 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     if(![self childPressCurrent:intent])return NO;Desktop *d=self.desktop;
     // Set canvas focus and settle the exact request logically before handing
     // any reply to the coordinator. This asserts no native root focus.
-    NSDictionary *reply=[d call:@{@"op":@"focus",@"window":intent[@"window"]}],*effect=DWTyped(reply[@"effect"],NSDictionary.class);
-    if(![effect[@"op"]isEqual:@"focus_native_window"]||![effect[@"window"]isEqual:intent[@"window"]]
-        ||!boundIdentity(intent[@"root_identity"],DWTyped(effect[@"identity"],NSDictionary.class))||![effect[@"generation"]isEqual:intent[@"generation"]])return NO;
-    NSMutableDictionary *ack=[effect mutableCopy];ack[@"op"]=@"focus_logical";NSDictionary *settled=[d call:ack];if(!settled)return NO;
+    DWControllerReply *reply=[d.controller focusWindow:intent[@"window"]];DWFocusEffect *effect=reply.primaryFocusEffect;
+    if(effect.kind!=DWEffectFocusNativeWindow||![effect.window isEqual:intent[@"window"]]
+        ||!boundIdentity(intent[@"root_identity"],DWNativeIdentity(effect.identity))||![effect.generation isEqual:intent[@"generation"]])return NO;
+    DWControllerReply *settled=[d.controller focusLogical:effect];if(!settled)return NO;
     d.sceneDirty=YES;[d applyReply:settled];
     if(d.logicalFocus)return YES;
     LiveSource *source=d.sources[intent[@"window"]];NSRunningApplication *current=NSWorkspace.sharedWorkspace.frontmostApplication;
@@ -121,7 +114,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         if(!source||source.detached||!boundIdentity(source.identity,intent[@"root_identity"])||![birth(source.router.pid)isEqual:source.router.processBirth])return NO;
         return NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=source.router.pid;
     }
-    id pending=[self.desktop call:@{@"op":@"snapshot"}][@"focus"][@"pending_effect"];return DWTyped(intent[@"focus_effect"],NSDictionary.class)&&[pending isEqual:intent[@"focus_effect"]];
+    DWFocusEffect *pending=self.desktop.controller.scene.focus.pendingEffect;return [intent[@"focus_effect"]isKindOfClass:DWFocusEffect.class]&&[pending isEqual:intent[@"focus_effect"]];
 }
 // Upstream forwards the press of a click-to-focus to a client it has already focused. Here the focus is a request to another
 // application that takes some tens of milliseconds, and until it has landed that application is not the active one: an
@@ -148,7 +141,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     NSNumber *window=self.heldWindow,*output=self.heldOutput;NSDictionary *intent=self.heldIntent;BOOL released=self.heldReleased,navigate=self.heldNavigate;CGPoint p=self.heldPoint,d=self.heldDragPoint;NSEvent *release=self.heldRelease;
     self.heldPress=self.heldDrag=self.heldRelease=nil;self.heldWindow=self.heldOutput=nil;self.heldIntent=nil;self.heldReleased=self.heldNavigate=NO;
     BOOL child=[intent[@"native_member"]boolValue],ready=child?([self childPressCurrent:intent]&&![self focusPending:window intent:intent])
-        :DWCapturedRootFocusCurrent(intent,[self.desktop call:@{@"op":@"snapshot"}][@"focus"],NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,self.desktop.logicalFocus);
+        :DWCapturedRootFocusCurrent(intent,self.desktop.controller.scene.focus,NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,self.desktop.logicalFocus);
     CGEventRef cg=ready&&press.CGEvent?CGEventCreateCopy(press.CGEvent):NULL;BOOL sent=cg&&intent&&[self forward:cg at:p output:output expected:intent];if(cg)CFRelease(cg);
     if(DWDebugTrace()){LiveSource *s=self.desktop.sources[window];fprintf(stderr,"debug: press #%s delivered after %.0f ms sent=%d frontmost=%s source=%d valid=%d trusted=%d released=%d status=\"%s\"\n",window.description.UTF8String,(CACurrentMediaTime()-self.heldSince)*1000,(int)sent,NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.UTF8String?:"?",s!=nil,(int)[s.router valid],(int)AXIsProcessTrusted(),(int)released,sent?"":(self.desktop.statusText?:@"").UTF8String);}
     // No initial down means no queued drag/up or completed-click navigation.
@@ -178,9 +171,9 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         if(DWNativeTabletProximityEvent(e)&&!CGEventGetIntegerValueField(e,kCGTabletProximityEventEnterProximity))return !expected&&[self.desktop forwardTabletTail:e];
     }
     if(!AXIsProcessTrusted()){self.desktop.statusText=@"Input requires Accessibility access. Enable it in System Settings, then reopen.";return NO;}
-    NSDictionary *hit=[self hit:p output:output];if(![hit isKindOfClass:NSDictionary.class]||[hit[@"pick"]boolValue])return NO;
+    DWHit *hit=[self hit:p output:output];if(!hit||[hit.pick boolValue])return NO;
     if(expected&&!sameInputTarget(expected,[self inputIntentForHit:hit output:output]))return NO;
-    LiveSource *source=self.desktop.sources[hit[@"window"]];
+    LiveSource *source=self.desktop.sources[hit.window];
     if(!DWCapturedInputAvailable(source))return NO;
     // The actual native placement gets ordinary WindowServer input. Only an
     // extra display's visible, successfully captured copy can use this route.
@@ -197,22 +190,22 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     BOOL drag=type==kCGEventLeftMouseDragged||type==kCGEventRightMouseDragged||type==kCGEventOtherMouseDragged;
     BOOL up=type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp;
     if((drag||(up&&self.pressedSource))&&source!=self.pressedSource)return NO;
-    NSDictionary *member=DWTyped(hit[@"native_member"],NSDictionary.class);
-    NSDictionary *validated=member?hit:[self.desktop call:@{@"op":@"input",@"output":output,@"screen":pointJSON(p),@"identity":source.identity}][@"hit"];
-    if(![validated isKindOfClass:NSDictionary.class]||(!native&&![source.router valid]))return NO;
-    CGPoint local=jsonPoint(validated[@"local"]);
+    NSDictionary *member=hit.nativeMember;
+    DWHit *validated=member?hit:[self.desktop.controller inputOnOutput:output screen:p identity:DWControllerIdentity(source.identity)].hit;
+    if(!validated||(!native&&![source.router valid]))return NO;
+    CGPoint local=validated.local;
     CGRect own=CGRectZero;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&own))return NO;
-    NSDictionary *binding=nil;for(NSDictionary *window in [self.desktop call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical])binding=DWTyped(window[@"source"],NSDictionary.class);
-    if(!binding[@"generation"]||!boundIdentity(source.identity,binding[@"identity"])||![binding[@"observation_known"]boolValue])return NO;
-    if(member&&(![member[@"generation"]isEqual:binding[@"generation"]]||![self.desktop.nativeFamilies contains:source.logical identity:member[@"identity"] generation:binding[@"generation"] bounds:DWRectFromJSON(member[@"native_bounds"])]))return NO;
-    NSMutableDictionary *target=[@{@"window":source.logical,@"output":output,@"generation":binding[@"generation"],@"identity":source.identity,@"root_identity":source.identity,@"native_bounds":DWRectJSON(own)}mutableCopy];
-    if(native||member){NSDictionary *placement=nil;for(NSDictionary *item in [self.desktop presentationSnapshot][@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:output]){placement=item;break;}CGRect site=DWRectFromJSON(placement[@"screen_rect"]);if(site.size.width>0&&site.size.height>0)target[@"motion_scale"]=pointJSON(CGPointMake(own.size.width/site.size.width,own.size.height/site.size.height));}
+    DWSource *binding=[self.desktop.controller.scene windowWithID:source.logical].source;
+    if(!binding.generation||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||![binding.observationKnown boolValue])return NO;
+    if(member&&(![member[@"generation"]isEqual:binding.generation]||![self.desktop.nativeFamilies contains:source.logical identity:member[@"identity"] generation:binding.generation bounds:DWRectFromJSON(member[@"native_bounds"])]))return NO;
+    NSMutableDictionary *target=[@{@"window":source.logical,@"output":output,@"generation":binding.generation,@"identity":source.identity,@"root_identity":source.identity,@"native_bounds":DWRectJSON(own)}mutableCopy];
+    if(native||member){DWPlacement *placement=nil;for(DWPlacement *item in [self.desktop presentationSnapshot].placements)if([item.window isEqual:source.logical]&&[item.output isEqual:output]){placement=item;break;}CGRect site=placement.screenRect;if(site.size.width>0&&site.size.height>0)target[@"motion_scale"]=pointJSON(CGPointMake(own.size.width/site.size.width,own.size.height/site.size.height));}
     if(member){target[@"identity"]=member[@"identity"];target[@"native_bounds"]=member[@"native_bounds"];target[@"native_member"]=@YES;local=jsonPoint(member[@"local"]);}
     if(expected&&!sameInputTarget(expected,target))return NO;
     if(self.pressedTarget&&(drag||up)&&![self.pressedTarget[@"identity"]isEqual:target[@"identity"]])return NO;
     if(!DWCapturedInputAvailable(source))return NO;
     if(expected&&![expected[@"native_member"]boolValue]
-        &&!DWCapturedRootFocusCurrent(expected,[self.desktop call:@{@"op":@"snapshot"}][@"focus"],NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,self.desktop.logicalFocus))return NO;
+        &&!DWCapturedRootFocusCurrent(expected,self.desktop.controller.scene.focus,NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,self.desktop.logicalFocus))return NO;
     BOOL sent;
     if(DWNativeTabletEvent(e)){__weak Desktop *weak=self.desktop;sent=[self.desktop.tablet forwardEvent:e target:target local:local validate:^BOOL(NSDictionary *value){return [weak validateInputTarget:value];} post:^BOOL(CGEventRef packet,NSDictionary *value,CGPoint point){return [weak postInput:packet target:value local:point];}];}
     else if(native||member)sent=[self.desktop validateInputTarget:target]&&[self.desktop postInput:e target:target local:local];
@@ -233,22 +226,21 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
 // (a size transaction still settling, a window with no source), changed nothing: the press is left upstream's first half, the window
 // raised and focused, and the refusal is shown in the controller's words.
 - (void)beginResize:(NSNumber *)window edges:(NSString *)edges snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output {
-    NSMutableDictionary *command=[@{@"op":@"begin_native_resize",@"window":window,@"output":output,@"start_screen":pointJSON(p),@"group":snapped?@YES:@NO}mutableCopy];if(edges)command[@"edges"]=edges;
-    NSString *status=self.desktop.statusText;NSDictionary *reply=[self.desktop.sizeTransition request:command];
-    if(reply){self.resizeTransaction=reply[@"transaction"];self.gesture=4;[self.desktop resizeFocus:reply];
-        if(DWDebugTrace()){NSDictionary *t=DWTyped([self.desktop call:@{@"op":@"snapshot"}][@"native_resize"],NSDictionary.class);fprintf(stderr,"debug: resize grab transaction=%s window=#%s edges=%s group=%d ratio=%d\n",[t[@"transaction"]description].UTF8String,window.description.UTF8String,((NSString *)DWTyped(t[@"edges"],NSString.class)).UTF8String?:"?",[DWTyped(t[@"group"],NSNumber.class)boolValue],DWTyped(t[@"ratio"],NSNumber.class)!=nil);}
+    NSString *status=self.desktop.statusText;DWControllerReply *reply=[self.desktop.sizeTransition request:^DWControllerReply *(id<DWResizeController> c){return [c beginNativeResizeWindow:window output:output edges:edges start:p group:snapped];}];
+    if(reply){self.resizeTransaction=reply.transaction;self.gesture=4;[self.desktop resizeFocus:reply];
+        if(DWDebugTrace()){DWResizeTransaction *t=self.desktop.controller.scene.nativeResize;fprintf(stderr,"debug: resize grab transaction=%s window=#%s edges=%s group=%d ratio=%d\n",t.transaction.description.UTF8String,window.description.UTF8String,t.edges.UTF8String?:"?",t.group.boolValue,t.ratio!=nil);}
         return;}
     NSString *refusal=[self.desktop.statusText isEqual:status]?nil:self.desktop.statusText;self.desktop.statusText=status;
     [self.desktop raiseFocus:window];if(refusal)[self.desktop flashStatus:[@"Window not resized: " stringByAppendingString:refusal]];
 }
-- (NSDictionary *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output {
+- (DWResizeBorder *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(DWHit *)hit at:(CGPoint)p output:(NSNumber *)output {
     // Admission is shared by canvas presses and physical native-window presses.
     // The controller owns the band and pick/widget/pin/fullscreen policy; a native
     // child recipient and a modified window binding keep their existing input.
-    if(button!=0||hit[@"native_member"])return nil;
-    NSDictionary *border=DWTyped([self pointerCommand:@{@"op":@"resize_border",@"output":output,@"screen":pointJSON(p)} quiet:YES][@"border"],NSDictionary.class);
-    if(!border||(hit&&![hit[@"window"]isEqual:border[@"window"]]))return nil;
-    if((flags&(NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift|NSEventModifierFlagCommand))&&[self.desktop mouseBinding:@"left" source:nil flags:flags window:YES under:DWTyped(border[@"window"],NSNumber.class) pick:NO])return nil;
+    if(button!=0||hit.nativeMember)return nil;
+    DWResizeBorder *border=[self resizeBorderAt:p output:output quiet:YES];
+    if(!border||(hit&&![hit.window isEqual:border.window]))return nil;
+    if((flags&(NSEventModifierFlagControl|NSEventModifierFlagOption|NSEventModifierFlagShift|NSEventModifierFlagCommand))&&[self.desktop mouseBinding:@"left" source:nil flags:flags window:YES under:border.window pick:NO])return nil;
     return border;
 }
 // A title grab cannot be lent to a rebound source or a replacement output.
@@ -274,7 +266,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         if(self.resizeTransaction){
             if(CGPointEqualToPoint(p,self.lastPoint))return;
             NSString *status=self.desktop.statusText;
-            if([self.desktop.sizeTransition request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}]){
+            if([self.desktop.sizeTransition request:^DWControllerReply *(id<DWResizeController> c){return [c nativeResizeTo:p transaction:self.resizeTransaction];}]){
                 // Success is consumed synchronously: resize.changed has already
                 // described the current scene and arranged its frame flush.
                 self.lastPoint=p;return;
@@ -289,7 +281,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     }
     // A window drag says where the pointer is: inside navigation.edge_pan's zone
     // the controller pans under the window frame by frame, also while the pointer rests there.
-    else if(self.gesture==2){if([[self.desktop call:@{@"op":@"gesture_to",@"screen_delta":pointJSON(CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y)),@"pointer":pointJSON(p)}][@"needs_frames"]boolValue])[self.desktop ensureFrames];}
+    else if(self.gesture==2){if([[self.desktop.controller gestureTo:CGPointMake(p.x-self.startPoint.x,p.y-self.startPoint.y) pointer:[NSValue valueWithPoint:p]].needsFrames boolValue])[self.desktop ensureFrames];}
     else if(self.gesture==3&&self.heldPress){self.heldDrag=e;self.heldDragPoint=p;}
     else if(self.gesture==3){CGEventRef cg=CGEventCreateCopy(e.CGEvent);[self forward:cg at:p output:self.dragOutput];CFRelease(cg);}
     self.lastPoint=p;[self.desktop render];
@@ -327,8 +319,8 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
         // The release may be farther than the last drag event. Keep its final
         // pointer position before draining the request, through the same grab.
         // A stationary click or unmoved release must never trigger a snap proposal.
-        if(!CGPointEqualToPoint(p,self.lastPoint))[self.desktop.sizeTransition request:@{@"op":@"native_resize_to",@"transaction":self.resizeTransaction,@"screen":pointJSON(p)}];
-        if(![self.desktop.sizeTransition request:@{@"op":@"end_native_resize",@"transaction":self.resizeTransaction}])self.desktop.statusText=status;}
+        if(!CGPointEqualToPoint(p,self.lastPoint))[self.desktop.sizeTransition request:^DWControllerReply *(id<DWResizeController> c){return [c nativeResizeTo:p transaction:self.resizeTransaction];}];
+        if(![self.desktop.sizeTransition request:^DWControllerReply *(id<DWResizeController> c){return [c endNativeResize:self.resizeTransaction];}])self.desktop.statusText=status;}
     self.resizeTransaction=nil;if(self.heldPress)self.heldReleased=YES;else [self releasePressed];
     // Upstream resolve_click_navigate follows delivery. A click still waiting for
     // native focus cannot move the camera before its original recipient is checked.
@@ -337,7 +329,7 @@ static BOOL DWCapturedRootFocusCurrent(NSDictionary *intent,NSDictionary *focus,
     // A policy press let go: a pick, or a center-nearest press that never left its dead zone.
     if(self.gesture==DWPolicyPress)[self.hover pressReleased:p];
     // A pick-mode press that became a move ends here like any other window drag.
-    if(self.gesture==2)[self.desktop call:@{@"op":@"end_gesture"}];
+    if(self.gesture==2)[self.desktop.controller endGesture];
     if(titleClick)[self.desktop deferNativeTitleClick:titleClick];
     // A drag pan coasts from its release, as upstream's pan grab launches momentum.
     // A drag that rested first does not: upstream's 50 ms delay has by then launched it into

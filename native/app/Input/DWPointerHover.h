@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <AppKit/AppKit.h>
+#import "DWController.h"
 // What the pointer policy asks of the canvas view it serves. Main thread only.
 @protocol DWPointerHost <NSObject>
 // One controller command: its reply's data, or nil when the controller refused it.
 // `quiet` leaves the resting status as it was, whatever the controller answered.
-- (NSDictionary *)pointerCommand:(NSDictionary *)command quiet:(BOOL)quiet;
+- (DWControllerReply *)pointerCommand:(DWControllerReply *(^)(id<DWInputController> controller))operation quiet:(BOOL)quiet;
+- (DWControllerReply *)pointerHoverOnOutput:(NSNumber *)output screen:(CGPoint)point time:(NSNumber *)time quiet:(BOOL)quiet;
 // The reply to a press the policy sent (activate, pick, pointer_nearest, and the
 // begin_drag of a pick-mode press that became a move), carried out like every bound
 // command's: its focus request, its flight, a redraw, the scene saved.
-- (void)pointerApply:(NSDictionary *)reply;
+- (void)pointerApply:(DWControllerReply *)reply;
 // A hover moved the focus. Its focus request goes the way a click's does, and `effect`
 // is nil for a window with no application behind it; the canvas is drawn again.
-- (void)pointerFocused:(NSDictionary *)effect;
+- (void)pointerFocused:(DWFocusEffect *)effect;
 // The output whose screen_bounds hold a point in their coordinates, nil for none.
 - (NSNumber *)outputAt:(CGPoint)screen;
 // Where the pointer is now, by the shell's one reading of it, which is also what cursor
@@ -35,7 +37,7 @@
 // Update only this application's canvas cursor. A nil output withdraws this
 // view's override. A hover reply may be reused for pick/hit policy; nil asks the
 // host to resolve the current shape without forwarding or changing focus.
-- (void)pointerCursor:(CGPoint)screen output:(NSNumber *)output reply:(NSDictionary *)reply;
+- (void)pointerCursor:(CGPoint)screen output:(NSNumber *)output reply:(DWControllerReply *)reply;
 @end
 // DriftWM's pointer policy for one canvas panel of a normal run: pointer motion with
 // no button down (hover: sloppy focus and the motion an application sees), a press in
@@ -65,7 +67,7 @@
 // mode's: the hit is a pick target and `claimed`, a binding whose modifiers are held,
 // is NO. The window is then focused and raised, the press is never the application's,
 // and the left button is armed to pick.
-- (BOOL)pickPress:(NSDictionary *)hit button:(NSInteger)button claimed:(BOOL)claimed at:(CGPoint)screen output:(NSNumber *)output;
+- (BOOL)pickPress:(DWHit *)hit button:(NSInteger)button claimed:(BOOL)claimed at:(CGPoint)screen output:(NSNumber *)output;
 // A press bound to center-nearest went down at `screen`; `focus` is a press bound to focus-nearest, which the
 // controller answers with focus-nearest's reveal instead of center-nearest's park (the binding's "focus").
 - (void)nearestPress:(CGPoint)screen output:(NSNumber *)output focus:(BOOL)focus;
@@ -82,8 +84,8 @@
 @end
 // Is `output` in pick mode, as that snapshot's "outputs" say? NO for an output it does
 // not list.
-BOOL DWPickOutput(NSDictionary *snapshot,NSNumber *output);
+BOOL DWPickOutput(DWScene *snapshot,NSNumber *output);
 // A placeholder is hit-tested by the shell alone, so the controller never says whether
 // it is a pick target. It is one, as upstream's stand-in is, whenever its output is in
 // pick mode. Returns `hit` with "pick":true then, and `hit` itself otherwise.
-NSDictionary *DWPickHit(NSDictionary *hit,NSDictionary *snapshot,NSNumber *output);
+DWHit *DWPickHit(DWHit *hit,DWScene *snapshot,NSNumber *output);

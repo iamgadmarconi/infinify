@@ -16,7 +16,7 @@ static NSNumber *eventMillis(NSEvent *e) { return @((uint32_t)(uint64_t)(e.times
 // (navigation.trackpad_speed for a scroll, navigation.mouse_speed for a drag), clears the
 // output's flight as every pan does, and tracks its velocity for the coast that follows.
 - (void)pan:(CGPoint)delta output:(NSNumber *)output event:(NSEvent *)e source:(NSString *)source {
-    [self.desktop call:@{@"op":@"pan",@"output":output,@"screen_delta":pointJSON(delta),@"time_ms":eventMillis(e),@"source":source}];
+    [self.desktop.controller panOnOutput:output delta:delta time:eventMillis(e) source:source];
 }
 // A normal run's wheel zoom: zoom.step, zoom.mouse_speed and the zoom limits are the
 // controller's, as upstream's. delta is upstream's vertical axis amount (positive scrolls
@@ -25,9 +25,9 @@ static NSNumber *eventMillis(NSEvent *e) { return @((uint32_t)(uint64_t)(e.times
 - (void)wheelZoom:(double)delta at:(CGPoint)p output:(NSNumber *)output {
     // A held window move or resize owns the pointer; drop its zoom input quietly.
     if(!isfinite(delta)||!delta||self.gesture==2||self.gesture==4)return;
-    NSDictionary *reply=[self.desktop call:@{@"op":@"zoom_by",@"output":output,@"anchor":pointJSON(p),@"delta":@(delta),@"source":@"wheel"}];BOOL frames=[reply[@"needs_frames"]boolValue];
+    DWControllerReply *reply=[self.desktop.controller zoomOnOutput:output anchor:p delta:delta source:@"wheel" phase:nil];BOOL frames=reply.needsFrames.boolValue;
     // A zoom the limit swallows is no input for a focus request in flight either.
-    if(DWTyped(reply[@"navigation"],NSDictionary.class))[self.desktop.navigation interrupt];
+    if(reply.navigation)[self.desktop.navigation interrupt];
     [self.desktop render];if(frames)[self.desktop ensureFrames];self.desktop.sceneDirty=YES;
 }
 // A normal run's scroll, dispatched as upstream's on_pointer_axis does: a bound scroll
@@ -57,7 +57,7 @@ static NSNumber *eventMillis(NSEvent *e) { return @((uint32_t)(uint64_t)(e.times
     // A swipe or pinch of three or more fingers is the recogniser's: a scroll macOS makes of the same fingers pans nothing.
     if(precise&&[self.desktop padBusy:e])return;
     // Upstream keeps a finger pan on the canvas for 150 ms, so a window sliding under the pointer cannot take the gesture.
-    BOOL panning=self.lastScrollPan&&CACurrentMediaTime()-self.lastScrollPan<.15;NSDictionary *here=precise&&panning?nil:DWTyped([self hit:p output:output],NSDictionary.class);
+    BOOL panning=self.lastScrollPan&&CACurrentMediaTime()-self.lastScrollPan<.15;DWHit *here=precise&&panning?nil:[self hit:p output:output];
     // Upstream's wheel-notch site (on_pointer_axis), ahead of the continuous lookup and for a wheel only: a finger has no notches. Its
     // context is the pointer's own, without the 150 ms canvas lock below. A notch bound to an action runs it once per notch, ten at most
     // for one event, and the event is consumed: it reaches no window and neither pans nor zooms. Any other answer (no notch binding, one
@@ -70,12 +70,12 @@ static NSNumber *eventMillis(NSEvent *e) { return @((uint32_t)(uint64_t)(e.times
         int64_t lines=CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis1);
         if(!lines&&(e.modifierFlags&NSEventModifierFlagShift))lines=CGEventGetIntegerValueField(e.CGEvent,kCGScrollWheelEventDeltaAxis2);
         if(lines){
-            NSDictionary *notch=[self.desktop mouseBinding:lines>0?@"wheel_up":@"wheel_down" source:nil flags:e.modifierFlags window:here!=nil under:liveHit(here) pick:[here[@"pick"]isEqual:@YES]];NSString *run=[DWTyped(notch[@"kind"],NSString.class)isEqual:@"action"]?DWTyped(notch[@"action"],NSString.class):nil;
+            DWBinding *notch=[self.desktop mouseBinding:lines>0?@"wheel_up":@"wheel_down" source:nil flags:e.modifierFlags window:here!=nil under:liveHit(here) pick:[here.pick isEqual:@YES]];NSString *run=[DWTyped(notch.kind,NSString.class)isEqual:@"action"]?DWTyped(notch.action,NSString.class):nil;
             if(run){int64_t notches=MIN(llabs(lines),10);BOOL held=[DWCycleHold modifiersDown]!=0;for(int64_t i=0;i<notches;i++)[self.desktop action:run output:output at:p held:held];return;}
         }
     }
-    NSDictionary *under=panning?nil:here;BOOL window=under!=nil,pick=[under[@"pick"]isEqual:@YES];
-    NSDictionary *binding=[self.desktop mouseBinding:@"scroll" source:source flags:e.modifierFlags window:window under:liveHit(under) pick:pick];NSString *kind=DWTyped(binding[@"kind"],NSString.class);
+    DWHit *under=panning?nil:here;BOOL window=under!=nil,pick=[under.pick isEqual:@YES];
+    DWBinding *binding=[self.desktop mouseBinding:@"scroll" source:source flags:e.modifierFlags window:window under:liveHit(under) pick:pick];NSString *kind=DWTyped(binding.kind,NSString.class);
     // Upstream on_pointer_axis below [zoom] interact_min: the controller looks a scroll that finds no binding over a
     // pick target up again as one on empty canvas, so that it pans or zooms through the same paths as any bound
     // scroll, coast and all; with none there either it goes nowhere. It is never the application's: not its

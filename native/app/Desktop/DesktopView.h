@@ -4,12 +4,13 @@
 #import <AppKit/AppKit.h>
 #import "DWPointerHover.h"
 #import "FlippedView.h"
-@class Desktop, LiveSource;
+@class Desktop, LiveSource, DWHit, DWScene, DWResizeBorder;
 @interface DesktopView : FlippedView
 - (BOOL)focusChildIntent:(NSDictionary *)intent;
 - (void)holdPress:(NSEvent *)event window:(NSNumber *)window intent:(NSDictionary *)intent at:(CGPoint)point output:(NSNumber *)output;
-- (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output;
-- (NSDictionary *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(NSDictionary *)hit at:(CGPoint)p output:(NSNumber *)output;
+- (DWResizeBorder *)resizeBorderAt:(CGPoint)point output:(NSNumber *)output quiet:(BOOL)quiet;
+- (DWHit *)hit:(CGPoint)point output:(NSNumber *)output;
+- (DWResizeBorder *)resizeBorderForButton:(NSInteger)button flags:(NSEventModifierFlags)flags hit:(DWHit *)hit at:(CGPoint)p output:(NSNumber *)output;
 @property (weak) Desktop *desktop;
 @property NSMutableArray<NSNumber *> *outputs;
 @property CGRect globalBounds;
@@ -44,7 +45,7 @@
 @property CGPoint nativePoint;
 // Only for a freshly validated native child recipient outside its root's tile.
 // This supplies the root's binding context, never synthetic app input.
-@property NSDictionary *nativeFamilyHit;
+@property DWHit *nativeFamilyHit;
 @property CFTimeInterval lastScrollPan; // last finger scroll that panned, 0 for none
 @property BOOL clearsFocus; // a pan begun on empty canvas that has not moved 5 points yet: released so, it unfocuses
 @property NSNumber *clickWindow; // the window an unbound press focused: released within 5 points, it is a completed click
@@ -62,7 +63,7 @@
 @property NSInteger injectedButton;
 @property NSEventModifierFlags injectedFlags;
 - (void)released:(CGPoint)p at:(NSTimeInterval)time;
-- (void)render:(NSDictionary *)snapshot;
+- (void)render:(DWScene *)snapshot;
 - (NSNumber *)outputAt:(CGPoint)p;
 - (NSNumber *)actionOutput;
 - (BOOL)forward:(CGEventRef)event at:(CGPoint)p output:(NSNumber *)output;
@@ -76,7 +77,7 @@
 @end
 // Implemented in DesktopView.m; called from Desktop (Hover), (Input), and (Windows)/(Rendering)/(Session).
 @interface DesktopView ()
-- (NSDictionary *)inputIntentForHit:(NSDictionary *)hit output:(NSNumber *)output;
+- (NSDictionary *)inputIntentForHit:(DWHit *)hit output:(NSNumber *)output;
 - (void)beginResize:(NSNumber *)window edges:(NSString *)edges snapped:(BOOL)snapped at:(CGPoint)p output:(NSNumber *)output;
 - (void)releasePressed;
 - (CGPoint)screenPoint:(NSEvent *)e;

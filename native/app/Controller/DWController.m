@@ -177,10 +177,11 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     return [self mutate:command];
 }
 
-- (DWControllerReply *)hoverWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation output:(NSNumber *)output screen:(CGPoint)screen time:(NSNumber *)time forwardMotion:(BOOL)forward {
-    id<NSCopying> keys[8]={@"op",@"window",@"identity",@"generation",@"output",@"screen",@"forward_motion"};
-    id values[8]={@"hover_source",window,I(identity),generation,output,P(screen),@(forward)};
-    NSUInteger count=7;id optional;
+- (DWControllerReply *)hoverWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation output:(NSNumber *)output screen:(CGPoint)screen time:(NSNumber *)time forwardMotion:(NSNumber *)forward {
+    id<NSCopying> keys[8]={@"op",@"window",@"identity",@"generation",@"output",@"screen"};
+    id values[8]={@"hover_source",window,I(identity),generation,output,P(screen)};
+    NSUInteger count=6;id optional;
+    if(forward){keys[count]=@"forward_motion";values[count++]=forward;}
     if((optional=time)){keys[count]=@"time_ms";values[count++]=optional;}
     NSDictionary *command=[NSDictionary dictionaryWithObjects:values forKeys:keys count:count];
     return [self mutate:command];
@@ -197,7 +198,7 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
 }
 
 - (DWControllerReply *)pointerNearestOnOutput:(NSNumber *)output screen:(CGPoint)screen start:(CGPoint)start held:(BOOL)held focus:(BOOL)focus {
-    NSDictionary *command=@{@"op":@"pointer_nearest" ,@"output":output,@"screen":P(screen),@"start":P(start),@"held":@(held),@"focus":@(focus)};
+    NSDictionary *command=@{@"op":@"pointer_nearest" ,@"output":output?:NSNull.null,@"screen":P(screen),@"start":P(start),@"held":@(held),@"focus":@(focus)};
     return [self mutate:command];
 }
 
@@ -225,18 +226,21 @@ static NSArray *asArray(id value) { return DWTyped(value,NSArray.class); }
     return [self mutate:command];
 }
 
-- (DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(BOOL)doubleTap time:(double)time {
-    NSDictionary *command=@{@"op":@"gesture_begin" ,@"kind":kind,@"fingers":@(fingers),@"modifiers":M(modifiers),@"context":windowContext?@"window":@"canvas",@"output":output,@"pointer":P(pointer),@"doubletap":@(doubleTap),@"time_ms":@(time)};
+- (DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(NSNumber *)doubleTap time:(double)time {
+    NSMutableDictionary *command=[@{@"op":@"gesture_begin",@"kind":kind,@"fingers":@(fingers),@"modifiers":M(modifiers),@"context":windowContext?@"window":@"canvas",@"output":output,@"pointer":P(pointer),@"time_ms":@(time)}mutableCopy];
+    if(doubleTap)command[@"doubletap"]=doubleTap;
     return [self mutate:command];
 }
 
-- (DWControllerReply *)updateGestureWithDelta:(CGPoint)delta scale:(double)scale rotation:(double)rotation time:(double)time held:(BOOL)held {
-    NSDictionary *command=@{@"op":@"gesture_update" ,@"dx":@(delta.x),@"dy":@(delta.y),@"scale":@(scale),@"rotation":@(rotation),@"time_ms":@(time),@"held":@(held)};
+- (DWControllerReply *)updateGestureWithDelta:(CGPoint)delta scale:(NSNumber *)scale rotation:(NSNumber *)rotation time:(double)time held:(BOOL)held {
+    NSMutableDictionary *command=[@{@"op":@"gesture_update",@"dx":@(delta.x),@"dy":@(delta.y),@"time_ms":@(time),@"held":@(held)}mutableCopy];
+    if(scale)command[@"scale"]=scale;if(rotation)command[@"rotation"]=rotation;
     return [self mutate:command];
 }
 
-- (DWControllerReply *)endGestureCancelled:(BOOL)cancelled time:(double)time held:(BOOL)held {
-    NSDictionary *command=@{@"op":@"gesture_end" ,@"cancelled":@(cancelled),@"time_ms":@(time),@"held":@(held)};
+- (DWControllerReply *)endGestureCancelled:(BOOL)cancelled time:(double)time held:(NSNumber *)held {
+    NSMutableDictionary *command=[@{@"op":@"gesture_end",@"cancelled":@(cancelled),@"time_ms":@(time)}mutableCopy];
+    if(held)command[@"held"]=held;
     return [self mutate:command];
 }
 

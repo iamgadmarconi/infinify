@@ -59,7 +59,7 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 - (nullable DWControllerReply *)bindings;
 - (nullable DWControllerReply *)mouseBinding:(NSString *)trigger source:(nullable NSString *)source modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext window:(nullable NSNumber *)window pick:(BOOL)pick;
 - (nullable DWControllerReply *)hoverOnOutput:(NSNumber *)output screen:(CGPoint)screen time:(nullable NSNumber *)time;
-- (nullable DWControllerReply *)hoverWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation output:(NSNumber *)output screen:(CGPoint)screen time:(nullable NSNumber *)time forwardMotion:(BOOL)forward;
+- (nullable DWControllerReply *)hoverWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation output:(NSNumber *)output screen:(CGPoint)screen time:(nullable NSNumber *)time forwardMotion:(nullable NSNumber *)forward;
 - (nullable DWControllerReply *)pointerOnOutput:(nullable NSNumber *)output screen:(CGPoint)screen;
 - (nullable DWControllerReply *)pickWindow:(NSNumber *)window output:(NSNumber *)output;
 - (nullable DWControllerReply *)pointerNearestOnOutput:(NSNumber *)output screen:(CGPoint)screen start:(CGPoint)start held:(BOOL)held focus:(BOOL)focus;
@@ -67,9 +67,9 @@ typedef NSString *DWControllerZoomPolicy NS_TYPED_EXTENSIBLE_ENUM;
 - (nullable DWControllerReply *)beginResizeWindow:(NSNumber *)window output:(NSNumber *)output edges:(DWControllerResizeEdges)edges group:(BOOL)group;
 - (nullable DWControllerReply *)gestureTo:(CGPoint)delta pointer:(nullable NSValue *)pointer;
 - (nullable DWControllerReply *)endGesture;
-- (nullable DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(BOOL)doubleTap time:(double)time;
-- (nullable DWControllerReply *)updateGestureWithDelta:(CGPoint)delta scale:(double)scale rotation:(double)rotation time:(double)time held:(BOOL)held;
-- (nullable DWControllerReply *)endGestureCancelled:(BOOL)cancelled time:(double)time held:(BOOL)held;
+- (nullable DWControllerReply *)beginGesture:(DWControllerGestureKind)kind fingers:(NSUInteger)fingers modifiers:(DWModifierFlags)modifiers windowContext:(BOOL)windowContext output:(NSNumber *)output pointer:(CGPoint)pointer doubleTap:(nullable NSNumber *)doubleTap time:(double)time;
+- (nullable DWControllerReply *)updateGestureWithDelta:(CGPoint)delta scale:(nullable NSNumber *)scale rotation:(nullable NSNumber *)rotation time:(double)time held:(BOOL)held;
+- (nullable DWControllerReply *)endGestureCancelled:(BOOL)cancelled time:(double)time held:(nullable NSNumber *)held;
 @end
 
 @protocol DWNavigationCommands <DWSceneController>

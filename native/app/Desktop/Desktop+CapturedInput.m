@@ -24,8 +24,8 @@
 - (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point {
     [self deliverNative:event type:type view:view at:point familyHit:nil];
 }
-- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point familyHit:(NSDictionary *)hit {
-    BOOL saved=view.nativePointValid;CGPoint previous=view.nativePoint;NSDictionary *previousHit=view.nativeFamilyHit;view.nativePointValid=YES;view.nativePoint=point;view.nativeFamilyHit=hit;
+- (void)deliverNative:(NSEvent *)event type:(CGEventType)type view:(DesktopView *)view at:(CGPoint)point familyHit:(DWHit *)hit {
+    BOOL saved=view.nativePointValid;CGPoint previous=view.nativePoint;DWHit *previousHit=view.nativeFamilyHit;view.nativePointValid=YES;view.nativePoint=point;view.nativeFamilyHit=hit;
     @try {
         switch(type){
             case kCGEventLeftMouseDown:case kCGEventRightMouseDown:case kCGEventOtherMouseDown:[view mouseDown:event];break;
@@ -40,8 +40,8 @@
     if(!target||self.cleaning||self.sessionInactive||self.native.ended||!AXIsProcessTrusted())return NO;
     LiveSource *source=self.sources[target[@"window"]];if(!source||source.detached)return NO;
     BOOL ownsOutput=NO;for(DesktopView *view in self.views)if([view.outputs containsObject:target[@"output"]])ownsOutput=YES;if(!ownsOutput)return NO;
-    NSDictionary *binding=nil;for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical])binding=DWTyped(window[@"source"],NSDictionary.class);
-    if(![binding[@"generation"]isEqual:target[@"generation"]]||!boundIdentity(source.identity,binding[@"identity"])||!boundIdentity(source.identity,target[@"root_identity"]?:target[@"identity"]))return NO;
+    DWSource *binding=[self.controller.scene windowWithID:source.logical].source;
+    if(![binding.generation isEqual:target[@"generation"]]||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||!boundIdentity(source.identity,target[@"root_identity"]?:target[@"identity"]))return NO;
     if(!self.native&&![target[@"native_member"]boolValue])return boundIdentity(source.identity,target[@"identity"])&&[source.router valid];
     if(!DWInScope(self.scope,source.router.pid)||(self.native?![[self.native rootWindowFor:source.router.wid]isEqual:@(source.router.wid)]:![source.router valid]))return NO;
     // Admission from a copy also checks the active capture epoch in -forward:.
@@ -71,13 +71,13 @@
 }
 - (NSDictionary *)resolveCapturedPointer:(NSDictionary *)target screen:(CGPoint)screen {
     if(![self validateInputTarget:target]||!isfinite(screen.x)||!isfinite(screen.y))return nil;
-    NSDictionary *snapshot=[self presentationSnapshot],*placement=nil;
+    DWScene *snapshot=[self presentationSnapshot];DWPlacement *placement=nil;
     LiveSource *source=self.sources[target[@"window"]];
     if(!DWCapturedInputAvailable(source)||!source.pixels||(self.native&&![self.nativeViews replica:source.logical output:target[@"output"]]))return nil;
-    for(NSDictionary *item in snapshot[@"placements"])if([item[@"window"]isEqual:source.logical]&&[item[@"output"]isEqual:target[@"output"]]){placement=item;break;}
-    NSDictionary *binding=nil;for(NSDictionary *window in [self call:@{@"op":@"snapshot"}][@"windows"])if([window[@"window"]isEqual:source.logical])binding=DWTyped(window[@"source"],NSDictionary.class);
-    if(![binding[@"observation_known"]boolValue])return nil;
-    CGRect own=CGRectZero,current=CGRectZero,site=DWRectFromJSON(placement[@"screen_rect"]);
+    for(DWPlacement *item in snapshot.placements)if([item.window isEqual:source.logical]&&[item.output isEqual:target[@"output"]]){placement=item;break;}
+    DWSource *binding=[self.controller.scene windowWithID:source.logical].source;
+    if(![binding.observationKnown boolValue])return nil;
+    CGRect own=CGRectZero,current=CGRectZero,site=placement.screenRect;
     if(!source.router.bounds||!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)source.router.bounds,&own)
        ||!DWNativeBounds(source.router.wid,&current)||!CGRectEqualToRect(own,current)
        ||CGRectIsEmpty(own)||CGRectIsInfinite(own)||CGRectIsNull(own)
