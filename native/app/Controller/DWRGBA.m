@@ -3,7 +3,7 @@
 @implementation DWRGBA {
     NSArray *_components;
 }
-- (instancetype)initWithComponents:(NSArray *)components { if((self=[super init]))_components=[components copy];return self; }
+- (instancetype)initWithComponents:(NSArray *)components { if((self=[super init]))_components=components;return self; }
 - (NSNumber *)red { return _components.count>0?DWNumber(_components[0]):nil; }
 - (NSNumber *)green { return _components.count>1?DWNumber(_components[1]):nil; }
 - (NSNumber *)blue { return _components.count>2?DWNumber(_components[2]):nil; }

@@ -12,10 +12,10 @@
 - (NSNumber *)nativeMember { return DWNumber(self.rawDictionary[@"native_member"]); }
 - (DWIdentity *)rootIdentity { return [self cachedProjection:@"rootIdentity" make:^id{return DWProject(DWIdentity.class,self.rawDictionary[@"root_identity"]);}]; }
 - (DWPlacement *)placementWithScreenRect:(CGRect)screenRect clipRect:(CGRect)clipRect {
-    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"screen_rect"]=DWSceneRectDictionary(screenRect);d[@"clip_rect"]=DWSceneRectDictionary(clipRect);return DWProject(self.class,d);
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"screen_rect"]=DWSceneRectDictionary(screenRect);d[@"clip_rect"]=DWSceneRectDictionary(clipRect);return DWProject(self.class,[d copy]);
 }
 - (DWPlacement *)placementWithNativeMember:(NSNumber *)member rootIdentity:(DWIdentity *)identity {
-    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"native_member"]=member;d[@"root_identity"]=identity.rawDictionary;return DWProject(self.class,d);
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"native_member"]=member;d[@"root_identity"]=identity.rawDictionary;return DWProject(self.class,[d copy]);
 }
 - (DWValuePresence)bufferCropPresence { return DWPresence(self.rawDictionary[@"buffer_crop"],NSDictionary.class); }
 - (DWValuePresence)worldLocalCropPresence { return DWPresence(self.rawDictionary[@"world_local_crop"],NSDictionary.class); }
@@ -30,7 +30,7 @@
 - (BOOL)bufferCropHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"buffer_crop"],2); }
 - (DWPlacement *)placementByRemovingFocus {
     if(!self.rawDictionary[@"focused"])return self;
-    NSMutableDictionary *d=[self.rawDictionary mutableCopy];[d removeObjectForKey:@"focused"];return DWProject(self.class,d);
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];[d removeObjectForKey:@"focused"];return DWProject(self.class,[d copy]);
 }
 - (CGRect)screenRectOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"screen_rect"],2)?self.screenRect:CGRectNull; }
 - (CGRect)clipRectOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"clip_rect"],2)?self.clipRect:CGRectNull; }

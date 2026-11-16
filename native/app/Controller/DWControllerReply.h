@@ -13,7 +13,6 @@
 #import "DWFullscreen.h"
 #import "DWOutput.h"
 #import "DWFocus.h"
-#import "DWFocusCycle.h"
 #import "DWNavigationContext.h"
 #import "DWPointerDemand.h"
 #import "DWNavigation.h"
@@ -29,8 +28,6 @@
 #import "DWRenderChrome.h"
 #import "DWRenderOutline.h"
 #import "DWRenderEffects.h"
-#import "DWBlurSettings.h"
-#import "DWAnimationSettings.h"
 #import "DWRender.h"
 #import "DWSourceBinding.h"
 #import "DWHit.h"
@@ -122,5 +119,6 @@ NS_ASSUME_NONNULL_BEGIN
 - (DWControllerReply *)replyForNavigationAfterConsumingSizeEffect:(nullable DWSizeEffect *)sized;
 + (DWControllerReply *)replyWithFocusEffect:(nullable DWFocusEffect *)effect;
 @property(nonatomic,readonly,nullable) NSNumber *transaction;
+@property(nonatomic,readonly,nullable) DWFocusEffect *primaryFocusEffect;
 @end
 NS_ASSUME_NONNULL_END

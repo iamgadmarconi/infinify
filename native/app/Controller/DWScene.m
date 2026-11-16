@@ -16,13 +16,13 @@
 - (DWOutput *)outputWithID:(NSNumber *)identifier { for(DWOutput *o in self.outputs)if([o isKindOfClass:DWOutput.class]&&[o.identifier isEqual:identifier])return o;return nil; }
 - (DWScene *)sceneWithPlacements:(NSArray<DWPlacement *> *)placements {
     NSArray *values=[placements copy];NSMutableDictionary *d=[self.rawDictionary mutableCopy];
-    d[@"placements"]=[[DWBackingArray alloc]initWithValues:values];DWScene *scene=DWProject(self.class,d);
-    [scene cacheProjection:@"placements" value:values];return scene;
+    d[@"placements"]=[[DWBackingArray alloc]initWithValues:values];DWScene *scene=DWProject(self.class,[d copy]);
+    [scene sceneBySeedingProjectionsFrom:self];[scene cacheProjection:@"placements" value:values];return scene;
 }
 - (DWScene *)sceneWithOutputs:(NSArray<DWOutput *> *)outputs {
     NSArray *values=[outputs copy];NSMutableDictionary *d=[self.rawDictionary mutableCopy];
-    d[@"outputs"]=[[DWBackingArray alloc]initWithValues:values];DWScene *scene=DWProject(self.class,d);
-    [scene cacheProjection:@"outputs" value:values];return scene;
+    d[@"outputs"]=[[DWBackingArray alloc]initWithValues:values];DWScene *scene=DWProject(self.class,[d copy]);
+    [scene sceneBySeedingProjectionsFrom:self];[scene cacheProjection:@"outputs" value:values];return scene;
 }
 - (DWValuePresence)nativeResizePresence { return DWPresence(self.rawDictionary[@"native_resize"],NSDictionary.class); }
 - (NSNumber *)passesAllKeys { return DWNumber(self.rawDictionary[@"pass_keys"]); }
@@ -38,5 +38,16 @@
 }
 - (BOOL)hasCurrentOutputPlacements {
     if(!self.placementsAreObjects)return NO;for(DWPlacement *p in self.placements)if(!p.isCurrentOutputPlacement)return NO;return YES;
+}
+- (DWScene *)sceneBySeedingProjectionsFrom:(DWScene *)previous {
+    if(!previous)return self;
+    static const struct { __unsafe_unretained NSString *raw;__unsafe_unretained NSString *projection; } sections[]={
+        {@"windows",@"windows"},{@"placements",@"placements"},{@"outputs",@"outputs"},{@"focus",@"focus"},
+        {@"navigation",@"navigation"},{@"native_resize",@"nativeResize"},{@"render",@"render"},
+        {@"lifecycle",@"lifecycle"},{@"lifecycle_events",@"lifecycleEvents"}};
+    for(NSUInteger i=0;i<sizeof(sections)/sizeof(sections[0]);i++){
+        NSString *raw=sections[i].raw;
+        if(self.rawDictionary[raw]==previous.rawDictionary[raw])[self seedCachedProjectionForKey:sections[i].projection fromValue:previous];
+    }return self;
 }
 @end

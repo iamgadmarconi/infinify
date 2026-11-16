@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import "DWScene+Private.h"
-@implementation DWControllerReply
+#import "DWProjectedArray.h"
+@implementation DWControllerReply {
+    NSMutableArray<DWEffect *> *_effectValues;
+}
+- (DWEffect *)cachedEffectFromDictionary:(id)dictionary {
+    if(!DWDictionary(dictionary))return nil;
+    if(!_effectValues)_effectValues=[NSMutableArray array];return DWProjectCachedEffect(dictionary,_effectValues);
+}
 - (NSNumber *)dirty { return DWNumber(self.rawDictionary[@"dirty"]); }
 - (NSNumber *)needsFrames { return DWNumber(self.rawDictionary[@"needs_frames"]); }
 - (NSNumber *)window { return DWNumber(self.rawDictionary[@"window"]); }
@@ -28,10 +35,16 @@
 - (DWSourceBinding *)sourceBinding { return [self cachedProjection:@"sourceBinding" make:^id{return DWProject(DWSourceBinding.class,self.rawDictionary[@"source_binding"]);}]; }
 - (DWFocusCorrection *)focusCorrection { return [self cachedProjection:@"focusCorrection" make:^id{return DWProject(DWFocusCorrection.class,self.rawDictionary[@"focus_correction"]);}]; }
 + (instancetype)replyWithDictionary:(id)dictionary { return DWProject(self,dictionary); }
-- (NSArray<DWEffect *> *)effects { return [self cachedProjection:@"effects" make:^id{return DWProjectArray(DWEffect.class,self.rawDictionary[@"effects"]);}]; }
+- (NSArray<DWEffect *> *)effects {
+    return [self cachedProjection:@"effects" make:^id{
+        NSArray *array=DWArray(self.rawDictionary[@"effects"]);if(!array)return nil;
+        if(!_effectValues)_effectValues=[NSMutableArray array];
+        return [[DWProjectedArray alloc]initWithArray:array valueClass:DWEffect.class effectCache:_effectValues];
+    }];
+}
 - (DWEffect *)navigationEffect {
     return [self cachedProjection:@"navigationEffect" make:^id{
-        DWEffect *effect=DWProjectEffect(self.rawDictionary[@"effect"]);if(effect)return effect;
+        DWEffect *effect=[self cachedEffectFromDictionary:self.rawDictionary[@"effect"]];if(effect)return effect;
         for(DWEffect *e in self.effects.reverseObjectEnumerator)if([e isKindOfClass:DWEffect.class]&&[e.operation isEqual:@"focus_native_window"])return e;
         return nil;
     }];
@@ -42,13 +55,13 @@
 }
 - (NSArray<DWSizeEffect *> *)sizeEffects {
     return [self cachedProjection:@"sizeEffects" make:^id{
-        NSMutableArray *a=[NSMutableArray array];DWEffect *single=DWProjectEffect(self.rawDictionary[@"effect"]);if([single isKindOfClass:DWSizeEffect.class])[a addObject:single];
+        NSMutableArray *a=[NSMutableArray array];DWEffect *single=[self cachedEffectFromDictionary:self.rawDictionary[@"effect"]];if([single isKindOfClass:DWSizeEffect.class])[a addObject:single];
         for(DWEffect *e in self.effects)if([e isKindOfClass:DWSizeEffect.class])[a addObject:e];return a.copy;
     }];
 }
 - (NSArray<DWShellEffect *> *)shellEffects {
     return [self cachedProjection:@"shellEffects" make:^id{
-        NSMutableArray *a=[NSMutableArray array];DWEffect *single=DWProjectEffect(self.rawDictionary[@"effect"]);if([single isKindOfClass:DWShellEffect.class])[a addObject:single];
+        NSMutableArray *a=[NSMutableArray array];DWEffect *single=[self cachedEffectFromDictionary:self.rawDictionary[@"effect"]];if([single isKindOfClass:DWShellEffect.class])[a addObject:single];
         for(DWEffect *e in self.effects)if([e isKindOfClass:DWShellEffect.class])[a addObject:e];return a.copy;
     }];
 }
@@ -78,13 +91,13 @@
 - (NSArray<DWBinding *> *)reserved { return [self cachedProjection:@"reserved" make:^id{return DWProjectArray(DWBinding.class,self.rawDictionary[@"reserved"]);}]; }
 - (NSArray<DWHotCornerSettings *> *)hotCorners { return [self cachedProjection:@"hotCorners" make:^id{return DWProjectArray(DWHotCornerSettings.class,self.rawDictionary[@"hot_corners"]);}]; }
 - (DWControllerReply *)replyWithoutEffect {
-    NSMutableDictionary *d=[self.rawDictionary mutableCopy];[d removeObjectForKey:@"effect"];return DWProject(self.class,d);
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];[d removeObjectForKey:@"effect"];return DWProject(self.class,[d copy]);
 }
 - (NSString *)failure { return DWString(self.rawDictionary[@"failure"]); }
 - (NSString *)note { return DWString(self.rawDictionary[@"note"]); }
 - (DWGestureAction *)fired { return [self cachedProjection:@"fired" make:^id{return DWProject(DWGestureAction.class,self.rawDictionary[@"fired"]);}]; }
 - (DWControllerReply *)replyWithNullEffectAndForward:(NSNumber *)forward {
-    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"effect"]=NSNull.null;if(forward)d[@"forward"]=forward;return DWProject(self.class,d);
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"effect"]=NSNull.null;if(forward)d[@"forward"]=forward;return DWProject(self.class,[d copy]);
 }
 - (BOOL)hasReplyOKValue { return DWDictionary(self.rawDictionary[@"reply"])[@"Ok"]!=nil; }
 - (NSString *)visibility { return DWString(self.rawDictionary[@"visibility"]); }
@@ -93,7 +106,7 @@
 + (DWControllerReply *)lifecycleFollowReply:(DWControllerReply *)reply {
     NSMutableDictionary *d=[reply.rawDictionary mutableCopy]?:[NSMutableDictionary dictionary];
     if(!DWDictionary(d[@"effect"]))[d removeObjectForKey:@"effect"];
-    [d removeObjectForKey:@"effects"];return DWProject(self,d);
+    [d removeObjectForKey:@"effects"];return DWProject(self,[d copy]);
 }
 - (NSArray<DWShellEffect *> *)arrayShellEffects {
     return [self cachedProjection:@"arrayShellEffects" make:^id{
@@ -112,6 +125,13 @@
     if(effect&&!beside&&(sized||DWArray(self.rawDictionary[@"effects"])))return [self replyWithoutEffect];
     return self;
 }
-+ (DWControllerReply *)replyWithFocusEffect:(DWFocusEffect *)effect { return DWProject(self,effect?@{@"effect":effect.rawDictionary}:@{}); }
++ (DWControllerReply *)replyWithFocusEffect:(DWFocusEffect *)effect {
+    DWControllerReply *reply=DWProject(self,effect?@{@"effect":effect.rawDictionary}:@{});
+    if(effect)reply->_effectValues=[NSMutableArray arrayWithObject:effect];return reply;
+}
 - (NSNumber *)transaction { return DWNumber(self.rawDictionary[@"transaction"]); }
+- (DWFocusEffect *)primaryFocusEffect {
+    DWEffect *effect=[self cachedEffectFromDictionary:self.rawDictionary[@"effect"]];
+    return effect.kind==DWEffectFocusNativeWindow?(DWFocusEffect *)effect:nil;
+}
 @end

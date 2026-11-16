@@ -7,7 +7,7 @@
     NSMutableDictionary<NSString *,id> *_projections;
 }
 - (instancetype)initWithDictionary:(NSDictionary *)dictionary {
-    if((self=[super init]))_rawDictionary=[dictionary copy];
+    if((self=[super init]))_rawDictionary=dictionary;
     return self;
 }
 - (NSDictionary *)rawDictionary { return _rawDictionary; }
@@ -15,13 +15,18 @@
 - (void)cacheProjection:(NSString *)key value:(id)value {
     if(!_projections)_projections=[NSMutableDictionary dictionary];_projections[key]=value?:NSNull.null;
 }
+- (void)seedCachedProjectionForKey:(NSString *)key fromValue:(DWControllerValue *)other {
+    id cached=other->_projections[key];if(!cached)return;
+    if(!_projections)_projections=[NSMutableDictionary dictionary];_projections[key]=cached;
+}
 - (id)cachedProjection:(NSString *)key make:(id (^)(void))make {
     id value=_projections[key];if(value)return value==NSNull.null?nil:value;
     value=make();if(!_projections)_projections=[NSMutableDictionary dictionary];
     _projections[key]=value?:NSNull.null;return value;
 }
 - (BOOL)isEqual:(id)other {
-    return self==other||([other isKindOfClass:DWControllerValue.class]&&[_rawDictionary isEqual:[other rawDictionary]]);
+    if(self==other)return YES;if(![other isKindOfClass:DWControllerValue.class])return NO;
+    NSDictionary *raw=[other rawDictionary];return _rawDictionary==raw||[_rawDictionary isEqual:raw];
 }
 - (NSUInteger)hash { return _rawDictionary.hash; }
 @end
@@ -34,33 +39,26 @@ DWValuePresence DWPresence(id value,Class type) {
     if(!value)return DWValueAbsent;if(value==NSNull.null)return DWValueNull;
     return [value isKindOfClass:type]?DWValuePresent:DWValueMalformed;
 }
-// Main-queue-only weak interning: shared decoded sections retain their projection identity
-// without retaining old snapshots. No decoded tree is traversed on construction.
+// Parent-owned lazy caches retain projections. Decoded containers are already immutable;
+// owned mutable records are frozen once at their construction site, never while projecting.
 id DWProject(Class type,id dictionary) {
-    if(type==DWScreenshotTarget.class&&DWString(dictionary))dictionary=@{@"unit":dictionary};
-    dictionary=[DWDictionary(dictionary)copy];if(!dictionary)return nil;
-    static NSMapTable *values;static dispatch_once_t once;
-    dispatch_once(&once,^{values=[NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];});
-    NSMapTable *classes=[values objectForKey:dictionary];
-    if(!classes){classes=[NSMapTable strongToWeakObjectsMapTable];[values setObject:classes forKey:dictionary];}
-    id value=[classes objectForKey:type];
-    if(!value){value=[[type alloc]initWithDictionary:dictionary];[classes setObject:value forKey:type];}
-    return value;
+    if(type==DWScreenshotTarget.class&&DWString(dictionary))return [[DWScreenshotTarget alloc]initWithUnit:dictionary];
+    dictionary=DWDictionary(dictionary);return dictionary?[[type alloc]initWithDictionary:dictionary]:nil;
 }
 NSArray *DWProjectArray(Class type,id array) {
-    array=DWArray(array);if(!array)return nil;
-    static NSMapTable *arrays;static dispatch_once_t once;
-    dispatch_once(&once,^{arrays=[NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory|NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];});
-    NSMapTable *classes=[arrays objectForKey:array];
-    if(!classes){classes=[NSMapTable strongToWeakObjectsMapTable];[arrays setObject:classes forKey:array];}
-    NSArray *value=[classes objectForKey:type];if(!value){value=[[DWProjectedArray alloc]initWithArray:array valueClass:type];[classes setObject:value forKey:type];}return value;
+    array=DWArray(array);return array?[[DWProjectedArray alloc]initWithArray:array valueClass:type]:nil;
 }
 DWEffect *DWProjectEffect(id dictionary) {
     NSDictionary *d=DWDictionary(dictionary);if(!d)return nil;
     NSString *op=DWString(d[@"op"]);Class type=DWShellEffect.class;
     if([op isEqual:@"focus_native_window"])type=DWFocusEffect.class;
     else if([op isEqual:@"resize_native_window"]||[op isEqual:@"observe_resize_source"])type=DWSizeEffect.class;
-    return DWProject(type,d);
+    return DWProject(type,[d copy]);
+}
+DWEffect *DWProjectCachedEffect(id dictionary,NSMutableArray<DWEffect *> *cache) {
+    NSDictionary *raw=DWDictionary(dictionary);if(!raw)return nil;
+    for(DWEffect *value in cache)if(value.rawDictionary==raw)return value;
+    DWEffect *value=DWProjectEffect(raw);[cache addObject:value];return value;
 }
 CGPoint DWScenePoint(id value) {
     NSDictionary *d=DWDictionary(value);return CGPointMake([DWNumber(d[@"x"])doubleValue],[DWNumber(d[@"y"])doubleValue]);

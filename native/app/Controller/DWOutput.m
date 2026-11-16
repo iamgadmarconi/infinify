@@ -8,7 +8,7 @@
 - (CGRect)screenBounds { return DWSceneRect(self.rawDictionary[@"screen_bounds"]); }
 - (DWFullscreen *)fullscreen { return [self cachedProjection:@"fullscreen" make:^id{return DWProject(DWFullscreen.class,self.rawDictionary[@"fullscreen"]);}]; }
 - (DWOutput *)outputWithCamera:(CGPoint)camera zoom:(NSNumber *)zoom screenBounds:(CGRect)bounds {
-    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"camera"]=DWScenePointDictionary(camera);d[@"zoom"]=zoom;d[@"screen_bounds"]=DWSceneRectDictionary(bounds);return DWProject(self.class,d);
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"camera"]=DWScenePointDictionary(camera);d[@"zoom"]=zoom;d[@"screen_bounds"]=DWSceneRectDictionary(bounds);return DWProject(self.class,[d copy]);
 }
 - (BOOL)hasSamePoseAsOutput:(DWOutput *)other {
     if(!other)return NO;for(NSString *k in @[@"camera",@"zoom",@"screen_bounds"])if(![self.rawDictionary[k]isEqual:other.rawDictionary[k]])return NO;return YES;

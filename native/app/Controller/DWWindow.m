@@ -10,7 +10,7 @@
     d[@"screen_rect"]=DWSceneRectDictionary(screenRect);d[@"clip_rect"]=DWSceneRectDictionary(clipRect);
     d[@"presentation_settled"]=@(self.source.observationKnown.boolValue);
     d[@"world_local_crop"]=NSNull.null;d[@"buffer_crop"]=NSNull.null;d[@"family_only"]=@(familyOnly);
-    return DWProject(DWPlacement.class,d);
+    return DWProject(DWPlacement.class,[d copy]);
 }
 - (BOOL)hasSameSizeTransitionBindingAsWindow:(DWWindow *)other {
     if(!other)return NO;for(NSString *k in @[@"source",@"world_rect",@"pinned",@"widget",@"mode",@"kind"]){
@@ -22,7 +22,7 @@
     return [self cachedProjection:@"capturePlacement" make:^id{
         NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"presentation_settled"]=@(self.source&&self.source.observationKnown.boolValue);
         if(!d[@"title"])d[@"title"]=self.metadata.title?:@"";
-        if(!d[@"app_name"])d[@"app_name"]=self.metadata.bundleID?:@"";return DWProject(DWPlacement.class,d);
+        if(!d[@"app_name"])d[@"app_name"]=self.metadata.bundleID?:@"";return DWProject(DWPlacement.class,[d copy]);
     }];
 }
 - (BOOL)hasSameSizeTransitionBindingAsWindow:(DWWindow *)other ignoringWorldRect:(BOOL)ignore {

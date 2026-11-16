@@ -30,6 +30,6 @@
     return [self resultWithNativeResize:r];
 }
 - (DWNativeResult *)withMutationAttempted:(BOOL)attempted {
-    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"mutation_attempted"]=@(attempted);return DWProject(self.class,d);
+    NSMutableDictionary *d=[self.rawDictionary mutableCopy];d[@"mutation_attempted"]=@(attempted);return DWProject(self.class,[d copy]);
 }
 @end
