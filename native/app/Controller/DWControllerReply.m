@@ -113,4 +113,5 @@
     return self;
 }
 + (DWControllerReply *)replyWithFocusEffect:(DWFocusEffect *)effect { return DWProject(self,effect?@{@"effect":effect.rawDictionary}:@{}); }
+- (NSNumber *)transaction { return DWNumber(self.rawDictionary[@"transaction"]); }
 @end

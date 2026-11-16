@@ -42,5 +42,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) DWValuePresence nativeOriginPresence;
 @property(nonatomic,readonly) BOOL nativeOriginHasNumericComponents;
 @property(nonatomic,readonly) CGRect requestedOutlineOrNull;
+@property(nonatomic,readonly,nullable) NSNumber *group;
+@property(nonatomic,readonly,nullable) NSNumber *ratio;
 @end
 NS_ASSUME_NONNULL_END

@@ -39,4 +39,6 @@
 - (DWValuePresence)nativeOriginPresence { return DWPresence(self.rawDictionary[@"native_origin"],NSDictionary.class); }
 - (BOOL)nativeOriginHasNumericComponents { return DWSceneGeometryIsNumeric(self.rawDictionary[@"native_origin"],0); }
 - (CGRect)requestedOutlineOrNull { return DWSceneGeometryIsNumeric(self.rawDictionary[@"requested_outline"],2)?self.requestedOutline:CGRectNull; }
+- (NSNumber *)group { return DWNumber(self.rawDictionary[@"group"]); }
+- (NSNumber *)ratio { return DWNumber(self.rawDictionary[@"ratio"]); }
 @end
