@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <AppKit/AppKit.h>
 #import "DWNativeResize.h"
+#import "DWController.h"
 @class Desktop, DesktopView, LiveSource, DWNativeAppliedPlacement, DWNativePresenter;
 // Internal seams: real macOS/scene adapters in production, in-memory adapters
 // in later interface tests. Failure is nil/NO, never a guessed native recipient.
@@ -27,12 +28,27 @@
 - (BOOL)bounds:(CGWindowID)window result:(CGRect *)bounds;
 - (BOOL)owner:(NSDictionary *)identity bounds:(CGRect *)bounds;
 @end
+// Commands used by press admission only; wire vocabulary stays in Controller.
+@protocol DWPressController <NSObject>
+- (DWScene *)scene;
+- (DWControllerReply *)hitOnOutput:(NSNumber *)output screen:(CGPoint)screen;
+- (DWControllerReply *)beginDragWindow:(NSNumber *)window output:(NSNumber *)output group:(BOOL)group;
+- (DWControllerReply *)focusWindow:(NSNumber *)window;
+- (DWControllerReply *)gestureTo:(CGPoint)delta pointer:(NSValue *)pointer;
+- (DWControllerReply *)endGesture;
+- (DWControllerReply *)nativeDecoration:(NSString *)action window:(NSNumber *)window output:(NSNumber *)output identity:(DWIdentity *)identity generation:(NSNumber *)generation;
+- (DWControllerReply *)forgetWindow:(NSNumber *)window;
+- (DWControllerReply *)closeWindow:(NSNumber *)window output:(NSNumber *)output;
+- (DWControllerReply *)relaunchWindow:(NSNumber *)window output:(NSNumber *)output;
+- (DWControllerReply *)activateWindow:(NSNumber *)window output:(NSNumber *)output cause:(DWActivationCause)cause identity:(DWIdentity *)identity generation:(NSNumber *)generation;
+- (DWControllerReply *)relocateSourceWindow:(NSNumber *)window identity:(DWIdentity *)identity generation:(NSNumber *)generation observedRect:(CGRect)observed expectedWorldRect:(CGRect)expected delta:(CGPoint)delta;
+@end
 @protocol DWPressSceneLookup <NSObject>
-- (NSDictionary *)presentationSnapshot;
-- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(NSDictionary *)snapshot;
-- (NSDictionary *)call:(NSDictionary *)request;
-- (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output view:(DesktopView *)view;
-- (NSDictionary *)binding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
+@property(nonatomic,readonly) id<DWPressController> controller;
+- (DWScene *)presentationSnapshot;
+- (NSString *)standInPart:(NSNumber *)window output:(NSNumber *)output screen:(CGPoint)point snapshot:(DWScene *)snapshot;
+- (DWHit *)hit:(CGPoint)point output:(NSNumber *)output view:(DesktopView *)view;
+- (DWBinding *)binding:(NSString *)trigger source:(NSString *)source flags:(NSEventModifierFlags)flags window:(BOOL)window under:(NSNumber *)under pick:(BOOL)pick;
 @end
 typedef NS_ENUM(NSInteger,DWPressStage) { DWPressSession, DWPressAnnotated };
 // Main-thread-only press ownership. Early/session admission must precede annotated
@@ -40,7 +56,7 @@ typedef NS_ENUM(NSInteger,DWPressStage) { DWPressSession, DWPressAnnotated };
 // native. Missing or stale evidence refuses admission, never infers app input.
 @interface DWPressAdmission : NSObject
 - (instancetype)initWithDesktop:(Desktop *)desktop scene:(id<DWPressSceneLookup>)scene native:(id<DWPressNativeLookup>)native;
-- (NSDictionary *)hit:(CGPoint)point output:(NSNumber *)output view:(DesktopView *)view;
+- (DWHit *)hit:(CGPoint)point output:(NSNumber *)output view:(DesktopView *)view;
 - (void)mouseDown:(NSEvent *)event view:(DesktopView *)view;
 - (BOOL)prepareDrag:(NSEvent *)event at:(CGPoint)point view:(DesktopView *)view;
 - (void)noteRelease:(NSEvent *)event view:(DesktopView *)view;
