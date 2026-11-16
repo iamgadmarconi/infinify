@@ -80,4 +80,5 @@
 - (DWControllerReply *)replyWithoutEffect {
     NSMutableDictionary *d=[self.rawDictionary mutableCopy];[d removeObjectForKey:@"effect"];return DWProject(self.class,d);
 }
+- (NSString *)failure { return DWString(self.rawDictionary[@"failure"]); }
 @end

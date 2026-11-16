@@ -28,4 +28,11 @@
         &&r.size.width>0&&r.size.height>0&&isfinite(CGRectGetMaxX(r))&&isfinite(CGRectGetMaxY(r))
         &&zoom&&isfinite(z)&&z>0;
 }
+- (BOOL)hasSameScreenBoundsAsOutput:(DWOutput *)other {
+    return other&&[self.rawDictionary[@"screen_bounds"]isEqual:other.rawDictionary[@"screen_bounds"]];
+}
+- (BOOL)hasSameCameraAndZoomAsFlight:(DWFlight *)flight {
+    return flight&&[self.rawDictionary[@"camera"]isEqual:flight.rawDictionary[@"camera_target"]]
+        &&[self.rawDictionary[@"zoom"]isEqual:flight.rawDictionary[@"zoom_target"]];
+}
 @end

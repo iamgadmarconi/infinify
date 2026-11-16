@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #import "DWControllerValue.h"
-@class DWFullscreen;
+@class DWFullscreen, DWFlight;
 NS_ASSUME_NONNULL_BEGIN
 @interface DWOutput : DWControllerValue
 @property(nonatomic,readonly,nullable) NSNumber *identifier;
@@ -19,5 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly) DWValuePresence fullscreenPresence;
 @property(nonatomic,readonly) CGRect screenBoundsOrNull;
 @property(nonatomic,readonly) BOOL isDrawable;
+- (BOOL)hasSameScreenBoundsAsOutput:(DWOutput *)other;
+- (BOOL)hasSameCameraAndZoomAsFlight:(DWFlight *)flight;
 @end
 NS_ASSUME_NONNULL_END

@@ -6,5 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSNumber *generation;
 @property(nonatomic,readonly) CGPoint cameraTarget;
 @property(nonatomic,readonly,nullable) NSNumber *zoomTarget;
+@property(nonatomic,readonly) DWValuePresence cameraTargetPresence;
+@property(nonatomic,readonly) BOOL cameraTargetHasNumericComponents;
 @end
 NS_ASSUME_NONNULL_END

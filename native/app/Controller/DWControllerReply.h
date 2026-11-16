@@ -104,5 +104,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) NSArray<DWBinding *> *reserved;
 @property(nonatomic,readonly,nullable) NSArray<DWHotCornerSettings *> *hotCorners;
 - (DWControllerReply *)replyWithoutEffect;
+@property(nonatomic,readonly,nullable) NSString *failure;
 @end
 NS_ASSUME_NONNULL_END

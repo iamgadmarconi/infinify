@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #import "DWControllerValue.h"
-@class DWFocusEffect;
+#import "DWNativeResize.h"
+@class DWFocusEffect, DWSizeEffect;
 NS_ASSUME_NONNULL_BEGIN
 @interface DWNativeResult : DWControllerValue
 @property(nonatomic,readonly,nullable) NSString *outcome;
@@ -22,5 +23,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,readonly,nullable) DWFocusEffect *effect;
 @property(nonatomic,readonly) CGRect actualAXOrNull;
 @property(nonatomic,readonly) CGRect actualCGOrNull;
++ (instancetype)resultWithNativeResize:(DWResizeResult)result;
++ (instancetype)unansweredForSizeEffect:(DWSizeEffect *)effect;
+- (DWNativeResult *)withMutationAttempted:(BOOL)attempted;
 @end
 NS_ASSUME_NONNULL_END
