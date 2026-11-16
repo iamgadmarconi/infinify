@@ -19,7 +19,7 @@ cancellation, stale identity/bounds, missing or ambiguous AX identity, AX errors
 | `observed`, `focused` | the reads agreed; `focused` also says the window is the focused one |
 | `invalid` | `dw_focus_select` was given no guard |
 | `stale_identity_or_bounds` | the window is another one: its process, start time or window number is no longer the one asked for (a frame that only moved or changed size is the same window) |
-| `unavailable` | Accessibility is not trusted, `_AXUIElementGetWindow` is absent, the application's window list cannot be read, or a window's number cannot be read from it |
+| `unavailable` | Accessibility is not trusted, `_AXUIElementGetWindow` is absent, the application's window list cannot be read, or a window's number cannot be read from it (transient `kAXErrorCannotComplete` reads and setters retry within the call deadline) |
 | `missing_window`, `ambiguous_window` | no AX window, or more than one, has the window number |
 | `readback_failed` | AX and CG bounds disagree beyond one point, the frame changed while it was read, or a focus read failed |
 | `guard_denied` | the caller's guard refused |

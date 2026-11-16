@@ -52,7 +52,12 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     if(self.native&&![self.native allowsWindow:source.identity])return NO;
     source.buffer=CGSizeMake(ceil(bounds.size.width*2),ceil(bounds.size.height*2));
     NSMutableDictionary *command=[@{@"op":@"attach",@"identity":source.identity,@"bundle_id":window.bundleIdentifier?:@"",@"title":window.title?:@"Untitled",@"buffer":@{@"width":@(source.buffer.width),@"height":@(source.buffer.height)},@"source_rect":DWRectJSON(bounds)} mutableCopy];
-    if(placed){NSNumber *output=[self viewOutput];if(output)command[@"output"]=output;command[@"pointer"]=pointJSON(pointer());}
+    if(placed){
+        NSNumber *output=[self viewOutput];if(output)command[@"output"]=output;command[@"pointer"]=pointJSON(pointer());
+        if(self.adopted&&self.navigation.filterUnsolicitedActivations&&!window.displayFixed
+            &&![self.navigation consumeAttachIntentForPID:pid birth:processBirth bundle:window.bundleIdentifier])
+            command[@"unsolicited"]=@YES;
+    }
     else if(logical)command[@"logical_id"]=logical;else {if(!world){NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}];NSDictionary *o=[snapshot[@"outputs"]firstObject];double zoom=[o[@"zoom"]doubleValue];CGPoint camera=jsonPoint(o[@"camera"]);world=DWRectJSON(CGRectMake(camera.x+30/MAX(.001,zoom),camera.y+30/MAX(.001,zoom),bounds.size.width,bounds.size.height));}command[@"world_rect"]=world;}
     if(window.displayFixed){
         NSDictionary *snapshot=[self call:@{@"op":@"snapshot"}],*chosen=nil;double best=INFINITY;
@@ -76,7 +81,12 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     // A managed run captures on demand: -captureDemand starts the stream once the window has a placement.
     if(!self.manager&&![self startCapture:source size:source.buffer interval:[self captureInterval]]&&!source.captureRecovering){[self detach:source];return NO;}
     if(!privateAvailable)self.statusText=@"Live view only: private per-window input is unavailable on this OS.";
-    if(placed){if(self.navigationTap&&self.navigationTapSource&&CGEventTapIsEnabled(self.navigationTap))[self.navigation preserveBackgroundArrival:reply];[self follow:reply];}
+    if(placed){
+        if(self.navigation.filterUnsolicitedActivations||(self.navigationTap&&self.navigationTapSource&&CGEventTapIsEnabled(self.navigationTap)))
+            [self.navigation preserveBackgroundArrival:reply];
+        [self follow:reply];
+        if([reply[@"focus_on_open_suppressed"]boolValue])[self.navigation observe];
+    }
     [self render];return YES;
 }
 // A window that came, went or was renamed by itself: the flight its reply armed is

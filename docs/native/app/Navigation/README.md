@@ -482,11 +482,13 @@ focusing is all there is, and a held cycle steps on and commits on release.
 What is lost is only the native half: the real window is not activated or
 raised, so keys still go to whichever application was frontmost.
 
-Native focus does not depend on Input Monitoring. If that access has already
-been granted (the app never asks for it), a listen-only observer of mouse
-presses and scrolls is also installed: a press or scroll outside the canvas
-panels while a focus request is in flight withdraws that request. It observes
-no keys and nothing else depends on it.
+Native focus does not depend on Input Monitoring. When Accessibility access has
+been granted, a listen-only session observer of mouse presses, releases and
+scrolls is installed: a press or scroll outside the canvas panels while a focus
+request is in flight withdraws that request, clicks on system UI (the Dock, the
+menu bar, Spotlight, Control Center, Notification Center) or inside the
+confirmed focused window record owner switch/launch intent, and ordinary typing
+does not cancel a background focus restoration.
 
 ### Native focus is followed
 
@@ -498,17 +500,25 @@ window is adopted (its focus event may have come before the canvas had the
 window), and once a second besides, so Command-Tab is followed as it happens. Twice a second, as before, in a run
 that manages no windows (`--manual`, no Screen Recording access) and while
 some application is not observed in full. What a read finds is compared with
-what the canvas already has, so reading more often reports nothing twice. If
-that is a window on the canvas and
-the canvas did not ask for it (Command-Tab, the Dock, an application raising
-its own window), the canvas follows as upstream follows an activation request:
+what the canvas already has, so reading more often reports nothing twice. In a
+managed desktop run, an external focus change is followed as an activation only
+when it belongs to the process (same PID and birth) that currently holds
+confirmed live focus, or when an owner signal authorized switching to another
+process (Command-Tab, a click on the Dock, the menu bar, Spotlight or another
+system UI surface, Return in Spotlight, an Infinify `exec` or `Relaunch`, or a
+physical click in the confirmed focused window within 0.75 s before another
+application activates or launches):
 the window becomes the logical focus, is raised and moves to the front of the
 most-recently-focused order; if it is clipped on the display that shows its
 centre, that display's camera flies to it, at 1:1 unless `[zoom]
 reset_on_activation = false`; a window already wholly visible there is left
-where it is. If the frontmost window is not on the canvas, the canvas forgets
-that a canvas window held native focus and drops an open cycle without
-committing it; logical focus stays.
+where it is. When an application activates or opens a window without owner
+intent (such as a browser or tool launched by a background agent or `open`),
+neither logical focus nor the camera moves, and if a canvas window held
+confirmed live focus, native focus is restored to it (at most twice per
+5-second burst, stopping immediately if refused). If the frontmost window is
+not on the canvas, the canvas forgets that a canvas window held native focus
+and drops an open cycle without committing it; logical focus stays.
 
 ## Window sizing actions
 

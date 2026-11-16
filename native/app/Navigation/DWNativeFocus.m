@@ -9,6 +9,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 // Signature provenance: yabai (https://github.com/asmvik/yabai, MIT) commit dd845723416f5fe92af49fad5ebab00369e07edd,
 // src/misc/extern.h:8 and src/misc/helpers.h:499-504, as native/app/Navigation/DWNativeResize.m.
 // New implementation with no title matching, but for forward() below, which is adapted from yabai (MIT, same repository and commit):
@@ -45,7 +46,8 @@ static AXError timeout(AXUIElementRef w,double end) { return DWAXTimeout(w,end,.
 static AXError copy(AXUIElementRef w,CFStringRef key,CFTypeRef *v,double end) { AXError e=timeout(w,end);return e==kAXErrorSuccess?AXUIElementCopyAttributeValue(w,key,v):e; }
 static void log_window_lookup(AXUIElementRef element,pid_t expectedPID,uint32_t expectedWindow,CFIndex index,AXError error,double end) { DWAXLogWindowLookup("focus",.1,element,expectedPID,expectedWindow,index,error,end); }
 static bool windowless_scroll_area(AXUIElementRef element,pid_t expectedPID,double end) { return DWAXWindowlessScrollArea(element,expectedPID,end,.1); }
-static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
+static AXUIElementRef resolve_once(DWFocusIdentity i,double end,DWFocusResult *r) {
+    r->ax_error=kAXErrorSuccess;
     if(!dw_focus_owner(i,&r->bounds)){r->outcome=DWFocusStale;return NULL;}
     GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
     if(!AXIsProcessTrusted()||!get){r->outcome=DWFocusUnavailable;return NULL;}
@@ -59,13 +61,23 @@ static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
         if(CFGetTypeID(w)!=AXUIElementGetTypeID()||(r->ax_error=timeout(w,end))){r->outcome=DWFocusUnavailable;valid=false;break;}
         r->ax_error=get(w,&wid);
         if(r->ax_error==kAXErrorIllegalArgument&&windowless_scroll_area(w,i.pid,end)){r->ax_error=kAXErrorSuccess;continue;}
-        if(r->ax_error){log_window_lookup(w,i.pid,i.window,n,r->ax_error,end);r->outcome=DWFocusUnavailable;valid=false;break;}
+        if(r->ax_error){if(r->ax_error!=kAXErrorCannotComplete)log_window_lookup(w,i.pid,i.window,n,r->ax_error,end);r->outcome=DWFocusUnavailable;valid=false;break;}
         if(wid==i.window){if((r->ax_error=AXUIElementGetPid(w,&pid))||pid!=i.pid){valid=false;r->outcome=DWFocusStale;break;}matches++;if(!found)found=(AXUIElementRef)CFRetain(w);}
     }
     CFRelease(list);
     if(valid&&matches==1&&dw_focus_owner(i,&r->bounds))return found;
     if(valid)r->outcome=matches>1?DWFocusAmbiguous:matches==0?DWFocusMissing:DWFocusStale;
     if(found)CFRelease(found);return NULL;
+}
+static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
+    do {
+        AXUIElementRef window=resolve_once(i,end,r);
+        if(window||r->ax_error!=kAXErrorCannotComplete)return window;
+        double remaining=end-now();
+        if(remaining<=0)break;
+        usleep((useconds_t)ceil(fmin(.025,remaining)*1e6));
+    } while(now()<end);
+    r->outcome=DWFocusTimedOut;return NULL;
 }
 bool dw_focus_minimized(DWFocusIdentity identity,bool *minimized) { @autoreleasepool {
     if(!minimized)return false;
@@ -185,18 +197,36 @@ DWFocusResult dw_focus_select(DWFocusIdentity i,DWFocusGuard guard,void *ctx) { 
     if(!w)return r;
     if(!allowed(i,guard,ctx,end,&r)){CFRelease(w);return r;}
     r.mutation_attempted=true;
-    BOOL activated=[[NSRunningApplication runningApplicationWithProcessIdentifier:i.pid] activateWithOptions:0];
+    NSRunningApplication *running=[NSRunningApplication runningApplicationWithProcessIdentifier:i.pid];
+    BOOL activated=[running activateWithOptions:(NSApplicationActivationOptions)(1<<1)]||[running activateWithOptions:0];
+    if(!activated){
+        FrontWithOptions front=(FrontWithOptions)dlsym(RTLD_DEFAULT,"_SLPSSetFrontProcessWithOptions");
+        ProcessForPID serial=(ProcessForPID)dlsym(RTLD_DEFAULT,"GetProcessForPID");ProcessSerialNumber psn={0};
+        if(front&&serial&&serial(i.pid,&psn)==noErr)activated=front(&psn,i.window,0x200)==kCGErrorSuccess;
+    }
     if(!activated){r.outcome=DWFocusAXFailed;CFRelease(w);return r;}
     CFStringRef attributes[]={kAXMainAttribute,kAXFocusedAttribute};
     for(int n=0;n<3;n++) {
-        if(!allowed(i,guard,ctx,end,&r)){CFRelease(w);return r;}
-        r.ax_error=timeout(w,end);
-        if(!r.ax_error)r.ax_error=n<2?AXUIElementSetAttributeValue(w,attributes[n],kCFBooleanTrue):AXUIElementPerformAction(w,kAXRaiseAction);
-        if(r.ax_error){r.outcome=DWFocusAXFailed;CFRelease(w);return r;}
+        for(;;) {
+            if(!allowed(i,guard,ctx,end,&r)){CFRelease(w);return r;}
+            r.ax_error=timeout(w,end);
+            if(!r.ax_error)r.ax_error=n<2?AXUIElementSetAttributeValue(w,attributes[n],kCFBooleanTrue):AXUIElementPerformAction(w,kAXRaiseAction);
+            if(!r.ax_error)break;
+            double remaining=end-now();
+            if(r.ax_error!=kAXErrorCannotComplete||remaining<=0){r.outcome=DWFocusAXFailed;CFRelease(w);return r;}
+            usleep((useconds_t)ceil(fmin(.02,remaining)*1e6));
+        }
     }
+    bool slpsTried=false;
     while(allowed(i,guard,ctx,end,&r)) {
         if(readback(i,w,end,&r)&&r.focused){if(!allowed(i,guard,ctx,end,&r))r.focused=false;CFRelease(w);return r;}
         if(r.outcome==DWFocusStale)break;
+        if(!slpsTried&&NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier!=i.pid){
+            slpsTried=true;
+            FrontWithOptions front=(FrontWithOptions)dlsym(RTLD_DEFAULT,"_SLPSSetFrontProcessWithOptions");
+            ProcessForPID serial=(ProcessForPID)dlsym(RTLD_DEFAULT,"GetProcessForPID");ProcessSerialNumber psn={0};
+            if(front&&serial&&serial(i.pid,&psn)==noErr)front(&psn,i.window,0x200);
+        }
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.015]];
     }
     r.focused=false;CFRelease(w);return r;

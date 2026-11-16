@@ -133,6 +133,7 @@
     };
 }
 - (void)launch:(NSString *)bundle {
+    [self.navigation noteLaunchIntentForBundle:bundle];
     __weak Desktop *weak=self;
     DWLaunchApplication(bundle,^(NSString *reason){Desktop *d=weak;if(!d||d.cleaning)return;NSString *note=[@"Relaunch failed: " stringByAppendingString:reason];[d say:note];[d flashStatus:note];[d render];});
 }

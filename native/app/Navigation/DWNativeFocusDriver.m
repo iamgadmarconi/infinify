@@ -59,6 +59,9 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
 - (void)dealloc {if(_observer)[NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_observer];}
 
 - (DWGuard)authorization:(NSDictionary *)value {
+    return [self authorization:value overridingPID:0];
+}
+- (DWGuard)authorization:(NSDictionary *)value overridingPID:(pid_t)intruderPID {
     if(value[@"owner"]&&value[@"owner"]!=NSNull.null)return nil;
     DWFocusIdentity i=identity(value);DWFocusLease *lease=[DWFocusLease new];lease.guard=^BOOL{return YES;};
     CGRect bounds;if(!dw_focus_owner(i,&bounds))return nil;lease.bounds=bounds;
@@ -68,9 +71,19 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
     // after the first has asked for its application: with only the application that was in front at this intent allowed,
     // the second was refused as soon as the first one's arrived, and neither window was focused (guard_denied, both).
     lease.target=i;lease.made=CACurrentMediaTime();
+    NSMutableArray *allowedEarlier=[NSMutableArray array];
+    uint64_t is=0,iu=0;
+    if(intruderPID>0&&dw_focus_birth(intruderPID,&is,&iu)){
+        [allowedEarlier addObject:@[@(intruderPID),@(is),@(iu)]];
+        // If the workspace notification arrived before frontmostApplication flipped,
+        // treat the intruder as the expected pre-restoration foreground so its
+        // pending activation notification does not invalidate the restore lease.
+        if(lease.foreground==i.pid){lease.foreground=intruderPID;lease.seconds=is;lease.microseconds=iu;}
+    }
     @synchronized(self){DWFocusLease *before=self.lease;
-        if(before&&lease.made-before.made<2){NSMutableArray *earlier=[NSMutableArray arrayWithArray:before.earlier?:@[]];[earlier addObject:@[@(before.target.pid),@(before.target.seconds),@(before.target.microseconds)]];
-            while(earlier.count>4)[earlier removeObjectAtIndex:0];lease.earlier=earlier;}
+        if(before&&lease.made-before.made<2){[allowedEarlier addObjectsFromArray:before.earlier?:@[]];[allowedEarlier addObject:@[@(before.target.pid),@(before.target.seconds),@(before.target.microseconds)]];}
+        while(allowedEarlier.count>5)[allowedEarlier removeObjectAtIndex:0];
+        if(allowedEarlier.count)lease.earlier=allowedEarlier;
         self.lease=lease;}
     return ^BOOL{return allowed(i,(__bridge void *)lease);};
 }
@@ -95,4 +108,5 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
     if(!valid||!dw_focus_identity(pid,wid,&i))return nil;
     return dw_focus_observe(i).focused?json(i):nil;
 }
+- (pid_t)frontmostPID { return NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier; }
 @end

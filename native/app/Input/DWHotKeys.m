@@ -77,6 +77,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     NSMutableIndexSet *_withheld; // keys of _keys left unregistered because they are passed
     UInt32 _down; // hot key id Carbon reported pressed and not yet released, 0 for none
     BOOL _ownOnly; // started with -start:NO: system-owned chords are left to macOS
+    BOOL _cmdSwitchHeld;
 }
 - (instancetype)initWithFire:(void (^)(NSString *))fire {
     if((self=[super init])){_fire=[fire copy];_keys=@[];_notes=@[];
@@ -131,7 +132,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     // A session filter owns their physical down/up pair while the desktop is open.
     // No global shortcut preferences are modified, and stopping removes the tap.
     // Without a canvas panel (system NO) there is no filter at all: nothing of macOS's own shortcuts is taken.
-    if(system&&(_tapKeys.count||self.standinEnter||self.nativeWindowControl)&&AXIsProcessTrusted()){
+    if(system&&(_tapKeys.count||self.standinEnter||self.nativeWindowControl||self.systemSwitch||self.unconsumedKey)&&AXIsProcessTrusted()){
         _keyTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionDefault,
             CGEventMaskBit(kCGEventKeyDown)|CGEventMaskBit(kCGEventKeyUp)|CGEventMaskBit(kCGEventFlagsChanged),reservedKeyEvent,(__bridge void *)self);
         if(_keyTap){_keySource=CFMachPortCreateRunLoopSource(NULL,_keyTap,0);
@@ -167,9 +168,11 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
 }
 - (CGEventRef)filterKey:(CGEventType)type event:(CGEventRef)event {
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){
+        if(_cmdSwitchHeld){_cmdSwitchHeld=NO;if(self.systemSwitch)self.systemSwitch(NO);}
         [self endRepeat];[self lift];if(_keyTap&&AXIsProcessTrusted())CGEventTapEnable(_keyTap,true);return event;
     }
     if(type==kCGEventFlagsChanged){
+        if(_cmdSwitchHeld&&!(CGEventGetFlags(event)&kCGEventFlagMaskCommand)){_cmdSwitchHeld=NO;if(self.systemSwitch)self.systemSwitch(NO);}
         if(_down&&_down<=_keys.count){UInt32 modifiers=[_keys[_down-1][@"chord"]unsignedIntValue]&chordModifiers;
             CGEventFlags f=CGEventGetFlags(event);UInt32 held=(f&kCGEventFlagMaskControl?controlKey:0)|(f&kCGEventFlagMaskAlternate?optionKey:0)|(f&kCGEventFlagMaskShift?shiftKey:0)|(f&kCGEventFlagMaskCommand?cmdKey:0);
             if((held&modifiers)!=modifiers){[self endRepeat];[self lift];}}
@@ -183,7 +186,10 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
         dispatch_async(dispatch_get_main_queue(),^{DWHotKeys *keys=weak;if(keys&&keys->_generation==generation)[keys released:owned.unsignedIntValue];});return NULL;
     }
     if(owned)return NULL; // one toggle per physical press, including auto-repeat
-    if(CGEventGetIntegerValueField(event,kCGKeyboardEventAutorepeat))return event;
+    if(CGEventGetIntegerValueField(event,kCGKeyboardEventAutorepeat)){
+        if(_cmdSwitchHeld&&self.systemSwitch)self.systemSwitch(YES);
+        return event;
+    }
     UInt32 code=physical.unsignedIntValue;
     // Apple top-row Mission Control emits 160 when F3 emits 99 in function mode.
     // Mapping evidence: tauri-plugin-macos-input-monitor 0.1.0, keycode reference
@@ -227,6 +233,11 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
         if(control){_suppressedKeys[physical]=@0;
             dispatch_async(dispatch_get_main_queue(),^{DWHotKeys *keys=weak;if(keys&&keys->_generation==generation)control();});return NULL;}
     }
+    if((code==48&&(f&kCGEventFlagMaskCommand))||_cmdSwitchHeld){
+        _cmdSwitchHeld=(f&kCGEventFlagMaskCommand)!=0;
+        if(self.systemSwitch)self.systemSwitch(_cmdSwitchHeld);
+    }
+    if(self.unconsumedKey)self.unconsumedKey(code,(uint64_t)f);
     return event;
 }
 // Adapted from DriftWM, repository https://github.com/malbiruk/driftwm, commit 352333a8fa1b22171492d4b71a54102045c9a19d, src/input/keyboard.rs (the pass_keys
@@ -298,6 +309,7 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
 }
 - (void)released:(UInt32)identifier { if(identifier==_repeating)[self endRepeat];if(identifier==_down)[self lift]; }
 - (void)stop {
+    if(_cmdSwitchHeld){_cmdSwitchHeld=NO;if(self.systemSwitch)self.systemSwitch(NO);}
     [self endRepeat];_generation++;_down=0;
     if(_keyTap){CGEventTapEnable(_keyTap,false);CFMachPortInvalidate(_keyTap);}
     if(_keySource){CFRunLoopRemoveSource(CFRunLoopGetMain(),_keySource,kCFRunLoopCommonModes);CFRelease(_keySource);_keySource=NULL;}
@@ -305,6 +317,6 @@ static CGEventRef reservedKeyEvent(CGEventTapProxy proxy,CGEventType type,CGEven
     for(NSValue *reference in _registered)if(reference.pointerValue)UnregisterEventHotKey(reference.pointerValue);
     _registered=nil;_withheld=nil;_ownOnly=NO;if(_handler){RemoveEventHandler(_handler);_handler=NULL;}
 }
-- (void)invalidate { [self stop];self.changed=nil;self.standinEnter=nil;self.nativeWindowControl=nil;[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)invalidate { [self stop];self.changed=nil;self.standinEnter=nil;self.nativeWindowControl=nil;self.systemSwitch=nil;self.unconsumedKey=nil;[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
 - (void)dealloc { [self stop];[NSDistributedNotificationCenter.defaultCenter removeObserver:self]; }
 @end

@@ -12,6 +12,9 @@ typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
 - (DWGuard)authorization:(NSDictionary *)identity;
 - (BOOL)select:(NSDictionary *)identity guard:(DWGuard)guard;
 - (NSDictionary *)observe;
+@optional
+- (DWGuard)authorization:(NSDictionary *)identity overridingPID:(pid_t)intruderPID;
+- (pid_t)frontmostPID;
 @end
 // Performs the controller's focus requests through the driver, follows native focus
 // the user moved themselves, keeps a held cycle open until its modifiers are let go,
@@ -65,5 +68,16 @@ typedef NSDictionary *(^DWObservedBinding)(NSDictionary *observed);
 // Main-thread proof that geometry ownership ended and the unchanged native
 // placement is acknowledged. Missing hook is ready (non-native hosts).
 @property (copy) BOOL (^nativeClickReleaseReady)(NSDictionary *binding);
+// Desktop policy: reject camera pans and restore confirmed live focus when an
+// external activation or new window arrives without owner launch/switch intent.
+@property BOOL filterUnsolicitedActivations;
+- (uint64_t)nowNanoseconds;
+- (void)noteSystemSwitchHeld:(BOOL)held;
+- (void)noteSystemUIIntent;
+- (void)noteLaunchIntentForBundle:(NSString *)bundle;
+- (void)noteFocusedWindowClick;
+- (void)noteApplicationLaunched:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle at:(uint64_t)at;
+- (void)noteApplicationActivated:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle regular:(BOOL)regular at:(uint64_t)at;
+- (BOOL)consumeAttachIntentForPID:(pid_t)pid birth:(NSArray<NSNumber *> *)birth bundle:(NSString *)bundle;
 - (BOOL)frame;
 @end

@@ -28,6 +28,7 @@ static const NSInteger DWPolicyPress=9;
 @property BOOL desktopUp; // the desktop's canvas is open, on however many displays there are: with none there it has no panel and is still open
 @property BOOL keysRunning; // -startKeys ran and -stopKeys has not since (an own-keys-only start included)
 @property BOOL canvasKeysOffered; // this canvas has opened panels and started its keys; reset when it closes (-cleanup)
+@property id navigationLaunchObserver,navigationActivateObserver;
 @end
 // Explicit ivars: Desktop+Bindings.m takes these two by address (&_hotkeyHandler, &_exitHotkey); an ivar that
 // only auto-synthesis creates is invisible outside Desktop.m. The properties bind to them unchanged.

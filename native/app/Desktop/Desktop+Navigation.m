@@ -7,18 +7,45 @@
 #import "DWNativeFocusDriver.h"
 #import "DWNativeFamily.h"
 #import "DWGeometryJSON.h"
-// Optional, and only where Input Monitoring is already granted: a press or scroll outside
-// the canvas while a native focus request is in flight withdraws that request. Listen-only,
-// and nothing depends on it. A press on the canvas is its view's to handle.
-// Key downs cancel only the bounded background-arrival correction; binding
-// releases never cancel the normal native focus request they began.
+// Listen-only session observer of physical mouse presses/releases and scrolls:
+// classifies clicks on Dock/Spotlight/Menu Bar vs inside the confirmed focused
+// window vs outside the canvas, without cancelling focus restoration on typing.
+static BOOL DWIsSystemUIOwner(NSString *owner,NSInteger layer,CGPoint point) {
+    if(point.y<=32||layer>=20)return YES;
+    return [owner isEqual:@"Dock"]||[owner isEqual:@"Spotlight"]||[owner isEqual:@"Apps"]
+        ||[owner isEqual:@"SystemUIServer"]||[owner isEqual:@"Control Center"]||[owner isEqual:@"Notification Center"];
+}
 static CGEventRef navigationInput(CGEventTapProxy proxy,CGEventType type,CGEventRef event,void *context) {
     (void)proxy;Desktop *desktop=(__bridge Desktop *)context;
-    [desktop cancelNativeTitleClick];
     if(type==kCGEventTapDisabledByTimeout||type==kCGEventTapDisabledByUserInput){[desktop.navigation interrupt];if(desktop.navigationTap)CGEventTapEnable(desktop.navigationTap,true);return event;}
-    [desktop.navigation cancelBackgroundArrival];
+    int64_t tag=CGEventGetIntegerValueField(event,kCGEventSourceUserData);
+    if(tag&&[desktop.postingTags containsObject:@(tag)])return event;
+    if(tag)for(LiveSource *source in desktop.sources.allValues)if(source.router.tag==tag)return event;
+    [desktop cancelNativeTitleClick];
     if(type==kCGEventKeyDown)return event;
-    CGPoint point=CGEventGetLocation(event);for(DesktopView *view in desktop.views)if(CGRectContainsPoint(view.globalBounds,point))return event;
+    CGPoint point=CGEventGetLocation(event);
+    BOOL down=type==kCGEventLeftMouseDown||type==kCGEventRightMouseDown||type==kCGEventOtherMouseDown;
+    BOOL up=type==kCGEventLeftMouseUp||type==kCGEventRightMouseUp||type==kCGEventOtherMouseUp;
+    if(down||up){
+        CGWindowID top=(CGWindowID)[NSWindow windowNumberAtPoint:NSMakePoint(point.x,screenTop()-point.y) belowWindowWithWindowNumber:0];
+        NSDictionary *info=top?windowInfo(top):nil;
+        pid_t ownerPID=[info[(id)kCGWindowOwnerPID]intValue];
+        NSInteger layer=[info[(id)kCGWindowLayer]integerValue];
+        NSString *ownerName=DWTyped(info[(id)kCGWindowOwnerName],NSString.class);
+        if(ownerPID!=getpid()&&DWIsSystemUIOwner(ownerName,layer,point)){
+            [desktop.navigation noteSystemUIIntent];
+        }else if(down){
+            NSNumber *clicked=[desktop nativeSource:top at:point].logical;
+            if(!clicked)for(DesktopView *view in desktop.views)if((CGWindowID)view.window.windowNumber==top){
+                NSNumber *output=[view outputAt:point];clicked=output?DWTyped([view hit:point output:output][@"window"],NSNumber.class):nil;break;
+            }
+            NSNumber *focused=DWTyped(DWTyped([desktop call:@{@"op":@"snapshot"}][@"focus"][@"observed_native"],NSDictionary.class)[@"window"],NSNumber.class);
+            if(clicked&&focused&&[clicked isEqual:focused])[desktop.navigation noteFocusedWindowClick];
+            else [desktop.navigation cancelBackgroundArrival];
+        }
+        if(up)return event;
+    }
+    for(DesktopView *view in desktop.views)if(CGRectContainsPoint(view.globalBounds,point))return event;
     [desktop.navigation interrupt];return event;
 }
 // The AX reply and later WindowServer family audit are separate observations.
@@ -300,6 +327,7 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
     __weak Desktop *weak=self;dispatch_queue_t queue=dispatch_queue_create("org.infinify.navigation",DISPATCH_QUEUE_SERIAL);
     self.navigation=[[DWNavigationCoordinator alloc]initWithCommand:^NSDictionary *(NSDictionary *c){return [weak navigationCall:c];} driver:[DWNativeFocusDriver new] clock:^uint64_t{return (uint64_t)(CACurrentMediaTime()*1e9);} worker:^(DWJob job){dispatch_async(queue,job);} main:^(DWJob job){dispatch_async(dispatch_get_main_queue(),job);}];
     self.navigation.enabled=YES;self.cycleHold=[DWCycleHold new];
+    self.navigation.filterUnsolicitedActivations=!self.windowed&&self.managing&&!self.scope;
     self.navigation.changed=^{[weak render];[weak ensureFrames];};
     self.navigation.settled=^{[weak saveScene];};
     self.navigation.output=^NSNumber *{return [weak viewOutput];};
@@ -328,11 +356,27 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
         };
     };
     [self refreshFocusAccess];
-    // Never asked for: the observer exists only where the user has already granted Input Monitoring.
-    if(!self.logicalFocus&&CGPreflightListenEventAccess()){
-        CGEventMask mask=CGEventMaskBit(kCGEventLeftMouseDown)|CGEventMaskBit(kCGEventRightMouseDown)|CGEventMaskBit(kCGEventOtherMouseDown)|CGEventMaskBit(kCGEventScrollWheel)|CGEventMaskBit(kCGEventKeyDown);
-        self.navigationTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionListenOnly,mask,navigationInput,(__bridge void *)self);
-        if(self.navigationTap){self.navigationTapSource=CFMachPortCreateRunLoopSource(NULL,self.navigationTap,0);if(self.navigationTapSource)CFRunLoopAddSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);}
+    if(self.navigation.filterUnsolicitedActivations){
+        NSNotificationCenter *ws=NSWorkspace.sharedWorkspace.notificationCenter;
+        void (^observeApp)(NSNotification *,BOOL)=^(NSNotification *note,BOOL launched){
+            Desktop *d=weak;DWNavigationCoordinator *nav=d.navigation;if(!d||d.cleaning||!nav)return;
+            NSRunningApplication *app=note.userInfo[NSWorkspaceApplicationKey];if(!app)return;
+            uint64_t at=[nav nowNanoseconds];
+            dispatch_async(queue,^{@autoreleasepool{
+                pid_t pid=app.processIdentifier;if(pid<=0||pid==getpid())return;
+                BOOL regular=app.activationPolicy==NSApplicationActivationPolicyRegular;
+                NSString *bundle=app.bundleIdentifier;
+                uint64_t s=0,u=0;if(!dw_focus_birth(pid,&s,&u))return;
+                NSArray<NSNumber *> *born=@[@(s),@(u)];
+                dispatch_async(dispatch_get_main_queue(),^{
+                    Desktop *cur=weak;if(!cur||cur.cleaning||cur.navigation!=nav)return;
+                    if(launched)[nav noteApplicationLaunched:pid birth:born bundle:bundle at:at];
+                    else [nav noteApplicationActivated:pid birth:born bundle:bundle regular:regular at:at];
+                });
+            }});
+        };
+        self.navigationLaunchObserver=[ws addObserverForName:NSWorkspaceDidLaunchApplicationNotification object:nil queue:nil usingBlock:^(NSNotification *note){observeApp(note,YES);}];
+        self.navigationActivateObserver=[ws addObserverForName:NSWorkspaceDidActivateApplicationNotification object:nil queue:nil usingBlock:^(NSNotification *note){observeApp(note,NO);}];
     }
     [self.navigation frame];
 }
@@ -341,6 +385,12 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 - (void)refreshFocusAccess {
     BOOL trusted=AXIsProcessTrusted();self.navigation.focusAllowed=trusted&&!self.logicalFocus;[self.tapKeys trusted:trusted];
     if(trusted)[self configureNativeInput];
+    if(trusted&&!self.logicalFocus&&!self.navigationTap&&self.navigation){
+        CGEventMask mask=CGEventMaskBit(kCGEventLeftMouseDown)|CGEventMaskBit(kCGEventLeftMouseUp)|CGEventMaskBit(kCGEventRightMouseDown)|CGEventMaskBit(kCGEventRightMouseUp)|CGEventMaskBit(kCGEventOtherMouseDown)|CGEventMaskBit(kCGEventOtherMouseUp)|CGEventMaskBit(kCGEventScrollWheel);
+        if(CGPreflightListenEventAccess())mask|=CGEventMaskBit(kCGEventKeyDown);
+        self.navigationTap=CGEventTapCreate(kCGSessionEventTap,kCGHeadInsertEventTap,kCGEventTapOptionListenOnly,mask,navigationInput,(__bridge void *)self);
+        if(self.navigationTap){self.navigationTapSource=CFMachPortCreateRunLoopSource(NULL,self.navigationTap,0);if(self.navigationTapSource)CFRunLoopAddSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);}
+    }
     if(trusted||self.logicalFocus||self.focusNoted||!self.navigation)return;
     self.focusNoted=YES;NSString *note=focusAccessNote;
     // Said once, ahead of a notice already up; what a config load left for the resting status returns as the resting status.
@@ -354,6 +404,9 @@ static CGRect DWResizePresentationNativeBounds(NSDictionary *family,NSDictionary
 }
 - (void)stopNavigation {
     [self cancelNativeTitleClick];
+    NSNotificationCenter *ws=NSWorkspace.sharedWorkspace.notificationCenter;
+    if(self.navigationLaunchObserver){[ws removeObserver:self.navigationLaunchObserver];self.navigationLaunchObserver=nil;}
+    if(self.navigationActivateObserver){[ws removeObserver:self.navigationActivateObserver];self.navigationActivateObserver=nil;}
     [self.cycleHold stop];self.cycleHold=nil;[self.navigation shutdown];self.navigation=nil;[self.frameDriver invalidate];self.frameDriver=nil;self.frameFlying=NO;self.flying=NO;
     if(self.navigationTapSource){CFRunLoopRemoveSource(CFRunLoopGetMain(),self.navigationTapSource,kCFRunLoopCommonModes);CFRelease(self.navigationTapSource);self.navigationTapSource=NULL;}
     if(self.navigationTap){CFMachPortInvalidate(self.navigationTap);CFRelease(self.navigationTap);self.navigationTap=NULL;}

@@ -30,6 +30,9 @@ typedef NS_ENUM(NSUInteger, DWNativeWindowControl) {
 // focus; nil leaves the pair native. A returned job owns the complete physical
 // pair and revalidates its pinned target, including for SuppressTiling.
 @property (copy) dispatch_block_t (^nativeWindowControl)(DWNativeWindowControl action);
+// Physical Command-Tab switcher hold/release and unconsumed physical keydowns.
+@property (copy) void (^systemSwitch)(BOOL held);
+@property (copy) void (^unconsumedKey)(uint32_t keyCode,uint64_t flags);
 // Unregisters, then resolves every key against the current layout. A key the reply
 // marks "implemented": false is left out silently, its chord untouched.
 - (void)setBindings:(NSDictionary *)bindings;

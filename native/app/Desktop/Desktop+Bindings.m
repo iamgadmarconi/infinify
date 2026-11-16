@@ -12,6 +12,14 @@
 static OSStatus exitKey(EventHandlerCallRef next,EventRef event,void *context) { (void)next;EventHotKeyID key={0};GetEventParameter(event,kEventParamDirectObject,typeEventHotKeyID,NULL,sizeof(key),NULL,&key);if(key.signature!='Infi'||key.id!=1)return eventNotHandledErr;[(__bridge Desktop *)context quit:nil];return noErr; }
 // ⌃⌥Esc is the shell's own exit chord until a config binding claims it.
 static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
+static BOOL DWLauncherOverlayVisible(void) {
+    NSArray *list=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
+    for(NSDictionary *w in list){
+        NSString *owner=w[(id)kCGWindowOwnerName];
+        if([owner isEqual:@"Spotlight"]||[owner isEqual:@"Apps"])return YES;
+    }
+    return NO;
+}
 @implementation Desktop (Bindings)
 // Which corners are bound depends on the outputs registered: read from the bindings
 // after every config load, and again whenever panels open.
@@ -93,7 +101,7 @@ static NSNumber *exitChord(void) { return DWChord(53,controlKey|optionKey); }
     NSDictionary *bindings=[self call:@{@"op":@"bindings"}];if(!bindings)[notes addObject:self.statusText?:@"bindings unavailable"];
     for(id warning in asArray(bindings[@"warnings"]))if(DWTyped(warning,NSString.class))[notes addObject:warning];
     // A key that fires as a binding is a key on top of whatever modifier chord is held: that chord is no tap.
-    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak.tapKeys taint];[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.standinEnter=^dispatch_block_t{return [weak standInEnter];};self.hotKeys.nativeWindowControl=^dispatch_block_t(DWNativeWindowControl action){return [weak nativeWindowControlKey:action];};self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
+    if(!self.hotKeys){__weak Desktop *weak=self;self.hotKeys=[[DWHotKeys alloc]initWithFire:^(NSString *action){[weak.tapKeys taint];[weak action:action output:[weak viewOutput]];}];self.hotKeys.kept=exitChord();self.hotKeys.standinEnter=^dispatch_block_t{return [weak standInEnter];};self.hotKeys.nativeWindowControl=^dispatch_block_t(DWNativeWindowControl action){return [weak nativeWindowControlKey:action];};self.hotKeys.systemSwitch=^(BOOL held){[weak.navigation noteSystemSwitchHeld:held];};self.hotKeys.unconsumedKey=^(uint32_t code,uint64_t flags){(void)flags;Desktop *d=weak;if(d&&(code==36||code==76)&&DWLauncherOverlayVisible())[d.navigation noteSystemUIIntent];};self.hotKeys.changed=^{Desktop *d=weak;NSArray<NSString *> *left=[d refreshBindings];for(NSString *line in left)fprintf(stderr,"%s\n",line.UTF8String);if(left.count){d.statusText=summary(@"Bindings",left);[d render];}};}
     // A tap binding's chord, completed, goes back to the controller as it came, to be looked up and run there. The output, the pointer and the modifiers
     // still down are those of the moment, as a hot key's: the release that completes a chord of two leaves one of them held.
     if(!self.tapKeys){__weak Desktop *weak=self;self.tapKeys=[[DWTapKeys alloc]initWithFire:^(NSDictionary *tap){NSDictionary *chord=DWTyped(tap[@"modifiers"],NSDictionary.class);if(chord)[weak action:DWTyped(tap[@"action"],NSString.class) output:[weak viewOutput] at:pointer() held:[DWCycleHold modifiersDown]!=0 corner:nil tap:chord];}];}

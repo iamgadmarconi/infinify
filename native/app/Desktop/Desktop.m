@@ -41,7 +41,7 @@
     if([reply[@"dirty"]isEqual:@YES])self.sceneDirty=YES;
     for(id effect in asArray(reply[@"effects"])){NSDictionary *e=DWTyped(effect,NSDictionary.class);NSString *op=DWTyped(e[@"op"],NSString.class);
         if([op isEqual:@"quit"])[self quit:nil];
-        else if([op isEqual:@"exec"]&&DWTyped(e[@"command"],NSString.class))[self exec:e];
+        else if([op isEqual:@"exec"]&&DWTyped(e[@"command"],NSString.class)){[self.navigation noteSystemUIIntent];[self exec:e];}
         // send-cursor-to-output, an explicit user action: the point is in the coordinates of screen_bounds.
         // Position only: this shell does not own an application's mouse/cursor association.
         else if([op isEqual:@"warp_pointer"]){NSDictionary *screen=DWTyped(e[@"screen"],NSDictionary.class);CGPoint to=jsonPoint(screen);if(DWTyped(screen[@"x"],NSNumber.class)&&DWTyped(screen[@"y"],NSNumber.class)&&isfinite(to.x)&&isfinite(to.y)){CGWarpMouseCursorPosition(to);}}

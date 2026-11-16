@@ -97,13 +97,22 @@ when its application reports the window created, where
 [the events are in place](#event-driven-tracking), and by the poll otherwise;
 the later ones by the poll, which looks every 80 ms while a window is waiting.
 Its size is the native window's. Its place
-on the canvas is never where the native window sits on the desktop: the macOS
-default is `window_placement = "auto"`, beside the focused window's cluster;
-`center` places it under `focus_placement`, and `cursor` centers it on the
-pointer. Placement steps down the diagonal while the frame would sit exactly on
-another window. It goes on top, takes the canvas's logical
-focus, and the camera of that display flies to it, to 1:1 unless `[zoom]
-reset_on_new_window = false`; under `cursor` placement the camera stays.
+on the canvas is never where the native window sits on the desktop: when the
+window belongs to the process (same PID and birth) that currently holds
+confirmed live focus, or when an owner signal initiated opening another
+process (Dock, Spotlight, Command-Tab, an Infinify `exec` or `Relaunch`, or a
+click in the focused window within 0.75 s before another application launches
+or activates), `window_placement` places it (`"auto"` by default, beside the
+focused window's cluster; `center` under `focus_placement`; `cursor` on the
+pointer), it goes on top, takes the canvas's logical focus, and the camera of
+that display flies to it (to 1:1 unless `[zoom] reset_on_new_window = false`;
+under `cursor` placement the camera stays). When a window of another process
+appears without owner intent, it is grouped with its
+application's existing canvas windows or placed just outside the active
+viewport's right edge, stacked below the focused window, without taking focus
+or moving the camera, and native focus is restored to the confirmed focused
+window if macOS activated the newcomer. Placement steps down the diagonal while
+the frame would sit within two points of another window's origin.
 
 **A window that closes** leaves the canvas. With `[session] suspend_on_close =
 true` (or a `[[window_rules]]` entry that sets it for that application) it
