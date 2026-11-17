@@ -449,9 +449,7 @@ commands; their source lists continue on following lines in those scripts.
 | `native-input-policy.sh` | 11 |
 | `native-launcher.sh` | 43 |
 | `native-placement-validation.sh` | 10 |
-| `native-presenter-readiness.sh` | 10, 15 |
 | `native-resize-presentation.sh` | 16 |
-| `native-view-transfer.sh` | 10 |
 | `package-dmg.sh` | 21 |
 | `physical-resize-edge.py` | 317 |
 | `privileged-regression.sh` | 15 |

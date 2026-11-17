@@ -5,8 +5,8 @@
 // dd845723416f5fe92af49fad5ebab00369e07edd (src/misc/extern.h), https://github.com/asmvik/yabai;
 // see native/app/Resources/YABAI-NOTICE.txt. Nothing here changes a window: every change is the
 // helper's, asked for through its socket.
-// Split from native/desktop/native-presenter.m (37b27b1): state shared by the DWNativePresenter implementation files and by
-// tests/native/app/CompositorMode/DWNativePresenterTests.m, which imports those files. Not for other modules.
+// Split from native/desktop/native-presenter.m (37b27b1): state shared by the DWNativePresenter implementation files.
+// Not for other modules.
 #import "DWNativePresenter.h"
 #include <os/lock.h>
 #include <stdatomic.h>

@@ -222,7 +222,7 @@ ignored under `target/ipc/wbugs/` (`verified-*`, `check-optical.py`,
 
 `sh tests/e2e/native-resize-presentation.sh` tests the production owner,
 coordinator, and extracted adapter geometry selector with substituted native
-dependencies. `native-frame-restore.sh` and `native-presenter-readiness.sh` cover the touched integration. These deterministic
+dependencies. `native-frame-restore.sh` covers the touched integration. These deterministic
 checks are not optical proof.
 
 Limitations: content is temporarily frozen/stretched while the snapshot bridge
@@ -326,9 +326,7 @@ printed once per root and reason as `native family #N unavailable: …`) wheneve
 for an instant (`-[Desktop track:info:]` calls `-forgetNativeFamily:` when `DWNativeBounds` fails), a member that changed while it
 was being read (`inconsistent, duplicate or changed family member`), or a window the audit refuses. A window is then parked, off the display, until the next audit passes. In the unchanged build this parked the resized window during the shell's own edge and corner resizes, and the same `native family #N unavailable` line appeared for the Finder window after right-clicks. The root is now still drawn where the canvas puts it, but is not asked to change Space until a good audit again
 (`windowSpaces` is only recorded with a known family), so a lost report no longer moves a window; with `INFINIFY_DEBUG`, one
-`native park begin|end` line says when and why any window is parked. The presenter regression
-`sh tests/e2e/native-presenter-readiness.sh` now checks that an unknown family still gets the placement matrix, not the park
-matrix, and fails against the old rule.
+`native park begin|end` line says when and why any window is parked. An unknown family still gets the placement matrix, not the park matrix.
 
 In the guest, the fixed build left the dragged window under the pointer at the end of the drags measured (Ghostty at zoom 1 and 0.5, Safari at zoom 1 and
 0.5, TextEdit), where the unchanged build ended 220 to 319 points off for Ghostty and 304 for Safari at zoom 1. Two canvas-handled Safari presses at zoom 0.5 ended
@@ -381,9 +379,7 @@ move (the Space request is what needs the complete family); a root whose display
 last audited family, with its children placed and its receipt current, when a read cannot be made, for `DWNativeFamilyGraceMS` (500 ms) after that
 audit; a report that is readable but names another window, or is unsound, is let go at once, as is one that stays unreadable past the grace.
 (3) `-windowNotAdopted:` (above) leaves a window that belongs to a placed root's family to the family for 250 ms before it releases the
-helper's veil for it. Regressions:
-`DWNativePresenterTests.m` (an unknown family no longer parks its root, a failed read keeps the family, receipt and frame
-inside the grace, lets go after it, a report for another window is not a failed read) and `DWPayloadArrivalTests.m` (a placed or released
+helper's veil for it. Regression coverage: `DWPayloadArrivalTests.m` (a placed or released
 window announced again is never veiled or written). The helper is unchanged.
 
 ## Popups and menus of a transformed window (full-desktop Dock helper)
