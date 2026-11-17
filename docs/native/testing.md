@@ -11,7 +11,6 @@ Run the regression a change touches, not the whole set. The scripts build what t
 | `tests/e2e/background-tiff.sh` | Crafted TIFF files and a fixed-seed mutation run through the real tile source and background program: a picture, or an error and the dot grid, never a crash |
 | `tests/e2e/capture-configuration.sh` | The capture request and rate state |
 | `tests/e2e/compositor-lifetime.sh` | The production CPU lifetime fence of the compositor's resources, and per-axis stale-frame destination/source geometry and uncovered placeholder strips |
-| `tests/e2e/controller-hit.sh` | The real controller's `{"hit": null}` answer through the shell's hit-reply helper, and pick-mode motion (`DWPickMotion`) |
 | `tests/e2e/family-geometry.sh` | Production renderer queries on family geometry |
 | `tests/e2e/ipc-limits.sh` | DriftWM v0.21.0's IPC limits and the screenshot write, on the production IPC server and PNG writer |
 | `tests/e2e/mac-wallpaper-refresh.sh` | The wallpaper refresh timing policy |

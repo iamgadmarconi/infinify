@@ -433,7 +433,6 @@ commands; their source lists continue on following lines in those scripts.
 | `capture-configuration.sh` | 9 |
 | `compositor-dnd.sh` | 33, 35 |
 | `compositor-lifetime.sh` | 10, 12 |
-| `controller-hit.sh` | 11 |
 | `family-geometry.sh` | 23 |
 | `ipc-limits.sh` | 12 |
 | `live-guest-lib.sh` | 57 |
@@ -485,7 +484,6 @@ Physical path reads do not.
 | `tests/native/app/Canvas/DWCanvasRendererTests.m:4` | `IFCompositor.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Canvas/IFBGTiffSourceTests.m:13` | `IFBGTiffSource.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Canvas/IFCompositorRendererTests.m:7` | `IFCompositor.h` | Bare import: retained via Private search path. |
-| `tests/native/app/Desktop/DWControllerHitTests.m:6` | `DWControllerHit.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Desktop/DWRootCaptureMailboxTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |
 | `tests/native/app/Desktop/DWSnapshotMirrorTests.m:5` | `DWSnapshotMirror.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Desktop/DesktopCapturedInputTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |

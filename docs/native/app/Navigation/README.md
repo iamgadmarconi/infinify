@@ -432,11 +432,7 @@ first compositor-mode run (`-[NSNull objectForKeyedSubscript:]` in `-[DesktopVie
 which accepts only an object, and on the ordered path only the very window the renderer put on top; a null, a missing
 or a non-object `hit` is no hit on either path. The controller reply itself is also read as an object
 (`NSDictionary *result=asDict(reply[@"data"])` in `-[Desktop call:raw:]`), so a reply whose `data` is not an object is
-a failed call instead of an object-typed `NSNull`. `sh tests/e2e/controller-hit.sh` runs the real controller through
-the C ABI (`register_output`, `attach`, `hit`, `snapshot`), checks that its empty-canvas answer parses as `NSNull`, that
-the old expression raises the owner's exception, and that `DWControllerHit` gives no hit on both paths and still passes a
-real hit; with the helper changed to the old behaviour the test aborts with that exception. It is in-memory only: it does not
-show why the renderer's order and the controller disagreed in the owner's run, and that disagreement has not been reproduced.
+a failed call instead of an object-typed `NSNull`. The disagreement between renderer order and controller has not been reproduced.
 Read from the code, one way it can happen: the placements the renderer draws (`layered_placements`) include a window whose source
 is merely not minimized (`source_presentable`), while the controller's `hit` skips any window whose visibility change is still
 pending (`source_interactive`: `Visible` and not `visibility_pending`), so a window being restored is drawn, found under the

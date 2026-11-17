@@ -237,7 +237,6 @@ window, event, permission or Dock; the live ones start disposable fixture window
 | `background-tiff.sh` | crafted and mutated TIFF wallpapers: a picture or an error, never a crash or hang | no |
 | `capture-configuration.sh` | capture request and rate state | no |
 | `compositor-lifetime.sh` | the compositor's CPU lifetime fence and per-axis stale-frame geometry | no |
-| `controller-hit.sh` | the controller's `{"hit": null}` answer through the shell's hit reply | no |
 | `family-geometry.sh` | renderer queries for window families | no |
 | `ipc-limits.sh` | IPC limits and the atomic screenshot write on the production server and writer | no |
 | `mac-wallpaper-refresh.sh` | the wallpaper refresh timing policy | no |

@@ -353,10 +353,7 @@ the packet, `kCGMouseEventWindowUnderMousePointer`, mapped to its root as every
 other native path does) on an output in pick mode, unless the window is a
 widget, a screen-pinned or a fullscreen one (the placement says which; the
 controller's `hit` gives the same answer and is not asked, to keep the
-per-packet cost nil). The decision is `DWPickMotion` (`DWControllerHit.h`),
-run in `DWControllerHitTests.m` against the real controller's snapshot
-and hit at zoom 1, 0.4 and exactly 0.5 and over empty canvas, a widget and
-malformed input. Packet-level contract: a claimed moved packet is dropped; an
+per-packet cost nil). The decision is `DWPickMotion` (`DWControllerHit.h`). Packet-level contract: a claimed moved packet is dropped; an
 unclaimed one, and one during a held native button, are returned untouched; a
 tagged one is not offered.
 
