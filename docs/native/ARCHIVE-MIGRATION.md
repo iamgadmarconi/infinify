@@ -445,11 +445,9 @@ commands; their source lists continue on following lines in those scripts.
 | `native-drag-drop.sh` | 93 |
 | `native-family-recovery.sh` | 10 |
 | `native-focus.sh` | 12, 14, 16 |
-| `native-frame-restore.sh` | 7 |
 | `native-input-policy.sh` | 11 |
 | `native-launcher.sh` | 43 |
 | `native-placement-validation.sh` | 10 |
-| `native-resize-presentation.sh` | 16 |
 | `package-dmg.sh` | 21 |
 | `physical-resize-edge.py` | 317 |
 | `privileged-regression.sh` | 15 |
@@ -512,7 +510,6 @@ interface refactors.
 | --- | --- | --- |
 | `family-geometry.sh` | `DWCanvasRenderer.h`: readonly `hasGeometryTransitions` and `hasFamilyGeometryTransitions`. | `DWCanvasRendererTests.m` defines fake `DWCanvasOutput`, `GeometryRenderer`, `GeometryFrame`, `GeometryElement`, then compiles sliced methods into its fake renderer. There is no public injection interface for the fabricated renderer states/frame lifecycle. Linking Canvas exposes queries but does not feed these test states. Remove conflicting production class substitutes and exercise the real renderer, or deliberately introduce a separate state-query seam later. Headless isolation is not automatically preserved. |
 | `native-chrome-input.sh` | `DWPressAdmission.h`: `initWithDesktop:scene:native:`, `consume:event:stage:`, `mouseDown:view:`, `prepareDrag:at:view:`; protocols `DWPressNativeLookup`, `DWPressSceneLookup`, `DWPressController`. | Its slices target `DWNativeChromeFrameMatches` and `earlyNativeTitle:` in `Desktop+NativeTitles.m`; admission now owns the consumer and the old marker is stale. `DesktopNativeChromeTests.m` includes `DWNativeInput.m`, defines fake `LiveSource`/other production receivers and returns dictionary controller responses. Typed scenes/replies and admission adapters must replace them. Static chrome predicates have no exported pure-function ABI; exercise acceptance through admission rather than renaming a slice. |
-| `native-resize-presentation.sh` | `DWNativeResizePresentation.h`: `initWithPresenter:capture:`, `requiresBridgeForTransaction:`, `prepareEffect:ready:`, `allowsEffect:`, `update`, `cancel`. `DWSizeTransition.h`: `initWithHost:driver:capture:` with `DWSizeTransitionHost`, `consume:`/`consumeSize:`. | Presenter/coordinator scenarios can link CompositorMode/Navigation with injected interfaces after replacing dictionary fixtures with typed `DWResizeTransaction`/`DWSizeEffect`. But static `DWResizePresentationNativeBounds` moved from `Desktop+Navigation.m` to `Navigation/DWSizeTransition.m:119`. Three direct predicate assertions have no exported equivalent. Exercise transition-host capture arguments or deliberately add a seam later; do not claim force-loading exposes a static function. |
 | `root-capture-mailbox.sh` | `DWRootCaptureMailbox.h`: `initWithSource:stream:`, `queue`, `currentImageAvailable`, `cancel`, inline `DWRootCaptureCrop`; `LiveSource.h`: `acceptCapturedSample:stream:received:forceInstall:`, `installPixels:`/`installPixels:contentRect:`. Captured press/Fill scenarios can use admission/size-transition entries above. | It slices mailbox/source internals, static transition image-geometry helpers, private captured-input predicates, DesktopView forwarding, title-click and Fill methods. It reads deleted `Desktop+Fill.m` before slicing, plus moved `Desktop+Private.h`. `DWRootCaptureMailboxTests.m` substitutes sample storage/install/dispatch and includes generated interface/implementation fragments; `DesktopCapturedInputTests.m` substitutes multiple receivers. Real mailbox APIs do not inject every substitution. `DWNativeTransitionCapture +captureIdentity:nativeBounds:screenRect:validate:completion:` performs native capture, not the static pure geometry predicates. Split scenarios by actual boundary and explicitly design missing native-free seams in the later test phase. |
 
 A public header is an available entry point, not proof that a fixture's fake

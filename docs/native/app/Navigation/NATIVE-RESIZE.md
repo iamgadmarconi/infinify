@@ -127,13 +127,6 @@ Other entry points, as documented in `DWNativeResize.h`:
   the native frame still exactly equals `expected_before`. The extent must stay unchanged.
 - `dw_resize_outcome_name` names an outcome.
 
-`sh tests/e2e/native-frame-restore.sh` exercises the actual adapter and desktop
-driver with substituted AX/WindowServer calls: frame ordering, fractional origin,
-unchanged-size restoration, ignored position, unavailable positioning, replaced
-owner, inconsistent readback, deadline exhaustion, transient and persistent query
-timeouts, multi-stage setter timeouts, size settling and strict effect dispatch. It
-creates no native window and establishes no third-party or optical runtime capability.
-
 Private-function signature precedent (no upstream implementation copied):
 [yabai](https://github.com/asmvik/yabai) commit
 `dd845723416f5fe92af49fad5ebab00369e07edd`, `src/misc/extern.h:8` declaration and

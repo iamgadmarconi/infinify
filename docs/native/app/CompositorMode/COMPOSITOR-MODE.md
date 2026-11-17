@@ -220,11 +220,6 @@ failed the one-pixel bound (2 px). Evidence and exact replay/check tools remain
 ignored under `target/ipc/wbugs/` (`verified-*`, `check-optical.py`,
 `wbdriver.py`); they are not a portable live regression suite.
 
-`sh tests/e2e/native-resize-presentation.sh` tests the production owner,
-coordinator, and extracted adapter geometry selector with substituted native
-dependencies. `native-frame-restore.sh` covers the touched integration. These deterministic
-checks are not optical proof.
-
 Limitations: content is temporarily frozen/stretched while the snapshot bridge
 is active; attached families and runs without capture permission use the live
 resize path instead.
