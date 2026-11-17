@@ -112,7 +112,7 @@ file. Each adapted file names what it took. Files derived from Sunlight:
   (the daemon, its XPC listener and caller requirement, with the edits its header
   lists); native/dock-helper/Daemon/DWLoaddRequest.m borrows the caller-requirement form;
   native/app/System/DWLoaderService.m and native/app/System/DWDockReloader.m (with
-  DWDockReloader.h and DWDockReloaderTests.m) translate
+  DWDockReloader.h) translate
   Sources/Canvas/Setup/LiveWindowsService.swift,
   Sources/Canvas/RealWindows/AdditionReloader.swift (including DockCrashGuard) and
   Tests/CanvasTests/AdditionReloaderTests.swift; native/dock-helper/Daemon/com.marengox.infinify.loader.plist

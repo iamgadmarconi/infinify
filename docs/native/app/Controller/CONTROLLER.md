@@ -114,7 +114,7 @@ pure. Arbitrary concurrent scene lazy access is not a supported API.
 - Resize coordinator/driver/presentation fixtures should supply typed size
   effects/results and `DWResizeController`; cover native coercing geometry,
   orphan equality, null pending effects and the display-tick validity facts.
-- Canvas/native view/presenter/controller-hit fixtures should construct typed
+- Canvas/native view/presenter fixtures should construct typed
   values through test adapters or a real in-memory controller; include scene
   pointer identity, overlays, full unknown-field equality and malformed shapes.
 - Desktop captured-input/chrome/root-capture tests need typed scene/hit/effect
