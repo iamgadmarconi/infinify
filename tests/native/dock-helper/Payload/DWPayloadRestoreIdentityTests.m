@@ -207,7 +207,7 @@ int main(void) { @autoreleasepool {
     assert(status==DW2_APPLIED && transformWrites==1 && transformReads==2);
     uint64_t generation=v2Generation;unsigned writes=transformWrites,reads=transformReads,identities=identityReads;
     v2Apply(&frame,1,&status);
-    assert(status==DW2_APPLIED && transformWrites==writes && transformReads==reads+1 && identityReads==identities+3 && v2Generation==generation);
+    assert(status==DW2_APPLIED && transformWrites==writes && transformReads==reads+1 && identityReads==identities+2 && v2Generation==generation);
 
     // A changed request retains one set/read pair; there is no speculative
     // pre-read on the ordinary pan/zoom path where every transform changes.
@@ -218,7 +218,7 @@ int main(void) { @autoreleasepool {
     // an unavailable verification read falls back to the guarded set/read pair.
     nativeTransform.tx-=5;writes=transformWrites;reads=transformReads;identities=identityReads;
     v2Apply(&frame,1,&status);
-    assert(status==DW2_APPLIED && transformWrites==writes+1 && transformReads==reads+2 && identityReads==identities+4);
+    assert(status==DW2_APPLIED && transformWrites==writes+1 && transformReads==reads+2 && identityReads==identities+3);
     transformReadFailures=1;writes=transformWrites;reads=transformReads;v2Apply(&frame,1,&status);
     assert(status==DW2_APPLIED && transformWrites==writes+1 && transformReads==reads+2);
 
