@@ -238,11 +238,9 @@ window, event, permission or Dock; the live ones start disposable fixture window
 | `capture-configuration.sh` | capture request and rate state | no |
 | `compositor-lifetime.sh` | the compositor's CPU lifetime fence and per-axis stale-frame geometry | no |
 | `controller-hit.sh` | the controller's `{"hit": null}` answer through the shell's hit reply | no |
-| `desktop-navigation.sh`, `desktop-resize.sh` | the navigation and resize coordinators against the real controller | no |
 | `family-geometry.sh` | renderer queries for window families | no |
 | `ipc-limits.sh` | IPC limits and the atomic screenshot write on the production server and writer | no |
 | `mac-wallpaper-refresh.sh` | the wallpaper refresh timing policy | no |
-| `multitouch-source.sh` | synthetic MultitouchSupport records and the Dock-control decision | no |
 | `native-daemon.sh` | the launch daemon's and Dock reloader's decisions, caller requirement and artifact checks | no |
 | `native-launcher.sh` | the bundled launcher's modes against stub tools and a throwaway HOME | no |
 | `native-decorations.sh`, `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-frame-restore.sh`, `native-input-policy.sh`, `native-placement-validation.sh`, `native-presenter-readiness.sh`, `native-view-transfer.sh` | the native presenter, views, placement, input policy and recovery logic; whole-family frame caps and snapshot retry in `native-presenter-readiness.sh` (read-only window metadata, in-memory submissions) | no |

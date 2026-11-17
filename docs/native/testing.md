@@ -12,11 +12,9 @@ Run the regression a change touches, not the whole set. The scripts build what t
 | `tests/e2e/capture-configuration.sh` | The capture request and rate state |
 | `tests/e2e/compositor-lifetime.sh` | The production CPU lifetime fence of the compositor's resources, and per-axis stale-frame destination/source geometry and uncovered placeholder strips |
 | `tests/e2e/controller-hit.sh` | The real controller's `{"hit": null}` answer through the shell's hit-reply helper, and pick-mode motion (`DWPickMotion`) |
-| `tests/e2e/desktop-navigation.sh`, `tests/e2e/desktop-resize.sh` | The navigation coordinator and the resize coordinator and driver, with the real Rust library |
 | `tests/e2e/family-geometry.sh` | Production renderer queries on family geometry |
 | `tests/e2e/ipc-limits.sh` | DriftWM v0.21.0's IPC limits and the screenshot write, on the production IPC server and PNG writer |
 | `tests/e2e/mac-wallpaper-refresh.sh` | The wallpaper refresh timing policy |
-| `tests/e2e/multitouch-source.sh` | Synthetic MultitouchSupport contact records through the adapter into the recogniser, and the Dock-control decision |
 | `tests/e2e/native-daemon.sh` | The launch daemon's and the Dock reloader's decisions |
 | `tests/e2e/native-display-space-cache.sh`, `tests/e2e/native-placement-validation.sh`, `tests/e2e/native-presenter-readiness.sh`, `tests/e2e/native-view-transfer.sh`, `tests/e2e/native-family-recovery.sh`, `tests/e2e/root-capture-mailbox.sh` | The presenter and its verifiers: display queries, placement validation, ACK readiness, whole-family frame caps and ranking (`DWNativePresenterFrameLimitTests.m` in `native-presenter-readiness.sh`), snapshot retry for existing/absent windows (`DWNativePresenterTests.m`), view transfer, family recovery, the capture mailbox and stale-frame point-size/jitter/reset checks (`root-capture-mailbox.sh`) |
 | `tests/e2e/native-focus.sh`, `tests/e2e/native-frame-restore.sh` | The shipped focus adapter's refusals through its C ABI, and the resize adapter's frame regression |

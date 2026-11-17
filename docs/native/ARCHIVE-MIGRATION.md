@@ -434,13 +434,10 @@ commands; their source lists continue on following lines in those scripts.
 | `compositor-dnd.sh` | 33, 35 |
 | `compositor-lifetime.sh` | 10, 12 |
 | `controller-hit.sh` | 11 |
-| `desktop-navigation.sh` | 8 |
-| `desktop-resize.sh` | 8 |
 | `family-geometry.sh` | 23 |
 | `ipc-limits.sh` | 12 |
 | `live-guest-lib.sh` | 57 |
 | `mac-wallpaper-refresh.sh` | 9 |
-| `multitouch-source.sh` | 14 |
 | `native-chrome-input.sh` | 20 |
 | `native-daemon.sh` | 15, 18, 32 |
 | `native-decorations.sh` | 12 |

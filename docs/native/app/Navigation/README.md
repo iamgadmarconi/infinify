@@ -720,9 +720,9 @@ By the code:
   pending`. Upstream has no such queue. It lasts as long as the first request:
   a fraction of a second for a window that answers, about a second for an
   application that has stopped answering (1.1 seconds in the test, case 15).
-- **The three-second answer for an effect nobody answered** is exercised by
-  the headless coordinator test only (`tests/e2e/desktop-resize.sh`): in the
-  run on windows the adapter's own deadline ended every stalled request first.
+- **The three-second answer for an effect nobody answered** was exercised by
+  a now-retired headless coordinator test; in the run on windows the adapter's
+  own deadline ended every stalled request first.
 - One window at a time. Upstream sizes any number of windows at once; here
   there is one transaction, and a second sizing action is continued, replaced
   or refused as described, never queued. Only a window rule's `size` waits

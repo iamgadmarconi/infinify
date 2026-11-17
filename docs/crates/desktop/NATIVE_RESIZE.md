@@ -264,9 +264,7 @@ refused while the first owns the slot. The shell's `busyWindow` and bounded
 watchdog enforce this lifecycle without waiting for a frame.
 
 Scenarios: the supported readback cases in `crates/desktop/tests/sizes_flow.rs`,
-`crates/desktop/tests/fullscreen_flow.rs`, `crates/desktop/tests/native_resize_flow.rs`, the headless native
-coordinator and standalone metadata oracle in `tests/native/app/Navigation/DWResizeCoordinatorTests.m`,
-and real owned fixture paths `tests/e2e/scoped-sizing.sh`,
+`crates/desktop/tests/fullscreen_flow.rs`, `crates/desktop/tests/native_resize_flow.rs`, and real owned fixture paths `tests/e2e/scoped-sizing.sh`,
 `tests/e2e/scoped-resize-drag.sh`, and `tests/e2e/physical-resize-edge.sh`.
 
 ### Pointer resize

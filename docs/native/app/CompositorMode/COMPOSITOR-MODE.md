@@ -222,8 +222,7 @@ ignored under `target/ipc/wbugs/` (`verified-*`, `check-optical.py`,
 
 `sh tests/e2e/native-resize-presentation.sh` tests the production owner,
 coordinator, and extracted adapter geometry selector with substituted native
-dependencies. `desktop-resize.sh`, `native-frame-restore.sh`, and
-`native-presenter-readiness.sh` cover the touched integration. These deterministic
+dependencies. `native-frame-restore.sh` and `native-presenter-readiness.sh` cover the touched integration. These deterministic
 checks are not optical proof.
 
 Limitations: content is temporarily frozen/stretched while the snapshot bridge
