@@ -19,7 +19,7 @@ typedef NS_ENUM(NSUInteger,DWNavigationActivationCause) {
 @end
 
 // Main-thread synchronous hooks. currentEpoch is a read only, never a command.
-// The five actions contain native scheduling, not policy interpretation.
+// The actions contain native scheduling, not policy interpretation.
 @protocol DWNavigationExecution <NSObject>
 @property(nonatomic,readonly) uint64_t currentEpoch;
 - (void)navigationCancelNativeClick;
@@ -27,6 +27,8 @@ typedef NS_ENUM(NSUInteger,DWNavigationActivationCause) {
 - (void)navigationAnswerEffect:(nullable DWEffect *)effect logical:(BOOL)logical epoch:(uint64_t)epoch;
 - (void)navigationPerformReply:(nullable DWControllerReply *)reply correction:(nullable DWFocusCorrection *)correction prepared:(BOOL)prepared;
 - (void)navigationChanged;
+@optional
+- (void)navigationReconcileNativeFocus;
 @end
 
 @protocol DWNavigationController <DWSceneController>
@@ -57,6 +59,10 @@ typedef NS_ENUM(NSUInteger,DWNavigationActivationCause) {
 - (nullable DWControllerReply *)navigationTickAt:(uint64_t)timestamp;
 - (nullable DWControllerReply *)navigationActivateBinding:(DWSourceBinding *)binding cause:(DWNavigationActivationCause)cause output:(NSNumber *)output;
 - (nullable DWControllerReply *)navigationObserveBinding:(DWSourceBinding *)binding;
+@optional
+// A failed restore could not identify a native window. Keep the ordinary
+// outside-canvas focus state until a later observation can name its binding.
+- (void)nativeFocusUnavailableWithContext:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution;
 @end
 
 @interface DWController (Focus) <DWNavigationController>

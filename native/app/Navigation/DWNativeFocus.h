@@ -45,5 +45,7 @@ bool dw_focus_minimized(DWFocusIdentity identity, bool *minimized);
 DWFocusResult dw_focus_set_minimized(DWFocusIdentity identity, bool minimized, DWFocusGuard guard, void *context);
 DWFocusResult dw_focus_observe(DWFocusIdentity identity);
 DWFocusResult dw_focus_select(DWFocusIdentity identity, DWFocusGuard guard, void *context);
+// Same delivery with a caller-owned time budget, including AX resolution.
+DWFocusResult dw_focus_select_with_timeout(DWFocusIdentity identity, DWFocusGuard guard, void *context, double seconds);
 const char *dw_focus_outcome_name(DWFocusOutcome outcome);
 #endif

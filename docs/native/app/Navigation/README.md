@@ -528,11 +528,21 @@ centre, that display's camera flies to it, at 1:1 unless `[zoom]
 reset_on_activation = false`; a window already wholly visible there is left
 where it is. When an application activates or opens a window without owner
 intent (such as a browser or tool launched by a background agent or `open`),
-neither logical focus nor the camera moves, and if a canvas window held
-confirmed live focus, native focus is restored to it (at most twice per
-5-second burst, stopping immediately if refused). If the frontmost window is
-not on the canvas, the canvas forgets that a canvas window held native focus
-and drops an open cycle without committing it; logical focus stays.
+the camera does not move, and if a canvas window held confirmed live focus,
+native focus is restored to it. There are at most two restore requests per
+process per 5-second burst. Each request has at most three native attempts
+inside a shared one-second deadline, including Accessibility resolution;
+further attempts require that the same intruder is still frontmost. A new
+owner intent cancels this work and clears the burst budget.
+
+If restoring fails or the burst budget is exhausted, an immediate native
+readback reconciles the controller: a managed window is adopted through
+`observe_focus`, without activation or camera motion. If no managed window
+can be identified, the existing outside-canvas state applies: native focus
+observation is cleared and an open cycle is dropped without committing it;
+logical canvas focus stays. Failed-process bookkeeping lasts at most five
+seconds, so a window attached shortly afterwards can be adopted without a pan.
+An owner click, application-switch or launch intent, or `msg focus` clears it.
 
 ## Window sizing actions
 

@@ -14,10 +14,11 @@ same controller.
 
 The native adapter reports switch held/released, system-UI intent, a clicked
 logical window, launch intent, application launch/activation, window arrival,
-native observation, returned focus work and its answer. Delayed application and
+native observation, an unavailable failed-restore readback, returned focus
+work and its answer. Delayed application and
 observation facts retain their event timestamp as well as the supplied read
 timestamp. Replies contain decisions (`unsolicited`, `cancel_work`, `observe`,
-`advance`, `changed`) or an ordered list of six driver steps: cancel click,
+`reconcile`, `advance`, `changed`) or an ordered list of six driver steps: cancel click,
 advance epoch, send command, answer/complete an effect (captured or current
 epoch), perform the received reply, and changed. Ordinary observation facts
 change policy-private state only; focus, MRU and camera change in the returned
@@ -49,7 +50,7 @@ into one call once that seam can cancel the driver's epoch from inside it.
 The rule relocation (old coordinator methods below are in
 `native/app/Navigation/DWNavigationCoordinator.m`):
 
-| Rule, unchanged | Previous location | Current location in `focus_policy.rs` |
+| Rule | Previous location | Current location in `focus_policy.rs` |
 | --- | --- | --- |
 | Facts and receipts mutate only serde-skipped policy state; failed facts restore that small state; no controller clone, settlement or snapshot-cache invalidation | native property-only bookkeeping / cached idle observation | direct `execute` policy path; native query list |
 | Reply policy work is gated by a focus effect (`effect` / `effects` via `focusEffect`), `background`, or `focus_on_open_suppressed`; other replies skip the fact | coordinator `perform:` focus-effect gate and arrival protection | `FocusFact::Reply`, native `perform:` |
@@ -61,7 +62,8 @@ The rule relocation (old coordinator methods below are in
 | Process activation 4 s, attach 15 s; delayed facts check event or read time; PID reuse rejected | `authorizeProcess:` | `classify_process` |
 | Intent consumed before attach; survives attach failure; driver epoch invalidated first | `Desktop+Windows.m` plus `consumeAttachIntentForPID:` | `WindowArrived`, `classify_process`; coordinator `attach:` relays cancellation then attaches |
 | Consumed process attach authorization capped at now + 1.5 s; bundle consumed on authorization | `authorizeProcess:` | `classify_process` |
-| Restore at most twice per PID per 5 s, age strictly greater than 5 s expires; failure stops retries | `restoreConfirmedFocus:`, `complete:`, `pruneIntentsAt:` | `plan_correction`, `observation_receipt`, `Answer`, `prune` |
+| Restore requests at most twice per PID per 5 s, age strictly greater than 5 s expires; each request has at most three native attempts within one second, only retrying the same frontmost intruder | `restoreConfirmedFocus:`, `complete:`, `pruneIntentsAt:` | `plan_correction`, `observation_receipt`, `Answer`, `prune`; bounded native delivery stays in the coordinator |
+| Owner-approved fix: failed or exhausted restores adopt a managed native window through `observe_focus` without activation/pan; an unavailable native readback uses existing `focus_lost`; a fresh owner click also clears restore bookkeeping | failed restores previously rejected observations indefinitely until owner action | `observe_owner_focus_from`, `NativeUnavailable`, `WindowClick` |
 | Background cohorts, exact bindings, 1.5 s lifetime, input cancellation, family observations | native protection/observe methods | `preserve_arrival`, `cancel_background`, `observe_owner_focus` |
 | Sibling placement else immediately outside viewport; stack below focused; suppress focus/navigation | `lifecycle.rs` unsolicited placement and settlement | `unsolicited_spawn`, `settle_arrival` |
 | Observation epoch precedes focus/camera command; pending effects answered against captured epoch; nil fact reproduces nil-snapshot fall-through (cancel click, advance, `focus_lost`, changed) | coordinator `observe` | `observe_owner_focus`, `observation_receipt`; native six-step dispatch |

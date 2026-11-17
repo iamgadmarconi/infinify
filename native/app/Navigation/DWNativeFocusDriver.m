@@ -33,9 +33,9 @@ static bool allowed(DWFocusIdentity i,void *context){
     // The window must still be that process's; where and how large it is may have changed since the intent (DWNativeFocus.m, allowed()).
     CGRect bounds;if(!dw_focus_owner(i,&bounds)){lease.invalid=YES;return false;}lease.bounds=bounds;
     pid_t pid=NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
-    if(pid==i.pid){lease.reachedTarget=YES;return lease.guard();}
+    if(pid==i.pid){if(!lease.reachedTarget&&getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: focus lease reached getter target=%d foreground=%d age_ms=%.2f\n",i.pid,lease.foreground,(CACurrentMediaTime()-lease.made)*1000);lease.reachedTarget=YES;return lease.guard();}
     uint64_t s,u;BOOL fresh=dw_focus_birth(pid,&s,&u);
-    BOOL valid=!lease.reachedTarget&&fresh&&((pid==lease.foreground&&s==lease.seconds&&u==lease.microseconds)||ours(lease,pid,s,u))&&lease.guard();if(!valid)lease.invalid=YES;return valid;
+    BOOL valid=!lease.reachedTarget&&fresh&&((pid==lease.foreground&&s==lease.seconds&&u==lease.microseconds)||ours(lease,pid,s,u))&&lease.guard();if(!valid){if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: focus lease denied target=%d pid=%d foreground=%d reached=%d fresh=%d age_ms=%.2f\n",i.pid,pid,lease.foreground,lease.reachedTarget,fresh,(CACurrentMediaTime()-lease.made)*1000);lease.invalid=YES;}return valid;
     }
 }
 static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__bridge DWFocusLease *)context).guard();}
@@ -51,7 +51,7 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
             NSRunningApplication *app=note.userInfo[NSWorkspaceApplicationKey];pid_t pid=app.processIdentifier;uint64_t s,u;BOOL fresh=dw_focus_birth(pid,&s,&u);
             @synchronized(lease){BOOL target=fresh&&pid==lease.target.pid&&s==lease.target.seconds&&u==lease.target.microseconds;
                 BOOL original=fresh&&pid==lease.foreground&&s==lease.seconds&&u==lease.microseconds;
-                if(target)lease.reachedTarget=YES;else if((!original&&!(fresh&&ours(lease,pid,s,u)))||lease.reachedTarget)lease.invalid=YES;
+                if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: focus lease observer target=%d note_pid=%d getter=%d reached=%d original=%d age_ms=%.2f\n",lease.target.pid,pid,NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,lease.reachedTarget,original,(CACurrentMediaTime()-lease.made)*1000);if(target)lease.reachedTarget=YES;else if((!original&&!(fresh&&ours(lease,pid,s,u)))||lease.reachedTarget)lease.invalid=YES;
             }
         }];
     }return self;
@@ -88,12 +88,20 @@ static bool driverGuard(DWFocusIdentity i,void *context){(void)i;return ((__brid
     return ^BOOL{return allowed(i,(__bridge void *)lease);};
 }
 - (BOOL)select:(NSDictionary *)value guard:(DWGuard)guard {
+    return [self select:value guard:guard timeout:1.5];
+}
+- (BOOL)select:(NSDictionary *)value guard:(DWGuard)guard timeout:(double)seconds {
     DWFocusLease *lease=[DWFocusLease new];lease.guard=guard;
     // The coordinator captured ownership/foreground authorization at intent time.
-    DWFocusResult result=dw_focus_select(identity(value),driverGuard,(__bridge void *)lease);
+    DWFocusResult result=dw_focus_select_with_timeout(identity(value),driverGuard,(__bridge void *)lease,seconds);
     // INFINIFY_DEBUG in the environment: what each native focus request came to, on stderr.
-    if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native focus pid=%d wid=%u outcome=%s focused=%d ax_error=%d frontmost=%d brought_forward=%d\n",(int)[value[@"pid"]intValue],[value[@"wid"]unsignedIntValue],dw_focus_outcome_name(result.outcome),(int)result.focused,(int)result.ax_error,(int)NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,(int)result.brought_forward);
+    if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"debug: native focus pid=%d wid=%u outcome=%s focused=%d ax_error=%d frontmost=%d brought_forward=%d mutation_attempted=%d\n",(int)[value[@"pid"]intValue],[value[@"wid"]unsignedIntValue],dw_focus_outcome_name(result.outcome),(int)result.focused,(int)result.ax_error,(int)NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,(int)result.brought_forward,(int)result.mutation_attempted);
     return result.focused&&guard();
+}
+- (NSDictionary *)observeForRestore {
+    // Restoration needs keyboard identity, not another AXWindows/geometry
+    // audit. Reuse the exact, birth/ownership-validated 50 ms shortcut read.
+    DWFocusIdentity i;return dw_focus_frontmost(&i)?json(i):nil;
 }
 - (NSDictionary *)observe {
     // One foreground AX lookup, followed by one independently validated exact readback.

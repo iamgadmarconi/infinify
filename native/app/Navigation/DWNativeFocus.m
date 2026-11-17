@@ -227,9 +227,12 @@ static AXUIElementRef forward(DWFocusIdentity i,DWFocusGuard guard,void *ctx,dou
     }
     return NULL;
 }
-DWFocusResult dw_focus_select(DWFocusIdentity i,DWFocusGuard guard,void *ctx) { @autoreleasepool {
-    DWFocusResult r={.outcome=DWFocusInvalid};if(!guard)return r;
-    double end=now()+1.5;AXUIElementRef w=resolve(i,end,&r);
+DWFocusResult dw_focus_select(DWFocusIdentity i,DWFocusGuard guard,void *ctx) {
+    return dw_focus_select_with_timeout(i,guard,ctx,1.5);
+}
+DWFocusResult dw_focus_select_with_timeout(DWFocusIdentity i,DWFocusGuard guard,void *ctx,double seconds) { @autoreleasepool {
+    DWFocusResult r={.outcome=DWFocusInvalid};if(!guard||!isfinite(seconds)||seconds<=0)return r;
+    double end=now()+fmin(seconds,1.5);AXUIElementRef w=resolve(i,end,&r);
     if(!w&&r.outcome==DWFocusMissing)w=forward(i,guard,ctx,end,&r);
     if(!w)return r;
     if(!allowed(i,guard,ctx,end,&r)){CFRelease(w);return r;}

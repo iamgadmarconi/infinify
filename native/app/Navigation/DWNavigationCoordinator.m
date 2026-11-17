@@ -2,6 +2,7 @@
 #import "DWNavigationCoordinator.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 // These conversions describe the independently observed native driver's identity
 // schema, not controller scene/reply dictionaries. Projections are made on main.
 static DWIdentity *observedIdentity(NSDictionary *value) {
@@ -32,7 +33,7 @@ static BOOL sameNativeIdentity(NSDictionary *a,NSDictionary *b) {
 @property NSLock *lock;
 @property uint64_t epoch;
 @property BOOL closed, observing, flying;
-@property BOOL again;
+@property BOOL again,reconcileAgain;
 @property DWEffect *work;
 @property NSUInteger held;
 @property DWSourceBinding *nativeClick;
@@ -109,23 +110,52 @@ static BOOL sameNativeIdentity(NSDictionary *a,NSDictionary *b) {
     NSDictionary *arrival=driverIdentity(arrivalIdentity),*target=driverIdentity(effect.identity);
     pid_t intruderPID=isCorrection?([decision.intruderPID intValue]?:[arrivalIdentity.pid intValue]):0,targetPID=[effect.identity.pid intValue];
     uint64_t startedAt=isCorrection?[decision.startedAt unsignedLongLongValue]:0;
+    if(isCorrection)deadline=MIN(deadline,(startedAt?:self.clock())+1000000000);
     DWGuard authorization=isCorrection&&intruderPID>0&&[self.driver respondsToSelector:@selector(authorization:overridingPID:)]
         ?[self.driver authorization:target overridingPID:intruderPID]:[self.driver authorization:target];
     self.work=effect;
+    uint64_t requestedAt=self.clock();
     self.worker(^{if(![self current:epoch])return;
+        uint64_t beganAt=self.clock();
         BOOL stillArrival=YES;
-        if(arrival)stillArrival=sameNativeIdentity([self.driver observe],arrival);
+        if(arrival)stillArrival=sameNativeIdentity([self restoreObservation],arrival);
         else if(intruderPID>0){
-            NSDictionary *obs=[self.driver observe];
+            NSDictionary *obs=[self restoreObservation];
             if(obs)stillArrival=[obs[@"pid"]intValue]==intruderPID||[obs[@"pid"]intValue]==targetPID;
             else if([self.driver respondsToSelector:@selector(frontmostPID)]){pid_t front=[self.driver frontmostPID];stillArrival=front==intruderPID||front==targetPID;}
         }
-        BOOL success=stillArrival&&[self.driver select:target guard:^BOOL{return [self current:epoch]&&self.clock()<deadline&&authorization&&authorization();}];
+        BOOL success=NO;
+        NSUInteger attempts=0;
+        DWGuard attemptAuthorization=authorization;
+        while(stillArrival&&[self current:epoch]&&self.clock()<deadline){
+            if(attempts){
+                // Only retry the same intruder, never pull focus from a third
+                // application or from a target the owner has already reached.
+                if(![self.driver respondsToSelector:@selector(frontmostPID)]||![self.driver respondsToSelector:@selector(authorization:overridingPID:)]||[self.driver frontmostPID]!=intruderPID)break;
+                usleep(75000);
+                if(![self current:epoch]||self.clock()>=deadline||[self.driver frontmostPID]!=intruderPID)break;
+                attemptAuthorization=[self.driver authorization:target overridingPID:intruderPID];
+            }
+            DWGuard guard=^BOOL{return [self current:epoch]&&self.clock()<deadline&&attemptAuthorization&&attemptAuthorization();};
+            ++attempts;
+            if(isCorrection&&[self.driver respondsToSelector:@selector(select:guard:timeout:)]){
+                uint64_t attemptAt=self.clock();if(attemptAt>=deadline)break;
+                double remaining=(double)(deadline-attemptAt)/1e9;
+                success=remaining>0&&[self.driver select:target guard:guard timeout:remaining];
+            }else success=[self.driver select:target guard:guard];
+            if(success||!isCorrection||attempts>=3)break;
+        }
         if(isCorrection&&getenv("INFINIFY_DEBUG")){
             uint64_t doneAt=self.clock();double bounceMs=startedAt&&doneAt>=startedAt?(double)(doneAt-startedAt)/1e6:0;
-            fprintf(stderr,"debug: focus restore target_pid=%d target_wid=%u intruder_pid=%d success=%d bounce_ms=%.2f\n",(int)targetPID,[target[@"wid"]unsignedIntValue],(int)(intruderPID?:[arrival[@"pid"]intValue]),(int)success,bounceMs);
+            fprintf(stderr,"debug: focus restore target_pid=%d target_wid=%u intruder_pid=%d success=%d bounce_ms=%.2f request_ms=%.2f dispatch_ms=%.2f delivery_ms=%.2f attempts=%lu\n",(int)targetPID,[target[@"wid"]unsignedIntValue],(int)(intruderPID?:[arrival[@"pid"]intValue]),(int)success,bounceMs,startedAt&&requestedAt>=startedAt?(double)(requestedAt-startedAt)/1e6:0,(double)(beganAt-requestedAt)/1e6,(double)(doneAt-beganAt)/1e6,(unsigned long)attempts);
         }
-        self.main(^{[self complete:effect epoch:epoch success:success];});
+        self.main(^{
+            if(![self current:epoch])return;
+            [self complete:effect epoch:epoch success:success];
+            // The failed answer exhausts this burst's restore budget. Read back
+            // promptly so policy adopts native truth without moving the camera.
+            if(isCorrection&&!success)[self observeAfterRestore:YES];
+        });
     });
 }
 - (DWControllerReply *)navigate:(DWControllerReply *(^)(void))command {
@@ -169,7 +199,7 @@ static BOOL sameNativeIdentity(NSDictionary *a,NSDictionary *b) {
     if(!self.filterUnsolicitedActivations||!self.enabled||self.closed||!regular)return;
     [self application:pid birth:birth bundle:bundle activated:YES at:at];
 }
-// Five synchronous actions. The controller alone interprets policy steps.
+// Synchronous actions. The controller alone interprets policy steps.
 - (uint64_t)currentEpoch { return self.epoch; }
 - (void)navigationCancelNativeClick { [self cancelNativeClick]; }
 - (void)navigationAdvanceReleasingHold:(BOOL)releaseHold { [self advance];if(releaseHold)self.held=0; }
@@ -180,6 +210,7 @@ static BOOL sameNativeIdentity(NSDictionary *a,NSDictionary *b) {
     if(prepared)[self perform:reply decision:correction];else [self perform:reply];
 }
 - (void)navigationChanged { if(self.changed)self.changed(); }
+- (void)navigationReconcileNativeFocus { [self observeAfterRestore:YES]; }
 - (void)hold:(NSUInteger)modifiers { self.held=modifiers; }
 - (BOOL)poll:(NSUInteger)down {
     if(!self.enabled||self.closed||!self.held)return NO;
@@ -225,15 +256,28 @@ static BOOL sameNativeIdentity(NSDictionary *a,NSDictionary *b) {
     }
     if(self.changed)self.changed();return YES;
 }
-- (void)observe {
+- (NSDictionary *)restoreObservation {
+    return [self.driver respondsToSelector:@selector(observeForRestore)]?[self.driver observeForRestore]:[self.driver observe];
+}
+- (void)observe { [self observeAfterRestore:NO]; }
+- (void)observeAfterRestore:(BOOL)restoring {
     if(!self.enabled||self.closed)return;
-    if(self.observing){self.again=YES;return;}
+    if(self.observing){self.again=YES;self.reconcileAgain|=restoring;return;}
+    BOOL reconcile=restoring||self.reconcileAgain;self.reconcileAgain=NO;
     self.observing=YES;
     uint64_t epoch=self.epoch;
     DWObservedBinding resolve=self.observationBinding?self.observationBinding():nil;
-    self.worker(^{NSDictionary *nativeActual=[self.driver observe];uint64_t observedAt=self.clock();DWSourceBinding *family=nativeActual&&resolve?resolve(nativeActual):nil;self.main(^{
+    self.worker(^{
+        NSDictionary *nativeActual=reconcile?[self restoreObservation]:[self.driver observe];
+        for(NSUInteger attempt=1;reconcile&&!nativeActual&&attempt<3&&[self current:epoch];++attempt){usleep(25000);nativeActual=[self restoreObservation];}
+        uint64_t observedAt=self.clock();DWSourceBinding *family=nativeActual&&resolve?resolve(nativeActual):nil;self.main(^{
         self.observing=NO;if(self.again){self.again=NO;self.main(^{[self observe];});}
-        if(!nativeActual||![self current:epoch])return;
+        if(![self current:epoch])return;
+        if(!nativeActual){
+            if(reconcile&&[self.controller respondsToSelector:@selector(nativeFocusUnavailableWithContext:execution:)])
+                [self.controller nativeFocusUnavailableWithContext:self.policyContext execution:self];
+            return;
+        }
         DWIdentity *actual=observedIdentity(nativeActual);
         if(!family&&self.nativeClick){
             DWScene *snapshot=[self.controller navigationScene];DWSourceBinding *match=nil;

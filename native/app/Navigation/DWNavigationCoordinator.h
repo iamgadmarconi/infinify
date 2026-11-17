@@ -15,6 +15,8 @@ typedef DWSourceBinding *(^DWObservedBinding)(NSDictionary *observed);
 - (BOOL)select:(NSDictionary *)identity guard:(DWGuard)guard;
 - (NSDictionary *)observe;
 @optional
+- (NSDictionary *)observeForRestore;
+- (BOOL)select:(NSDictionary *)identity guard:(DWGuard)guard timeout:(double)seconds;
 - (DWGuard)authorization:(NSDictionary *)identity overridingPID:(pid_t)intruderPID;
 - (pid_t)frontmostPID;
 @end

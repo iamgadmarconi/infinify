@@ -69,6 +69,8 @@
     if([decision[@"changed"]boolValue])[execution navigationChanged];
     // Capture only after the preceding synchronous hooks, as consumePolicy did.
     [self navigationSteps:decision[@"steps"] capturedEpoch:execution.currentEpoch receivedReply:nil context:context execution:execution];
+    if([decision[@"reconcile"]boolValue]&&[execution respondsToSelector:@selector(navigationReconcileNativeFocus)])
+        [execution navigationReconcileNativeFocus];
 }
 - (DWControllerReply *)attach:(DWAttachRequest *)request arrived:(BOOL)arrived adopted:(BOOL)adopted utility:(BOOL)utility context:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution {
     NSDictionary *command=[self attachCommandDictionary:request];
@@ -115,6 +117,9 @@
 }
 - (void)focusAnswerBegan:(DWEffect *)effect success:(BOOL)success context:(DWFocusPolicyContext *)context {
     [self navigationPolicyFact:@{@"kind":@"answer",@"effect_id":effect.rawDictionary[@"effect_id"],@"success":@(success)} context:context];
+}
+- (void)nativeFocusUnavailableWithContext:(DWFocusPolicyContext *)context execution:(id<DWNavigationExecution>)execution {
+    [self navigationConsumePolicy:[self navigationPolicyFact:@{@"kind":@"native_unavailable"} context:context] context:context execution:execution];
 }
 - (void)focusConfirmed:(DWIdentity *)identity context:(DWFocusPolicyContext *)context {
     [self navigationPolicyFact:@{@"kind":@"confirmed",@"identity":identity.rawDictionary} context:context];

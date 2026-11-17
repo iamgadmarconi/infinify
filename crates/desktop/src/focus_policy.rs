@@ -81,6 +81,7 @@ pub(crate) enum FocusFact {
         protect: bool,
     },
     ClearBackground,
+    NativeUnavailable,
     ResetPolicy,
     CancelBackground,
     Answer {
@@ -153,6 +154,11 @@ impl Controller {
                 return Ok(json!({"unsolicited":!authorized,"cancel_work":cancel}));
             }
             FocusFact::ClearBackground => self.clear_background(),
+            FocusFact::NativeUnavailable => {
+                self.clear_background();
+                self.focus.policy.confirmed_process = None;
+                return Ok(steps(reject_observation(true)));
+            }
             FocusFact::ResetPolicy => self.focus.policy = FocusPolicy::default(),
             FocusFact::CancelBackground => {
                 let cancel = self.cancel_background();
@@ -244,6 +250,18 @@ impl Controller {
                 {
                     return Ok(steps(reply));
                 }
+                if activated
+                    && self
+                        .focus
+                        .policy
+                        .restores
+                        .get(&process.pid)
+                        .is_some_and(|r| r.failed || r.count >= 2)
+                {
+                    // Exhaustion is also a completed correction: immediately
+                    // reconcile even if this application has no AX window.
+                    return Ok(json!({"reconcile":true}));
+                }
             }
             FocusFact::ObservationReceipt { context, reply } => {
                 return self.observation_receipt(now, context, reply);
@@ -256,6 +274,9 @@ impl Controller {
             } => return self.observe_owner_focus(now, actual, family, event_at, output),
 
             FocusFact::WindowClick { window } => {
+                // A fresh owner click starts a new focus decision, not the
+                // previous application's failed restoration burst.
+                self.focus.policy.restores.clear();
                 if window.is_some()
                     && self.focus.observed_native.as_ref().map(|e| e.window) == window
                 {
@@ -1011,8 +1032,29 @@ impl Controller {
                     prefix.extend(result);
                     return Ok(steps(prefix));
                 }
-                self.focus.policy.confirmed_process = None;
-                prefix.extend(reject_observation(focus_was_set));
+                if !is_family
+                    && self.source_interactive(b.window)
+                    && self
+                        .focus
+                        .policy
+                        .restores
+                        .get(&actual.pid)
+                        .is_some_and(|r| r.failed || r.count >= 2)
+                {
+                    // Giving up must not leave the scene claiming that the
+                    // previous window still owns the keyboard. Observation,
+                    // unlike activation, never reveals or pans to this window.
+                    self.focus.policy.confirmed_process = Some(Process::from(&actual));
+                    prefix.extend([
+                        ObservationStep::CancelClick,
+                        advance(),
+                        send(binding_command("observe_focus", b)),
+                        ObservationStep::Changed,
+                    ]);
+                } else {
+                    self.focus.policy.confirmed_process = None;
+                    prefix.extend(reject_observation(focus_was_set));
+                }
                 return Ok(steps(prefix));
             }
         }
