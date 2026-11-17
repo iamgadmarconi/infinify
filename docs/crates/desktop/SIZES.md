@@ -168,8 +168,17 @@ restore ([below](#the-size-a-toggle-restores)).
 ### IPC `{"Resize":{window?,to?}}`
 
 Upstream `cmd_resize`. Without `to` the reply is the frame's `Size`, as before.
-With `to` the reply echoes the size asked for, and the window keeps its center:
-the top-left moves by half the difference in whole pixels, toward zero. The
+With `to` the controller acknowledges the size asked for. The native socket
+defers its client reply until the transaction ends (at most two seconds):
+success prints the actual size; a refusal or clamp is an error naming the
+requested and actual sizes, with no success output. Timeout reports the last
+size without cancelling the transaction; a later write on that window
+supersedes the earlier waiting caller. Fill and fit `msg action` replies still
+acknowledge scheduling, not native completion. None of these waits blocks other
+IPC clients or changes bound mouse/keyboard actions.
+
+The window keeps its center: the top-left moves by half the difference in
+whole pixels, toward zero. The
 difference is measured from the size **last asked for** while the window's size
 still reads as an answer to it (upstream `requested_element_size` and
 `PendingResize::is_live`), so an identical request is a no-op rather than a

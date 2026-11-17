@@ -26,6 +26,10 @@
 - (NSNumber *)busyWindow;
 - (DWControllerReply *)request:(DWResizeRequest)operation;
 - (void)consume:(DWControllerReply *)reply;
+// IPC resize writes wait at most two seconds for the native transaction, never
+// blocking main or cancelling native work. A newer write supersedes the waiter.
+// Completion is an external Ok(Size) or Err reply, not a controller command.
+- (void)replyForResizeWindow:(NSNumber *)window requested:(CGSize)requested completion:(void (^)(NSDictionary *reply))completion;
 // Returns the sizing effect (or nil), preserving the action reply continuation.
 - (DWSizeEffect *)consumeSize:(DWControllerReply *)reply;
 - (BOOL)sizing;

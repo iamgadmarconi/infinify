@@ -1009,7 +1009,9 @@ impl Controller {
             // pointer's lifetime. Keep its queued motion and continue from
             // the size committed above while the grab is still held.
             t.uncertain_mutation = false;
-            if !result.observed || !t.interactive || t.released || t.cancelled {
+            let continue_pointer = t.interactive && !t.released && !t.cancelled;
+            let continue_queued = !t.interactive && !t.cancelled && t.coalesced_latest.is_some();
+            if !result.observed || !(continue_pointer || continue_queued) {
                 t.coalesced_latest = None;
                 t.phase = if result.observed && !t.cancelled {
                     Phase::Complete
@@ -1027,7 +1029,10 @@ impl Controller {
             t.last_sent = None;
         }
         if t.uncertain_mutation {
-            if !t.interactive || t.released || t.cancelled {
+            // A newer command may have replaced the in-flight target.
+            // Retain it through the diagnostic, but never retry the uncertain
+            // setter itself without a distinct queued request.
+            if t.cancelled || (t.interactive && t.released) {
                 t.coalesced_latest = None;
             }
             // Exactly one diagnostic read follows an ambiguous setter.

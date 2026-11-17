@@ -173,7 +173,10 @@ An attempted setter without a trustworthy observation emits exactly one
 read-only diagnostic effect. A successful read commits the actual size. A
 still-held pointer grab continues from that size, including motion queued
 during the setter/read; a matching read counts as applied, not as release.
-A released grab or non-pointer size request ends as before. A failed read
+A released grab or non-pointer size request with no newer queued target ends
+as before. A newer non-pointer target queued behind the uncertain setter is
+retained through the diagnostic and issued once on a successful read; the
+uncertain target itself is never retried by this path. A failed read
 ends the transaction with `the window did not answer the size request in time`.
 This includes AX CannotComplete (-25204): that setter error alone does not
 end a held grab. A setter may land later; that is an external native size

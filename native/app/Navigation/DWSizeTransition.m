@@ -44,6 +44,7 @@ static NSDictionary *DWSizeNativeIdentity(DWIdentity *identity) {
 @property NSNumber *nativeResizeLiveTransaction;
 @property NSNumber *resizeSavedTransaction;
 @property NSNumber *sizeTransaction; // the transaction a sizing action's effect last named
+@property NSMutableDictionary<NSNumber *,NSDictionary *> *ipcResizeReplies;
 @property (readwrite) NSDictionary *fillHandoff;
 @property NSDictionary *nativeRestoreDeferred;
 @property NSArray *nativeFillBackgroundTrace;
@@ -101,8 +102,71 @@ static NSDictionary *DWSizeNativeIdentity(DWIdentity *identity) {
 - (NSNumber *)busyWindow {return [self.resize busyWindow];}
 - (DWControllerReply *)request:(DWResizeRequest)operation {return [self.resize request:operation];}
 - (void)consume:(DWControllerReply *)reply {[self.resize consume:reply];}
+- (void)finishResizeReply:(NSDictionary *)held reply:(NSDictionary *)reply {
+    NSNumber *window=held[@"window"];
+    if(self.ipcResizeReplies[window]!=held)return;
+    [self.ipcResizeReplies removeObjectForKey:window];
+    void (^completion)(NSDictionary *)=held[@"completion"];completion(reply);
+}
+- (void)checkResizeReply:(NSMutableDictionary *)held {
+    NSNumber *window=held[@"window"];
+    if(self.ipcResizeReplies[window]!=held)return;
+    DWScene *snapshot=[self.desktop sizeTransitionSnapshot];DWWindow *record=nil;
+    for(DWWindow *candidate in snapshot.windows)if([candidate.window isEqual:window]){record=candidate;break;}
+    NSString *failure=nil;
+    if(!self.desktop||self.desktop.cleaning)failure=@"resize cancelled during shutdown";
+    else if(!record.source||![record.source.identity isEqual:held[@"identity"]]||![record.source.generation isEqual:held[@"generation"]]){
+        CGSize last=[held[@"last_read"]sizeValue];
+        failure=[NSString stringWithFormat:@"the resized window is gone; last read size is %gx%g",last.width,last.height];
+    }
+    if(!failure&&record.source.observationKnown.boolValue)held[@"last_read"]=[NSValue valueWithSize:record.source.nativeObservedRect.size];
+    CGSize requested=[held[@"requested"]sizeValue];
+    DWResizeTransaction *transaction=snapshot.nativeResize;
+    BOOL same=[transaction.window isEqual:window]&&[transaction.transaction isEqual:held[@"transaction"]];
+    if(!failure&&held[@"transaction"]!=NSNull.null&&[transaction.window isEqual:window]
+        &&transaction.latestRequestedPresence==DWValuePresent
+        &&(!same||!CGSizeEqualToSize(transaction.latestRequested,requested)))failure=@"resize was superseded by another size request";
+    BOOL live=same&&(transaction.pendingEffectPresence==DWValuePresent||transaction.uncertainMutation.boolValue
+        ||(![transaction.phase isEqual:@"complete"]&&![transaction.phase isEqual:@"failed"]));
+    BOOL expired=CACurrentMediaTime()>=[held[@"deadline"]doubleValue];
+    if(!failure&&live&&!expired){
+        __weak DWSizeTransition *weak=self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[weak checkResizeReply:held];});
+        return;
+    }
+    CGSize actual=record.source.observationKnown.boolValue?record.source.nativeObservedRect.size:record.worldRect.size;
+    if(!failure&&live)failure=[NSString stringWithFormat:@"resize did not settle; last known size is %gx%g",actual.width,actual.height];
+    if(!failure&&same&&[transaction.phase isEqual:@"failed"]&&!transaction.lastResult.observed.boolValue)
+        failure=[NSString stringWithFormat:@"resize failed; last read size is %gx%g",actual.width,actual.height];
+    if(!failure&&!CGSizeEqualToSize(actual,requested))failure=[NSString stringWithFormat:@"window did not accept %gx%g; it is %gx%g",requested.width,requested.height,actual.width,actual.height];
+    if(!failure&&!record.source.observationKnown.boolValue)failure=@"the window did not answer the size request";
+    if(!failure&&same&&[transaction.phase isEqual:@"failed"])failure=[NSString stringWithFormat:@"resize failed; the window is %gx%g",actual.width,actual.height];
+    [self finishResizeReply:held reply:failure?@{@"Err":failure}:@{@"Ok":@{@"Size":@{@"width":@(llround(actual.width)),@"height":@(llround(actual.height))}}}];
+}
+- (void)replyForResizeWindow:(NSNumber *)window requested:(CGSize)requested completion:(void (^)(NSDictionary *))completion {
+    if(!self.ipcResizeReplies)self.ipcResizeReplies=[NSMutableDictionary dictionary];
+    NSDictionary *previous=self.ipcResizeReplies[window];
+    if(previous)[self finishResizeReply:previous reply:@{@"Err":@"resize was superseded by another size request"}];
+    DWScene *snapshot=[self.desktop sizeTransitionSnapshot];DWSource *source=nil;CGSize lastKnown=CGSizeZero;
+    for(DWWindow *record in snapshot.windows)if([record.window isEqual:window]){
+        source=record.source;lastKnown=source.observationKnown.boolValue?source.nativeObservedRect.size:record.worldRect.size;break;
+    }
+    if(!source.identity||!source.generation){completion(@{@"Err":@"the resized window is gone"});return;}
+    DWResizeTransaction *transaction=snapshot.nativeResize;
+    BOOL live=transaction&&(transaction.pendingEffectPresence==DWValuePresent||transaction.uncertainMutation.boolValue
+        ||(![transaction.phase isEqual:@"complete"]&&![transaction.phase isEqual:@"failed"]));
+    NSMutableDictionary *held=[@{@"window":window,@"identity":source.identity,@"generation":source.generation,
+        @"transaction":(live&&[transaction.window isEqual:window]&&CGSizeEqualToSize(transaction.latestRequested,requested))?transaction.transaction:NSNull.null,
+        @"requested":[NSValue valueWithSize:requested],@"last_read":[NSValue valueWithSize:lastKnown],
+        @"deadline":@(CACurrentMediaTime()+2),@"completion":[completion copy]}mutableCopy];
+    self.ipcResizeReplies[window]=held;[self checkResizeReply:held];
+}
+
 - (void)cancel {[self.resize cancel];}
-- (void)shutdown {[self.resize shutdown];}
+- (void)shutdown {
+    [self.resize shutdown];
+    for(NSDictionary *held in self.ipcResizeReplies.allValues)[self finishResizeReply:held reply:@{@"Err":@"resize cancelled during shutdown"}];
+}
 - (void)reap {[self.resize reap];}
 - (void)suspendPresentation {
     self.nativeResizePresentation.retired=nil; // never admit the waiting next transaction during teardown

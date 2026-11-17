@@ -365,9 +365,19 @@ impl Controller {
     ) -> Value {
         let mut next = self.clone();
         let mut outcome = Outcome::default();
+        let mut resize_window = None;
         let answer = serde_json::from_value::<Request>(request)
             .map_err(|e| format!("invalid request: {e}"))
-            .and_then(|request| next.dispatch(output, request, pointer, &mut outcome))
+            .and_then(|request| {
+                if let Request::Resize {
+                    window,
+                    to: Some(_),
+                } = &request
+                {
+                    resize_window = next.select(window.as_ref()).ok();
+                }
+                next.dispatch(output, request, pointer, &mut outcome)
+            })
             .and_then(|answer| {
                 next.scene
                     .validate()
@@ -389,7 +399,15 @@ impl Controller {
                 json!(Reply::Err(error))
             }
         };
-        let data = json!({"reply":reply,"effects":outcome.effects,"dirty":outcome.dirty,"navigation":outcome.navigation});
+        let mut data = json!({"reply":reply,"effects":outcome.effects,"dirty":outcome.dirty,"navigation":outcome.navigation});
+        // The shell resolves a resize write only after its native transaction
+        // settles. Preserve the selected window even for an identical request
+        // that emits no effect; its current size may differ from the request.
+        if reply.get("Ok").is_some()
+            && let Some(window) = resize_window
+        {
+            data["window"] = json!(window);
+        }
         super::sizes::carry(data, outcome.resize)
     }
     fn dispatch(

@@ -113,6 +113,16 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     // A controller-level refusal still answers the client and leaves the resting status alone.
     if(!data.externalReplyObject){NSString *error=data?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;return ipcError(error);}
     [self applyReply:data];
+    // Resize's immediate controller reply acknowledges a request, not an AX
+    // result. Only socket writes wait; bound sizing actions keep their path.
+    NSDictionary *resize=DWTyped(DWTyped(request,NSDictionary.class)[@"Resize"],NSDictionary.class);
+    NSArray *size=DWTyped(resize[@"to"],NSArray.class);
+    if(data.window&&size.count==2&&DWTyped(data.externalReplyObject,NSDictionary.class)[@"Ok"]){
+        [self.sizeTransition replyForResizeWindow:data.window requested:CGSizeMake([size[0]doubleValue],[size[1]doubleValue]) completion:^(NSDictionary *reply){
+            deferred([NSJSONSerialization dataWithJSONObject:reply options:NSJSONWritingWithoutEscapingSlashes error:nil]);
+        }];
+        return nil;
+    }
     for(NSString *first in data.subscribeLines){*subscribe=YES;*event=[first dataUsingEncoding:NSUTF8StringEncoding];}
     // That snapshot is the current State. The broadcast is brought up to it before the connection joins:
     // earlier subscribers get a change not yet sent to them, and the new one is not sent its snapshot twice.

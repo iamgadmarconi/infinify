@@ -69,6 +69,17 @@ itself (AppKit's `constrainFrameRect:toScreen:`, which Electron's `enableLargerT
 display. Neither Sunlight, yabai nor DriftWM has anything for it: they take the size the app answers with, as this does.
 The canvas window is kept at that size, and zoomed out it is simply drawn smaller.
 
+Socket `msg resize WIDTH HEIGHT` replies are owned by `DWSizeTransition`, not
+by the immediate controller acknowledgement. They wait asynchronously for the
+transaction to end, at most two seconds, and compare the observed native size
+with the request. Refusal and clamping name both sizes in an error; timeout
+names the last observed size and does not cancel the transaction. Another resize
+write on the same window supersedes the waiting caller. Waiters are removed on
+completion, supersession, timeout or shutdown; a disconnected client's reply
+is discarded by the socket server. Fill and fit actions still acknowledge
+scheduling (`ok`), not native completion; their snapshot/camera paths and bound
+mouse/keyboard actions are unchanged.
+
 Results distinguish observed/applied/clamped/rejected/unsupported, invalid/stale,
 unavailable/missing/ambiguous, and readback failures/timeouts. `mutation_attempted`
 means a setter was sent, including when final identity/readback is lost. `observed`
@@ -134,3 +145,50 @@ Private-function signature precedent (no upstream implementation copied):
 `src/window_manager.c:729-762` of the same commit. Existing project GPL attribution
 continues to apply; the licence text is
 [native/app/Resources/YABAI-NOTICE.txt](../../../../native/app/Resources/YABAI-NOTICE.txt).
+
+## Focused 0.4.1 resize checks (2026-11-17)
+
+Live checks ran only in the macOS 27 arm64 guest. The unchanged 0.4.0 app
+was the baseline; fixture programs and measurement scripts stayed outside the
+repository in `~/infinify-work/fix-drag-live/`.
+
+- Safari: a 300 ms `SIGSTOP`/`SIGCONT` stall, starting 428 ms after the
+  `events` driver began (28 ms after its first movement), reproduced the
+  dead press in 4/5 repeated drags. Each failure had
+  `ax_error=-25204 attempted=1`, followed by a successful diagnostic read;
+  the window stopped at 602x450 instead of the pointer's 700x450.
+  `before-repeat-stall-{1..5}.trace` and `before-calculator.json` retain the
+  baseline observations.
+- A disposable Cocoa `SlowSize.app` sleeps 250 ms once in `windowDidResize:`,
+  armed before each drag. The same driver produced 3/3 dead baseline drags
+  (`before-slow-stall-summary.json`). After the fix, 10/10 drags contained
+  exactly one timed-out attempted setter, none lost the press, and the final
+  native size was exactly 700x450. Independent WindowServer bounds agreed
+  (`after-slow-stall-summary.json`, individual `.trace`/`.event` files).
+- Ten ordinary continuous edge/corner out-and-back drags, five each in Safari
+  and TextEdit at zoom 1 and 0.5, were admitted as resizes and showed zero
+  sampled reversals over two display points. Safari used the ScreenCaptureKit
+  magenta sampler with only one magenta object visible; TextEdit used sampled
+  WindowServer bounds scaled by zoom. All moved axes had substantial measured
+  motion, not merely an unchanged rectangle. These are sampled observations,
+  not a guarantee about every unsampled frame
+  (`after-slow-ordinary-summary.json` and per-trial samples).
+- Calculator refused 300x450 and stayed 230x408: baseline exit 0 printed
+  `300 450`; the fixed command exits 1, emits no stdout, and names both sizes
+  on stderr. TextEdit's 100x100 request clamped to 115x100 and likewise errors.
+  Ten `msg resize …; msg move …` pairs accepted all ten moves.
+- Two slow-fixture size commands 20 ms apart left the first caller with a
+  superseded error and the second with exit 0 and size B (700x450), despite
+  A's timed-out attempted setter. Concurrent state/subscription requests
+  answered while sizing continued. A 2500 ms fixture delay made the caller
+  time out at about two seconds without cancelling native work; later
+  observation found the applied size. A client disconnected after admission
+  did not prevent completion (`after-slow-cli-summary.json`).
+- `msg action fill-window` and `fit-window` still immediately printed `ok`
+  on Calculator while it stayed 230x408 and its native size transaction failed.
+  They acknowledge scheduling; their special size-transition paths were not
+  changed.
+
+`cargo fmt --check`, the targeted library clippy command and
+`CARGO_BUILD_JOBS=2 INFINIFY_NATIVE_JOBS=2 ./scripts/build-app.sh` passed in the
+guest. No tests were added, edited or run for this work.
