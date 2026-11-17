@@ -64,13 +64,11 @@ candidate can engage on the breaking update. This is deliberately not the retire
 upstream latch's behavior; moving the current product implementation changes no
 live gesture rule.
 
-The inline upstream `#[cfg(test)]` module is left byte-for-byte intact for the
-later test phase, even where it references retired items. Likewise untouched:
-`crates/core/tests/snap_test.rs`, `crates/canvas/tests/snap_parity.rs`, and
-`crates/desktop/tests/resize_upstream/`. They must be replaced with direct
-behavioral coverage of stop selection, drag/resize latching, resistance, and
-cooldown rather than parity against a second interactive implementation. No test
-or native runtime verification was performed by this refactor.
+The inline upstream `#[cfg(test)]` module retains its other tests, but
+`a_drag_offers_no_side_dock` was removed because it used the retired interactive
+API. The former upstream snap integration test and canvas snap parity test were
+also removed for the same reason. `crates/desktop/tests/resize_upstream/` remains.
+The refactor itself performed no test or native runtime verification.
 
 ## Update to v0.21.0
 
@@ -99,7 +97,7 @@ src/platform.rs               the stand-ins for Smithay/xkb types (new)
 src/platform/input/keyboard/keysyms.rs   generated keysym constants and name table (new)
 tests/canvas_*_test.rs        upstream's three canvas integration tests
 tests/config_*_test.rs, window_rules_test.rs   upstream's six config integration tests
-tests/snap_test.rs            upstream's snap integration test
+tests/snap_test.rs            upstream snap integration test (subsequently removed)
 tests/platform_keysym_test.rs, config_path_test.rs   this crate's own tests
 ```
 
@@ -158,7 +156,7 @@ header; what remains is the entry under [Deviations](#deviations).
 | `crates/core/tests/config_robustness_test.rs` | `a6b4d9d2014260240f8a743e704a53e72d8d31e235ae9ba469b0bf397c52fb65` | crate paths |
 | `crates/core/tests/config_toml_test.rs` | `e489f62bb90048885ca552f4670c925c7540357c65998dd596ed458bc8121740` | crate paths, three tests removed |
 | `crates/core/tests/window_rules_test.rs` | `20219f894820fab07bc07a3e40f9fce6e367c1112f659d3e4042c5d06a38f684` | crate paths, three tests removed |
-| `crates/core/tests/snap_test.rs` | `0a0b2fa41a84c022a1fbf39f22863ff24977a22fd56795d9807e5c738db3d7f0` | crate paths |
+| `crates/core/tests/snap_test.rs` | `0a0b2fa41a84c022a1fbf39f22863ff24977a22fd56795d9807e5c738db3d7f0` | crate paths; subsequently removed after the interactive API was retired |
 
 Copies without a header (the format does not allow one, or a header would
 change what a test reads):
@@ -221,7 +219,7 @@ this is the complete list.
 | `crates/core/tests/config_{bindings,parse,reference,robustness}_test.rs` | `driftwm::config` reads `driftwm_core::config`; `smithay::` reads `driftwm_core::platform::` |
 | `crates/core/tests/config_toml_test.rs` | the same |
 | `crates/core/tests/window_rules_test.rs` | the same; four `let combo = …Keysym::from(…KEY_q);` statements are wrapped over three lines (rustfmt, see below); the three `window_rule_has_criteria_*` tests removed |
-| `crates/core/tests/snap_test.rs` | `use driftwm::layout::snap::*;` reads `use driftwm_core::layout::snap::*;` |
+| `crates/core/tests/snap_test.rs` | `use driftwm::layout::snap::*;` read `use driftwm_core::layout::snap::*;`; subsequently removed with the retired interactive API |
 | `docs/window-rules.md` | six relative links point at the upstream repository at the pinned commit instead: `ipc.md#state-file`, `config.md#window-rules`, `config.md#background`, `config.md#decorations`, `session.md#restore_windows` (all under `docs/`) and `../extras/scripts/driftwm-decal` (`extras/scripts/driftwm-decal`), each as `https://github.com/malbiruk/driftwm/blob/df3de27b26c7998e8a460cffd8a4925cbed3a322/<path>`. The pages they name are not in this repository. A seventh link, to `config.reference.toml`, was relative to the crate (`../config.reference.toml`); the page and the reference config now live side by side in `docs/crates/core/` and the link reads `config.reference.toml`. The TOML fences are untouched |
 
 ### Removed (left out)

@@ -122,8 +122,7 @@ capture/replica desktop are not covered), is in
 ## Test oracles
 
 Executable upstream oracles are compared against Infinify's code and pinned to `df3de27b`:
-`crates/canvas/tests/snap_parity.rs` runs `Scene`'s snapping against `driftwm_core::layout::{snap,cluster}`
-(upstream's files); `crates/canvas/tests/stage_parity.rs` runs the stage against the upstream stage copy in
+`crates/canvas/tests/stage_parity.rs` runs the stage against the upstream stage copy in
 `crates/canvas/tests/upstream/stage`; `crates/desktop/tests/upstream` (navigation) and
 `crates/desktop/tests/resize_upstream` (resize) extract upstream's methods verbatim. Each directory's README says
 which methods are executed. The oracles check behaviour against upstream, not against a running Mac app.

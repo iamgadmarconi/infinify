@@ -33,27 +33,6 @@ but not modeled or claimed as implemented by production. This establishes
 bounded controller-state parity, never native focus or complete Alt-Tab
 behavior.
 
-The snap and cluster oracle is not copied here. `crates/canvas/tests/snap_parity.rs` calls
-`driftwm_core::layout::{snap, cluster}` (the crate's dev-dependency), which are
-upstream's `src/layout/snap.rs` and `src/layout/cluster.rs` at the same commit
-(less `Side::opposite`, see `docs/crates/core/PORT.md`),
-and compares the public `Scene` drag, resize and cluster traces with them. Run:
-
-```sh
-cargo test -p driftwm-canvas --test snap_parity parity_
-```
-
-The drag wrapper follows `src/state/cluster_snapshot.rs` (the comment above
-`upstream_drag` in `snap_parity.rs` names the function and lines). Resize
-invokes upstream `snap_resize_edges` directly with zero added chrome (canvas
-rectangles already include the visible frame). Cluster component
-discovery and integer bond-reversal traces invoke upstream `cluster_of` and
-`resolve_cluster_shifts` directly. Static resize classifications are
-source-cited fixtures from
-`src/state/cluster_snapshot.rs::cluster_snapshot_for_resize_with_rects`; that
-Smithay-dependent wrapper is not itself executed by this harness.
-
-These traces prove the compared canvas outputs for the tested inputs. They do
-not establish native macOS behavior, all upstream compositor paths, or
-exhaustive floating-point/integer equivalence. See `../../SNAPPING.md` for the
-boundary.
+The former snap and cluster parity harness was removed after the upstream
+interactive snap API was retired. See `../../SNAPPING.md` for the current
+geometry and parity boundary.

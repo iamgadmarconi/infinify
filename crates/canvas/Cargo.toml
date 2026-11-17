@@ -9,8 +9,7 @@ description = "Platform-independent persistent window canvas for DriftWM"
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
-# Shared pure magnetic geometry/state; snap_parity also used this as its
-# upstream layout::{snap,cluster} oracle (interactive latch now retired).
+# Shared pure magnetic geometry/state.
 driftwm-core = { path = "../core" }
 
 [dev-dependencies]

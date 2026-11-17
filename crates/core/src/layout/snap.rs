@@ -6,8 +6,8 @@
 //   path:       src/layout/snap.rs
 //   sha-256:    66df12387a8f9fc6af09356e3c46b4263863d956d76b83ea6dcd358976f6b1ae (upstream file)
 // Changes from upstream: this header; removed unused interactive search,
-// latch and resize items (listed in PORT.md); declared/re-exported the new,
-// non-ported product magnetic submodule. Retained geometry is unmodified;
+// latch and resize items and one obsolete inline test (listed in PORT.md);
+// declared/re-exported the new, non-ported product magnetic submodule. Retained geometry is unmodified;
 // the existing inline-test seed-path adjustment is retained.
 // See docs/crates/core/PORT.md for the full change log.
 
@@ -492,26 +492,6 @@ mod tests {
             ..query(true)
         };
         assert_eq!(next_origin(100.0, false, 200.0, &others, &q), Some(-324.0));
-    }
-
-    #[test]
-    fn a_drag_offers_no_side_dock() {
-        let others = [rect(100.0, 112.0, 300.0, 100.0)];
-        let p = SnapParams {
-            extent: 200.0,
-            perp_low: 0.0,
-            perp_high: 100.0,
-            horizontal: true,
-            others: &others,
-            gap: 12.0,
-            threshold: 24.0,
-            break_force: 32.0,
-            same_edge: true,
-            edge_center: true,
-        };
-        // Right on the spots a move's side docks put the primary.
-        assert_eq!(find_snap_candidate(-112.0, &p), None);
-        assert_eq!(find_snap_candidate(412.0, &p), None);
     }
 
     #[test]

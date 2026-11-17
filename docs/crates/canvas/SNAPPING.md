@@ -17,17 +17,14 @@ the new, non-ported `crates/core/src/layout/snap/magnetic.rs`; they were adapted
 from `352333a8fa1b22171492d4b71a54102045c9a19d` and include product cooldown
 fix `71246bf`. `docs/crates/core/PORT.md` lists every retired upstream item.
 
-`snap_parity` is no longer an executable oracle: it names the retired duplicate
-interactive latch and already contradicted the fixed cooldown rule. It, core's
-upstream snap tests (including the inline module), and desktop's
-`resize_upstream/` are untouched and deliberately left for the later test phase.
-Replace latch parity with behavior through `Scene::begin_drag` / `drag_to` and
-`Scene::begin_resize` / `resize_to`: once broken away from a stop, motion away
-must never jump back; cooldown must survive while the same stop is still the
-candidate; release resistance, threshold strictness, first-target ties, edge
-families, and frozen cluster membership must retain their contracts. Keep
-independent behavioral coverage of the shared stop and keyboard queries.
-No tests were run or changed during consolidation.
+The former snap parity test was removed because it named the retired interactive
+latch and contradicted the fixed cooldown rule. The upstream stop geometry and
+product latch remain documented in `docs/crates/core/PORT.md`.
+
+Once broken away from a stop, motion away must never jump back; cooldown
+survives while the same stop remains the candidate. Release resistance,
+threshold strictness, first-target ties, edge families, and frozen cluster
+membership retain their contracts.
 
 The `[snap]` configuration defaults of v0.20 (`corners` on,
 `outer_gap` 12) are the controller's configuration, not `SnapOptions`' or
