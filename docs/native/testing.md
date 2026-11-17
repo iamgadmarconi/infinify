@@ -14,7 +14,7 @@ Run the regression a change touches, not the whole set. The scripts build what t
 | `tests/e2e/family-geometry.sh` | Production renderer queries on family geometry |
 | `tests/e2e/ipc-limits.sh` | DriftWM v0.21.0's IPC limits and the screenshot write, on the production IPC server and PNG writer |
 | `tests/e2e/mac-wallpaper-refresh.sh` | The wallpaper refresh timing policy |
-| `tests/e2e/native-display-space-cache.sh`, `tests/e2e/native-placement-validation.sh`, `tests/e2e/native-family-recovery.sh`, `tests/e2e/root-capture-mailbox.sh` | The presenter and its verifiers: display queries, placement validation, family recovery, the capture mailbox and stale-frame point-size/jitter/reset checks (`root-capture-mailbox.sh`) |
+| `tests/e2e/native-display-space-cache.sh`, `tests/e2e/native-placement-validation.sh`, `tests/e2e/native-family-recovery.sh` | The presenter and its verifiers: display queries, placement validation, family recovery |
 | `tests/e2e/native-focus.sh` | The shipped focus adapter's refusals through its C ABI |
 | `tests/e2e/privileged-regression.sh` | The Dock helper payload and its C client |
 | `tests/e2e/system-takeover.sh` | The Stage Manager and window-tiling takeover against an in-memory preferences store |

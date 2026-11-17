@@ -155,9 +155,7 @@ focus or geometry work. A click waiting for focus loses its entire unsent pair
 if capture becomes unavailable. Already admitted mouse and tablet contacts close
 through the original identity-validated recipient; their remaining physical
 events stay suppressed. This does not change ordinary input at the actual native
-window. Synthetic load images cannot authorize application input. Run
-`sh tests/e2e/root-capture-mailbox.sh` for the mailbox and extracted production
-consumer scenarios; native posting and capture transport are substituted.
+window. Synthetic load images cannot authorize application input.
 
 A press arriving while coverage still requires admission is refused as an entire
 button pair, including when a cancelled request has no eligible recovery token.

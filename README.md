@@ -243,7 +243,6 @@ window, event, permission or Dock; the live ones start disposable fixture window
 | `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-placement-validation.sh` | the native presenter, views, placement, input policy and recovery logic | no |
 | `native-focus.sh` | the focus adapter refuses an identity that is not a live window | no |
 | `privileged-regression.sh` | the Dock payload and its C client with substituted native calls | no |
-| `root-capture-mailbox.sh` | the root capture mailbox, stale-frame point-size/jitter/reset checks and captured-input acceptance code | no |
 | `system-takeover.sh` | the Stage Manager, tiling and title-bar double-click snapshot and restore against an in-memory store | no |
 | `window-discovery.sh`, `window-events.sh` | window discovery scheduling, application/window lifecycle events and per-PID AX lane ordering, release and teardown | no |
 | `scoped-windows.sh`, `scoped-sizing.sh`, `scoped-resize-drag.sh`, `scoped-native.sh`, `physical-resize-edge.sh`, `native-drag-drop.sh` | the product on disposable fixture windows of the test's own (`--only-pid`) | yes |

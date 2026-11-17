@@ -445,7 +445,6 @@ commands; their source lists continue on following lines in those scripts.
 | `package-dmg.sh` | 21 |
 | `physical-resize-edge.py` | 317 |
 | `privileged-regression.sh` | 15 |
-| `root-capture-mailbox.sh` | 89, 94 |
 | `scoped-resize-drag.sh` | 84 |
 | `scoped-sizing.sh` | 68 |
 | `scoped-windows.sh` | 75 |
@@ -480,26 +479,20 @@ Physical path reads do not.
 | Location | Header/reference | Migration effect |
 | --- | --- | --- |
 | `tests/e2e/native-drag-drop-driver.py:69` | `DWWindowServerFamily.h` | Documentation-only path/name. |
-| `tests/e2e/root-capture-mailbox.sh:22` | `Desktop+Private.h` | Filesystem read breaks; use `native/app/Desktop/Private/Desktop+Private.h`. |
 | `tests/native/app/Canvas/DWCanvasRendererTests.m:4` | `IFCompositor.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Canvas/IFBGTiffSourceTests.m:13` | `IFBGTiffSource.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Canvas/IFCompositorRendererTests.m:7` | `IFCompositor.h` | Bare import: retained via Private search path. |
-| `tests/native/app/Desktop/DWRootCaptureMailboxTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |
 | `tests/native/app/Desktop/DWSnapshotMirrorTests.m:5` | `DWSnapshotMirror.h` | Bare import: retained via Private search path. |
-| `tests/native/app/Desktop/DesktopCapturedInputTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |
 | `tests/native/app/System/DWSetupAssistantFixture.m:8` | `DWSetupButton.h` | Bare import: retained via Private search path. |
 
-Only `tests/e2e/root-capture-mailbox.sh:22` executes a path-based read of a moved
-private header (`app / "Desktop+Private.h"`). Other full-path references above
-are comments. This does not imply bare-import tests compile after earlier
-interface refactors.
+Full-path references above are comments. This does not imply bare-import tests
+compile after earlier interface refactors.
 
 ### Four slicing scripts: concrete interface assessment
 
 | Script | Existing public archive interface | Why migration is not just a linker edit |
 | --- | --- | --- |
 | `family-geometry.sh` | `DWCanvasRenderer.h`: readonly `hasGeometryTransitions` and `hasFamilyGeometryTransitions`. | `DWCanvasRendererTests.m` defines fake `DWCanvasOutput`, `GeometryRenderer`, `GeometryFrame`, `GeometryElement`, then compiles sliced methods into its fake renderer. There is no public injection interface for the fabricated renderer states/frame lifecycle. Linking Canvas exposes queries but does not feed these test states. Remove conflicting production class substitutes and exercise the real renderer, or deliberately introduce a separate state-query seam later. Headless isolation is not automatically preserved. |
-| `root-capture-mailbox.sh` | `DWRootCaptureMailbox.h`: `initWithSource:stream:`, `queue`, `currentImageAvailable`, `cancel`, inline `DWRootCaptureCrop`; `LiveSource.h`: `acceptCapturedSample:stream:received:forceInstall:`, `installPixels:`/`installPixels:contentRect:`. Captured press/Fill scenarios can use admission/size-transition entries above. | It slices mailbox/source internals, static transition image-geometry helpers, private captured-input predicates, DesktopView forwarding, title-click and Fill methods. It reads deleted `Desktop+Fill.m` before slicing, plus moved `Desktop+Private.h`. `DWRootCaptureMailboxTests.m` substitutes sample storage/install/dispatch and includes generated interface/implementation fragments; `DesktopCapturedInputTests.m` substitutes multiple receivers. Real mailbox APIs do not inject every substitution. `DWNativeTransitionCapture +captureIdentity:nativeBounds:screenRect:validate:completion:` performs native capture, not the static pure geometry predicates. Split scenarios by actual boundary and explicitly design missing native-free seams in the later test phase. |
 
 A public header is an available entry point, not proof that a fixture's fake
 state and no-native-side-effect guarantees transfer to it.
