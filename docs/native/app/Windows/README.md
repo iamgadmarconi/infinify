@@ -8,8 +8,10 @@ Bound-source reconciliation checks kernel process identity independently of AX
 reads and native visibility/size handoffs. A process which has exited or changed
 birth identity follows the normal close path, including `suspend_on_close`, even
 when a native size result or focus restore is still pending. Failed reads alone
-are not proof of destruction. A trusted AX destruction hint confirmed off screen
-also follows the close path without waiting for a size result. Windows closed in
+are not proof of destruction. For applications that are not hidden, a trusted
+AX destruction hint confirmed off screen also follows the close path without
+waiting for a size result. Hidden applications use the two-reader closure check
+below instead. Windows closed in
 a living application whose destroy notification is missed continue through the
 existing reconciliation path, unchanged from 0.4.0. Debug tracing names confirmed
 process death or AX destruction and its reason.
@@ -218,8 +220,10 @@ identifier "…" is installed`).
 - An application that hides a window on close instead of destroying it keeps
   its window number, so that window stays on the canvas, unless the
   application also reports the window destroyed through Accessibility, which
-  [the events](#event-driven-tracking) now take as a close once the window is
-  off screen. Whether such applications report that has not been seen.
+  [the events](#event-driven-tracking) take as a close once the window is
+  off screen and the application is not hidden. Hidden applications use the
+  two-reader closure check below. Whether such applications report that has
+  not been seen.
 - ⌃⌥Q acts on the canvas's logical focus: the window last clicked in the
   canvas, the newest window, the one `msg focus` named or a navigation chose,
   or, with Accessibility access, the canvas window last focused in its own
@@ -479,7 +483,7 @@ twice.
 | window created; window deminiaturized; application shown again | that application's windows are looked for: a new one is offered by the rules above (the Accessibility subrole test; still for 50 ms) |
 | active Space changed | every application's windows are looked for |
 | window moved, resized, retitled or miniaturized; application hidden | that window is looked at, or every managed window of the application when the event names none: a new title or frame is reported (`retitle`, `observe`) |
-| window destroyed | that window is looked at: it leaves the canvas if the window list has dropped it or it is off screen, and is otherwise looked at on every poll for a second |
+| window destroyed | that window is looked at: for a visible application it leaves the canvas if the window list has dropped it or it is off screen; hidden applications require both no window-list record and no native bounds |
 | application terminated | its observer is removed and its windows are looked at, which finds their process gone |
 | application activated; focused window changed | native focus is read through the same path as the focus poll ([Native focus is followed](../Navigation/README.md#native-focus-is-followed)) |
 
@@ -552,16 +556,30 @@ listed again once a second until it does.
 **Minimized windows, hidden applications, other Spaces.** What each does is
 unchanged:
 
-- A managed window that is minimized, whose application is hidden or that is
-  on another Space is not closed: its window number is still in the window
-  list. Its tile stays where it is with its last picture, and its title is
-  still followed.
+- A managed window that is minimized or whose application is hidden is not
+  closed. Its binding, logical id and canvas rectangle stay; it has no placement
+  or input target while minimized or hidden, and no last-picture tile is drawn.
+  It returns to the same place on restore or unhide, without adoption or a focus
+  request. A window on another Space is likewise not closed merely for being
+  off screen.
+- Application hiding uses the controller's minimized visibility state, not
+  AXMinimized. If that window was focused, logical focus is cleared without
+  selecting another window or moving the camera. Subsequent macOS activation
+  goes through ordinary focus policy. An explicit focus request is rejected as
+  for a minimized source. Minimize/deminimize on a hidden application does not
+  unhide it: the shell reports "unhide the application first" and issues no
+  native visibility write.
+- For a hidden application with matching kernel process birth, neither an AX
+  destruction hint nor an absent/off-screen record alone closes its window.
+  Closure requires both no fresh IncludingWindow record and a failed direct
+  WindowServer bounds read. The same check runs on unhide. Kernel-confirmed
+  process death remains terminal. There is no live-process expiry timer.
 - A window in one of those states that is not managed yet is not offered: only
   windows on screen are. The first pass names it, if it has a title, so its
   saved slot waits for it; it is offered when it comes on screen.
 
 What is new is when: miniaturizing a window or hiding its application is
-looked at as it happens (and changes nothing); a window coming back from the
+looked at as it happens (preserving the slot); a window coming back from the
 Dock, an application shown again and a change of Space look for windows at
 once instead of at the next poll.
 

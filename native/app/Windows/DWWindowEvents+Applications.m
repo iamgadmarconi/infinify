@@ -243,8 +243,14 @@ static NSArray<DWApplicationMetadata *> *canonicalApplications(NSArray<NSRunning
     if(self.stopped)return;[self applicationNotification:note hints:applicationActivated identity:NO];[self changed:0 pid:0];
 }
 // APPLICATION_HIDDEN, APPLICATION_VISIBLE.
-- (void)hidden:(NSNotification *)note { [self applicationNotification:note hints:applicationChanged identity:NO]; }
-- (void)unhidden:(NSNotification *)note { [self applicationNotification:note hints:applicationAppeared|applicationChanged identity:NO]; }
+- (void)hidden:(NSNotification *)note {
+    if(!self.stopped){pid_t pid=[note.userInfo[NSWorkspaceApplicationKey]processIdentifier];if(pid>0)[self.sink windowChanged:0 pid:pid];}
+    [self applicationNotification:note hints:applicationChanged identity:NO];
+}
+- (void)unhidden:(NSNotification *)note {
+    if(!self.stopped){pid_t pid=[note.userInfo[NSWorkspaceApplicationKey]processIdentifier];if(pid>0)[self.sink windowChanged:0 pid:pid];}
+    [self applicationNotification:note hints:applicationAppeared|applicationChanged identity:NO];
+}
 // SPACE_CHANGED: every application lists the windows of the Space that is active now.
 - (void)spaceChanged:(NSNotification *)note { (void)note;if(self.stopped)return;for(DWObservedApplication *application in self.applications.allValues)[self list:application];[self changed:appeared pid:0]; }
 @end

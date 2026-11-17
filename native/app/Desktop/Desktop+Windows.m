@@ -31,6 +31,17 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
     NSMutableDictionary *moved=[report mutableCopy];moved[@"native_bounds"]=DWRectJSON(native);return moved.copy;
 }
 
+// A pass may contain many windows from one application. Read LaunchServices
+// hidden state once per PID, never cache it across main-loop turns.
+static BOOL DWHiddenForPID(pid_t pid,NSMutableDictionary<NSNumber *,NSNumber *> *states) {
+    NSNumber *key=@(pid),*value=states[key];
+    if(!value)states[key]=value=@([NSRunningApplication runningApplicationWithProcessIdentifier:pid].hidden);
+    return value.boolValue;
+}
+@interface Desktop (HiddenTracking)
+- (void)track:(LiveSource *)source info:(NSDictionary *)info observation:(DWWindowObservation *)observation hidden:(BOOL)hidden;
+@end
+
 @implementation Desktop (Windows)
 - (BOOL)attach:(DWWindowCandidate *)window logical:(NSNumber *)logical world:(NSDictionary *)world { return [self attach:window logical:logical world:world placed:NO]; }
 // placed: a window that appeared by itself. It is sent with neither a logical id nor a
@@ -230,7 +241,12 @@ static void observeStats(NSUInteger sources,BOOL all) {
     // Do not let a busy AX lane, visibility ticket or size handoff retain a
     // process which the kernel already says is gone. This check cannot fail
     // closed on a timeout or a failed WindowServer enumeration.
-    for(LiveSource *source in self.sources.allValues)if(!source.detached&&DWSourceProcessDeath(source))[self track:source info:nil];
+    NSMutableDictionary *hiddenStates=[NSMutableDictionary dictionary];
+    for(LiveSource *source in self.sources.allValues)if(!source.detached){
+        BOOL hidden=DWHiddenForPID(source.router.pid,hiddenStates);
+        if(DWSourceProcessDeath(source)||source.nativeHidden!=hidden)
+            [self track:source info:windowInfo(source.router.wid) observation:nil hidden:hidden];
+    }
     if(!self.windowObserver)self.windowObserver=[DWWindowObserver new];if(self.windowObserver.inFlight){self.observationFollowUp=YES;return;}
     // One batch in flight: what arrived meanwhile is one follow-up. The batch owns what it takes, and gives it back if its read is rejected.
     BOOL auditAll=self.auditAllWanted;NSSet<NSNumber *> *auditPIDs=self.auditPIDs.count?self.auditPIDs.copy:nil,*auditLogicals=self.auditLogicals.count?self.auditLogicals.copy:nil;
@@ -285,7 +301,7 @@ static void observeStats(NSUInteger sources,BOOL all) {
             for(NSNumber *logical in auditLogicals)[d wantWindowAudit:NO pid:0 logical:logical];
             if(changed&&!d.frameFlying)[d render];return;
         }
-        BOOL describe=NO;
+        BOOL describe=NO;NSMutableDictionary *hiddenStates=[NSMutableDictionary dictionary];
         for(DWWindowObservation *observation in snapshot.sources){
             NSDictionary *request=observation.request;LiveSource *source=d.sources[request[@"logical"]];
             if(!source||source.detached||source.observationToken!=[request[@"generation"]unsignedLongLongValue]||![source.identity isEqual:request[@"identity"]]||![source.router.bounds isEqual:request[@"prior_bounds"]])continue;
@@ -309,15 +325,19 @@ static void observeStats(NSUInteger sources,BOOL all) {
             NSString *beforeTitle=source.title;NSDictionary *beforeBounds=source.router.bounds;
             uint64_t beforeFamilyRev=d.nativeFamilyRevision,beforePresenterRev=presenter.stateRevision;
             BOOL beforeVisHeld=source.nativeVisibilityHeld,beforeMinimized=source.nativeMinimized;
+            BOOL hidden=DWHiddenForPID(source.router.pid,hiddenStates);
+            if(hidden!=source.nativeHidden){
+                [d track:source info:windowInfo(source.router.wid) observation:nil hidden:hidden];describe=YES;continue;
+            }
             [d observeVisibility:observation source:source];
             if(observation.state==DWWindowObservationReadFailed){
                 uint64_t rev=d.nativeFamilyRevision;[d forgetNativeFamily:source];
                 if(d.nativeFamilyRevision!=rev)describe=YES;
                 continue;
             }
-            if(observation.state!=DWWindowObservationPresent){[d track:source];describe=YES;continue;}
+            if(observation.state!=DWWindowObservationPresent){[d track:source info:windowInfo(source.router.wid) observation:nil hidden:DWHiddenForPID(source.router.pid,hiddenStates)];describe=YES;continue;}
             if(!DWInScope(d.scope,source.router.pid))continue;
-            [d track:source info:observation.info observation:observation];
+            [d track:source info:observation.info observation:observation hidden:DWHiddenForPID(source.router.pid,hiddenStates)];
             if(d.sources[source.logical]!=source||source.detached||!d.controller.visualScene||source.title!=beforeTitle
                 ||source.router.bounds!=beforeBounds||d.nativeFamilyRevision!=beforeFamilyRev
                 ||presenter.stateRevision!=beforePresenterRev||source.nativeVisibilityHeld!=beforeVisHeld
@@ -338,6 +358,9 @@ static void observeStats(NSUInteger sources,BOOL all) {
 - (void)track:(LiveSource *)source { [self track:source info:windowInfo(source.router.wid)]; }
 - (void)track:(LiveSource *)source info:(NSDictionary *)w { [self track:source info:w observation:nil]; }
 - (void)track:(LiveSource *)source info:(NSDictionary *)w observation:(DWWindowObservation *)observation {
+    [self track:source info:w observation:observation hidden:[NSRunningApplication runningApplicationWithProcessIdentifier:source.router.pid].hidden];
+}
+- (void)track:(LiveSource *)source info:(NSDictionary *)w observation:(DWWindowObservation *)observation hidden:(BOOL)hidden {
         source.observationToken=++self.observationEpoch;
         if(self.native&&(self.sessionInactive||self.native.ended)){[self forgetNativeFamily:source];return;}
         NSString *death=DWSourceProcessDeath(source);
@@ -346,6 +369,33 @@ static void observeStats(NSUInteger sources,BOOL all) {
             [self forgetNativeFamily:source];
             if(self.manager||[self marked:source])[self closed:source];else [self detach:source];
             return;
+        }
+        BOOL wasHidden=source.nativeHidden;
+        if(hidden||wasHidden){
+            // AX destruction and a missing CG record are not terminal while
+            // hidden. Ask both WindowServer readers, including on unhide.
+            NSDictionary *current=windowInfo(source.router.wid);CGRect own=CGRectZero;
+            BOOL hasBounds=DWNativeBounds(source.router.wid,&own);
+            BOOL alive=[birth(source.router.pid)isEqual:source.router.processBirth];
+            if(DWDebugTrace())fprintf(stderr,"debug: hidden window window=#%s pid=%d wid=%u hidden=%d was_hidden=%d listed=%d bounds=%d birth_matches=%d ax_destroyed=%d decision=%s\n",source.logical.description.UTF8String,source.router.pid,source.router.wid,hidden,wasHidden,current!=nil,hasBounds,alive,source.destroyed!=0,!current&&!hasBounds&&alive?"close":"keep");
+            if(alive&&!current&&!hasBounds){
+                [self forgetNativeFamily:source];
+                if(self.manager||[self marked:source])[self closed:source];else [self detach:source];
+                return;
+            }
+            if(!alive)return; // Kernel-confirmed death was handled above; an unknown birth is not death.
+            source.destroyed=0;w=current;
+            if(hidden!=wasHidden){
+                source.nativeHidden=hidden;
+                [self requestVisibility:source];
+            }
+            if(hidden){
+                [self observeVisibility:nil source:source];
+                return;
+            }
+            // Unhide may precede the CG record. Keep the same minimized
+            // binding until the ordinary visibility worker can restore it.
+            if(!w)return;
         }
         if([self destroyed:source info:w]){
             if(DWDebugTrace())fprintf(stderr,"debug: window source ended window=#%s pid=%d wid=%u reason=AX destruction confirmed off screen\n",source.logical.description.UTF8String,source.router.pid,source.router.wid);
@@ -358,7 +408,10 @@ static void observeStats(NSUInteger sources,BOOL all) {
         if(!w&&(source.nativeMinimized||(source.nativeVisibilityHeld&&source.nativeVisibilityWanted))&&!source.destroyed
             &&[birth(source.router.pid)isEqual:source.router.processBirth])return;
         BOOL gone=sourceGone(source,w)||[self destroyed:source info:w];
-        if(gone)[self forgetNativeFamily:source];
+        if(gone){
+            if(DWDebugTrace())fprintf(stderr,"debug: window gone window=#%s pid=%d wid=%u listed=%d owner=%d ax_destroyed=%d minimized=%d hidden=%d\n",source.logical.description.UTF8String,source.router.pid,source.router.wid,w!=nil,[w[(id)kCGWindowOwnerPID]intValue],source.destroyed!=0,source.nativeMinimized,source.nativeHidden);
+            [self forgetNativeFamily:source];
+        }
         // WindowServer owns the complete physical pair and final settling.
         // Neither raw-origin reconciliation nor presenter bounds may race it.
         if(source.nativeMouseOwnership&&!source.nativeMouseAdopting&&!gone)return;
@@ -464,11 +517,11 @@ static void observeStats(NSUInteger sources,BOOL all) {
     if(changed&&!self.frameFlying)[self render];
 }
 - (void)windowChanged:(CGWindowID)window pid:(pid_t)pid {
-    if(self.cleaning)return;BOOL changed=NO,matched=NO;
+    if(self.cleaning)return;BOOL changed=NO,matched=NO;NSMutableDictionary *hiddenStates=[NSMutableDictionary dictionary];
     for(LiveSource *source in self.sources.allValues)if(source.router.pid==pid&&(!window||source.router.wid==window)){
         matched=YES;
         [source invalidateNativeButtons];
-        NSString *title=source.title;NSDictionary *bounds=source.router.bounds;[self track:source];[self refreshNativeButtons:source];if(source.title!=title||source.router.bounds!=bounds)changed=YES;}
+        NSString *title=source.title;NSDictionary *bounds=source.router.bounds;[self track:source info:windowInfo(source.router.wid) observation:nil hidden:DWHiddenForPID(source.router.pid,hiddenStates)];[self refreshNativeButtons:source];if(source.title!=title||source.router.bounds!=bounds)changed=YES;}
     if(!matched)[self windowFamilyChanged:pid];
     // A window that closed was drawn by -closed:. A look that found nothing new draws nothing: the reports of one busy application come 12 times a second.
     if(changed&&!self.frameFlying)[self render];
@@ -494,5 +547,14 @@ static void observeStats(NSUInteger sources,BOOL all) {
     self.discoveryWanted=YES;[self requestWindowObservation];
 }
 // Native focus may have moved (Command-Tab, a click on another window): read now, through the coordinator's own path.
-- (void)focusChanged { [self.pressAdmission refreshHoveredChrome];if(self.cleaning||[self nativeUnavailable]||!self.navigation)return;self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe]; }
+- (void)focusChanged {
+    [self.pressAdmission refreshHoveredChrome];if(self.cleaning||[self nativeUnavailable]||!self.navigation)return;
+    // Workspace activation may race the hide notification. Revoke hidden
+    // native focus before ordinary focus policy considers restoring it.
+    NSMutableDictionary *hiddenStates=[NSMutableDictionary dictionary];
+    for(LiveSource *source in self.sources.allValues)if(!source.detached&&!source.nativeHidden
+        &&DWHiddenForPID(source.router.pid,hiddenStates))
+        [self track:source info:windowInfo(source.router.wid) observation:nil hidden:YES];
+    self.lastObservation=CACurrentMediaTime();[self refreshFocusAccess];[self.navigation observe];
+}
 @end

@@ -50,6 +50,8 @@
 @property NSUInteger captureFailures;
 @property CFTimeInterval captureRetryAt;
 @property uint64_t observationToken;
+// Application hiding shares minimized controller visibility, but is not AXMinimized.
+@property BOOL nativeHidden;
 @property BOOL nativeMinimized,nativeVisibilityHeld,nativeVisibilityWanted,nativeVisibilityWriting;
 @property uint64_t nativeVisibilityRevision;
 @property CFTimeInterval nativeVisibilityRetryAt,nativeVisibilityStableSince;

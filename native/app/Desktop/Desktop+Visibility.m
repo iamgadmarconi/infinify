@@ -50,6 +50,7 @@
     if(!self.native||!source||!boundIdentity(source.identity,DWNativeIdentity(effect.identity))||![binding.generation isEqual:effect.generation]){
         [self flashStatus:@"Minimize skipped: native window binding is unavailable"];return;
     }
+    if(source.nativeHidden||[NSRunningApplication runningApplicationWithProcessIdentifier:source.router.pid].hidden){[self flashStatus:@"Window visibility unchanged: unhide the application first"];return;}
     if(source.nativeVisibilityEffect){[self flashStatus:@"A window visibility request is already pending"];return;}
     NSMutableDictionary *ticket=[@{@"window":effect.window,@"identity":DWNativeIdentity(effect.identity),@"generation":effect.generation}mutableCopy];if(effect.minimized)ticket[@"minimized"]=effect.minimized;ticket[@"presenter"]=self.native;ticket[@"session"]=@(self.nativeSessionEpoch);ticket[@"deadline"]=@(CACurrentMediaTime()+8);ticket[@"revision"]=@(source.nativeVisibilityRevision);
     source.nativeVisibilityEffect=ticket.copy;[self updateNativeVisibility];
@@ -76,7 +77,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
             [source invalidateNativeButtons];[self cancelNativeHoverForWindow:source.logical];[self cancelCapturedInputForWindow:source.logical];
             __weak Desktop *weak=self;__weak LiveSource *live=source;
             BOOL (^valid)(void)=^BOOL{Desktop *d=weak;LiveSource *s=live;
-                return d&&s&&s.nativeVisibilityEffect==effect&&[d visibilityTicketCurrent:effect source:s]
+                return d&&s&&!s.nativeHidden&&![NSRunningApplication runningApplicationWithProcessIdentifier:s.router.pid].hidden&&s.nativeVisibilityEffect==effect&&[d visibilityTicketCurrent:effect source:s]
                     &&[effect[@"revision"]unsignedLongLongValue]==s.nativeVisibilityRevision&&CACurrentMediaTime()<[effect[@"deadline"]doubleValue]&&!d.sizeTransition.fillHandoff&&[d.sizeTransition canRemove:s.logical]
                     &&[d.native isWindowWithheld:s.identity];};
             NSDictionary *identity=source.identity;
@@ -94,7 +95,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
                 });
             });
         }
-        NSDictionary *restore=source.nativeVisibilityRestore;if(!restore)continue;
+        NSDictionary *restore=source.nativeVisibilityRestore;if(!restore||source.nativeHidden||[NSRunningApplication runningApplicationWithProcessIdentifier:source.router.pid].hidden)continue;
         if(![self visibilityTicketCurrent:restore source:source]||[restore[@"revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision){source.nativeVisibilityRestore=nil;continue;}
         if(self.sizeTransition.fillHandoff||source.nativeVisibilityWanted||source.nativeVisibilityWriting)continue;
         NSNumber *output=[self.nativeViews desiredOwnerForWindow:source.logical];
@@ -119,10 +120,12 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
 }
 - (void)observeVisibility:(DWWindowObservation *)observation source:(LiveSource *)source {
     NSDictionary *request=observation.request;
-    if(!request[@"visibility_revision"]||[request[@"visibility_revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision||!source.nativeVisibilityWanted)return;
+    BOOL hidden=source.nativeHidden; // Reconciled once per PID by the delivering observation pass.
+    if(!source.nativeVisibilityWanted)return;
+    if(!hidden&&(!request[@"visibility_revision"]||[request[@"visibility_revision"]unsignedLongLongValue]!=source.nativeVisibilityRevision))return;
     source.nativeVisibilityRetryAt=CACurrentMediaTime()+.1;
-    if(!observation.minimized||self.sizeTransition.fillHandoff||![self.sizeTransition canRemove:source.logical]||source.nativeVisibilityWriting)return;
-    BOOL minimized=observation.minimized.boolValue;
+    if((!hidden&&!observation.minimized)||self.sizeTransition.fillHandoff||![self.sizeTransition canRemove:source.logical]||source.nativeVisibilityWriting)return;
+    BOOL minimized=hidden||observation.minimized.boolValue;
     DWSource *binding=[self visibilityBinding:source];if(!binding)return;
     if(!minimized){
         // AppKit's deminiaturization owns its native animation. Two fresh,
