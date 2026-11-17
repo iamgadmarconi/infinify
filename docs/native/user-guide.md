@@ -305,9 +305,6 @@ and the config stay. The Homebrew cask that `scripts/build-release.sh` writes ca
 `zap`: `brew upgrade` runs every uninstall directive but `signal`, so the cask's `uninstall` only quits Infinify, and
 brew opens it again after an upgrade.
 
-`tests/e2e/setup-assistant.sh` covers the decisions, the pieces of uninstall that touch no registration, and every pane
-drawn off screen in light and dark from made-up states.
-
 Run in the guest on 2026-10-30 (macOS 27.0.1, SIP relaxed, a build signed with the Developer ID, payload included,
 driven by Return key presses and read back by screenshots and the commands' own status): a plain launch showed the
 assistant; Set up, then Permissions read the guest's two grants; Turn on registered the login item, whose immediate start

@@ -448,7 +448,6 @@ commands; their source lists continue on following lines in those scripts.
 | `scoped-resize-drag.sh` | 84 |
 | `scoped-sizing.sh` | 68 |
 | `scoped-windows.sh` | 75 |
-| `setup-assistant.sh` | 19 |
 | `snapshot-mirror.sh` | 12 |
 | `system-takeover.sh` | 11 |
 | `window-discovery.sh` | 10 |
@@ -483,12 +482,11 @@ Physical path reads do not.
 | `tests/native/app/Canvas/IFBGTiffSourceTests.m:13` | `IFBGTiffSource.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Canvas/IFCompositorRendererTests.m:7` | `IFCompositor.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Desktop/DWSnapshotMirrorTests.m:5` | `DWSnapshotMirror.h` | Bare import: retained via Private search path. |
-| `tests/native/app/System/DWSetupAssistantFixture.m:8` | `DWSetupButton.h` | Bare import: retained via Private search path. |
 
 Full-path references above are comments. This does not imply bare-import tests
 compile after earlier interface refactors.
 
-### Four slicing scripts: concrete interface assessment
+### Slicing scripts: concrete interface assessment
 
 | Script | Existing public archive interface | Why migration is not just a linker edit |
 | --- | --- | --- |
