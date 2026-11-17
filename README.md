@@ -227,7 +227,7 @@ cargo clippy -p driftwm-core -p driftwm-canvas -p driftwm-desktop --all-targets 
 python3 scripts/test-build-app-package.py       # packaging
 ```
 
-Focused tests (run these, not the whole suite): `cargo test -p driftwm-canvas --test snap_parity --test stage_parity`
+Focused tests (run these, not the whole suite): `cargo test -p driftwm-canvas --test stage_parity`
 and `cargo test -p driftwm-desktop --test controller_flow --test navigation_flow --test native_resize_flow`, plus the
 `tests/e2e` scripts below. Headless scripts build a small program from the real shell sources and run it with no
 window, event, permission or Dock; the live ones start disposable fixture windows or need a guest.
