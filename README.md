@@ -243,7 +243,7 @@ window, event, permission or Dock; the live ones start disposable fixture window
 | `mac-wallpaper-refresh.sh` | the wallpaper refresh timing policy | no |
 | `native-daemon.sh` | the launch daemon's and Dock reloader's decisions, caller requirement and artifact checks | no |
 | `native-launcher.sh` | the bundled launcher's modes against stub tools and a throwaway HOME | no |
-| `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-input-policy.sh`, `native-placement-validation.sh` | the native presenter, views, placement, input policy and recovery logic | no |
+| `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-placement-validation.sh` | the native presenter, views, placement, input policy and recovery logic | no |
 | `native-focus.sh` | the focus adapter refuses an identity that is not a live window | no |
 | `privileged-regression.sh` | the Dock payload and its C client with substituted native calls | no |
 | `root-capture-mailbox.sh` | the root capture mailbox, stale-frame point-size/jitter/reset checks and captured-input acceptance code | no |

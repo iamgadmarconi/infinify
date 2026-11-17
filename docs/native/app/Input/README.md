@@ -266,8 +266,7 @@ use its own rule: a DockSwipe whose beginning it saw while it owned an admitted
 touch is dropped to its end, and since nothing else can be told apart, so is any
 other Dock-control packet while it owns an admitted touch of three or more
 fingers and for 0.3 s after. Neither session tap converts a type-30 packet to an `NSEvent`: AppKit's
-"unrecognized type is 30" lines came from doing so, and `DWNativeInputTests.m`
-counts the conversions.
+"unrecognized type is 30" lines came from doing so.
 
 The tap needs Accessibility, which a normal run already needs. Without it, one
 line goes to stderr, nothing is dropped, and the system's gestures stay on;

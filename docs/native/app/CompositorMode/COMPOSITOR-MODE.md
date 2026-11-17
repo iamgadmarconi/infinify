@@ -306,8 +306,7 @@ vertical extent shrinks to the union of its children's frames, inflated by a poi
 outside the group keeps the whole group native as before; the cost was not measured inside the shell, the whole-tree `axdump` of Safari took 30 to 40 ms
 including process start). The strip above Safari's address field is then the window's: the shell claims the press as a title press before the
 application sees it (`native chrome owned window=#3 kind=title`) at every zoom, with no WindowServer drag and no takeover. The log after:
-`native title miss local=917.5,14 excluded=540,10.5,755,39.5` for a press inside the field. Pure geometry is checked by `sh
-tests/e2e/native-input-policy.sh` (Safari's measured numbers, the fail-safe cases).
+`native title miss local=917.5,14 excluded=540,10.5,755,39.5` for a press inside the field.
 
 **An unknown family parked its root** (a window that vanished for a moment while it was resized, and the Finder window under a
 context menu). Frames for the Dock helper carry, per window, either its placement or a parking transform far off every display

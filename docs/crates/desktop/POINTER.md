@@ -344,8 +344,7 @@ Objective-C compiles:
 
 The row above said a mouse-moved packet "is never offered to `consume`". That
 was wrong: the annotated tap offers every mouse-moved packet to its consumer
-(`DWNativeInput.m` `-handle:event:`, and `DWNativeInputTests.m` has always
-dropped one the consumer claims), and `-[Desktop nativeInput:event:]` took it
+(`DWNativeInput.m` `-handle:event:` drops one the consumer claims), and `-[Desktop nativeInput:event:]` took it
 for its own hover and then answered NO, so the window server went on delivering
 it. What was not known was whether a tap that drops a mouse-moved packet
 freezes the cursor. It does not (below). The consumer now answers YES for a
@@ -357,9 +356,7 @@ controller's `hit` gives the same answer and is not asked, to keep the
 per-packet cost nil). The decision is `DWPickMotion` (`DWControllerHit.h`),
 run in `DWControllerHitTests.m` against the real controller's snapshot
 and hit at zoom 1, 0.4 and exactly 0.5 and over empty canvas, a widget and
-malformed input; the packet-level contract (a claimed moved packet is dropped,
-an unclaimed one and one during a held native button are returned untouched, a
-tagged one is not offered) is in `DWNativeInputTests.m`.
+malformed input.
 
 Measured in the UTM guest (macOS 27.0.1, compositor mode, default
 `interact_min` 0.5, no config file), real HID events posted at the HID tap

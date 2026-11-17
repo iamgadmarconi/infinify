@@ -443,7 +443,6 @@ commands; their source lists continue on following lines in those scripts.
 | `native-drag-drop.sh` | 93 |
 | `native-family-recovery.sh` | 10 |
 | `native-focus.sh` | 12, 14, 16 |
-| `native-input-policy.sh` | 11 |
 | `native-launcher.sh` | 43 |
 | `native-placement-validation.sh` | 10 |
 | `package-dmg.sh` | 21 |
@@ -492,8 +491,6 @@ Physical path reads do not.
 | `tests/native/app/Desktop/DWRootCaptureMailboxTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |
 | `tests/native/app/Desktop/DWSnapshotMirrorTests.m:5` | `DWSnapshotMirror.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Desktop/DesktopCapturedInputTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |
-| `tests/native/app/Input/DWNativeInputTests.m:14` | `DWNativeToolbarExtent.h` | Bare import: retained via Private search path. |
-| `tests/native/app/Input/DWNativeInputTests.m:180` | `DWNativeToolbarExtent.h` | Documentation-only path/name. |
 | `tests/native/app/System/DWSetupAssistantFixture.m:8` | `DWSetupButton.h` | Bare import: retained via Private search path. |
 
 Only `tests/e2e/root-capture-mailbox.sh:22` executes a path-based read of a moved

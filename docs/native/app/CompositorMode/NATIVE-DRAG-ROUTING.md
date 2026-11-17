@@ -202,9 +202,7 @@ offered to the consumer, and the consumer ends WindowServer's drag with one left
 source, carrying the source's lifetime tag (which both taps let through, as for every posted copy); the canvas's hold on the
 physical pair (`-holdsCapturedButton:`) keeps the shell's lost-release watchdog from ending the gesture because the system's button
 state now reads up. Other native pairs, including content drags, resizes and
-drag-and-drop sessions, are untouched: only a press whose own application starts moving the native window is taken. The adapter
-test `sh tests/e2e/native-input-policy.sh` covers the packet policy only (the packet that is taken is swallowed, the tails
-are offered to the consumer, the next press is native again); that the application and WindowServer accept the tagged release is
+drag-and-drop sessions, are untouched: only a press whose own application starts moving the native window is taken. That the application and WindowServer accept the tagged release is
 a guest observation recorded in [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper).
 The takeover does not put the application's native frame back: WindowServer has already moved it (to where the window was drawn), and the
 helper restores the window's original placement-1 layer, which is relative to the native frame, so a taken-over window is restored consistent
@@ -428,8 +426,6 @@ takeover the native origin differs from the press's while the world rectangle do
 nothing here puts it back. Electron `-webkit-app-region: drag` areas were reached only through Aside's onboarding window; other AppKit
 apps that call `performWindowDragWithEvent:` were not tried. The Dock helper's transform restore and macOS tiling behaviour after a
 reverted click were not examined beyond the sampled transforms. The AX write needs Accessibility, which the guest process had.
-`sh tests/e2e/native-input-policy.sh` covers the decision functions (`DWNativeClickSettleKind`, `DWNativeWindowDragBegunInPlace`) on the
-measured rectangles only; it posts nothing and does not show that WindowServer or Chromium accept the tagged release.
 
 Managed root chrome now has a separate session-stage ownership decision.
 An independently recognized titlebar or green button, or a controller-qualified
@@ -480,7 +476,6 @@ would steal an application drag that has already begun. Physical ordering of
 macOS's accessibility three-finger-drag packets is unverified; the regression
 checks both orderings as adapter policy and does not claim hardware parity.
 
-Run `sh tests/e2e/native-input-policy.sh` for isolated packet-policy coverage.
 It installs no event tap, creates no window or native session, reads no
 pasteboard and posts no events. Its packet and decoded-contact substitutions
 remain within that test process; its already-admitted-contact case seeds prior

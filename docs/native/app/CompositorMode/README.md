@@ -60,5 +60,5 @@ One behaviour of the shell; the long form is in
 mouse-moved packet over a managed native window that is a pick target (`-pickMotionAt:window:`, which is `DWPickMotion` in
 `DWControllerHit.h` over the last render's output list and the window's placement: no controller call per packet), after the canvas
 has had the motion, and `DWNativeInput` then drops it. Regressions:
-`DWControllerHitTests.m` (`tests/e2e/controller-hit.sh`) and `DWNativeInputTests.m` (`tests/e2e/native-input-policy.sh`).
+`DWControllerHitTests.m` (`tests/e2e/controller-hit.sh`).
 Not shown: a physical device, an application's cursor shape over a target, the canvas's own hover and edge pan during the same motion.
