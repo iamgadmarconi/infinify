@@ -15,10 +15,8 @@ Run the regression a change touches, not the whole set. The scripts build what t
 | `tests/e2e/family-geometry.sh` | Production renderer queries on family geometry |
 | `tests/e2e/ipc-limits.sh` | DriftWM v0.21.0's IPC limits and the screenshot write, on the production IPC server and PNG writer |
 | `tests/e2e/mac-wallpaper-refresh.sh` | The wallpaper refresh timing policy |
-| `tests/e2e/native-daemon.sh` | The launch daemon's and the Dock reloader's decisions |
 | `tests/e2e/native-display-space-cache.sh`, `tests/e2e/native-placement-validation.sh`, `tests/e2e/native-family-recovery.sh`, `tests/e2e/root-capture-mailbox.sh` | The presenter and its verifiers: display queries, placement validation, family recovery, the capture mailbox and stale-frame point-size/jitter/reset checks (`root-capture-mailbox.sh`) |
 | `tests/e2e/native-focus.sh` | The shipped focus adapter's refusals through its C ABI |
-| `tests/e2e/native-launcher.sh` | The bundled launcher's modes against a signed stand-in bundle built from `tests/native/dock-helper/Loader/NativeLauncherFixture.c` (it skips itself where an Infinify process is running; on a Mac without the compiler set `STUB_BINARY` to a stand-in built elsewhere), including updates while the recorded Dock lives: the same code signed again is reused with the record untouched (also from a record as 0.2.5 wrote it), another team or identifier is refused, other code restarts exactly the recorded Dock once and recovers into the new one (owner start and login start), and no restart happens without the daemon, with a record that is not ready, with a daemon that does not answer, with a retired runtime that recovery would refuse, beside a running Infinify, on `--reload`, or when another Dock took the recorded one's place. The stand-in reports code identities and moves a file for a "restart"; it signals no process |
 | `tests/e2e/privileged-regression.sh` | The Dock helper payload and its C client |
 | `tests/e2e/system-takeover.sh` | The Stage Manager and window-tiling takeover against an in-memory preferences store |
 | `tests/e2e/window-discovery.sh`, `tests/e2e/window-events.sh` | Window metadata and scheduling, the application/KVO lifecycle, and per-PID lane ordering, independent progress, idle release/recreation, caller-PID unwatch and off-main teardown (`DWWindowEventsQueueTests.m` in `window-events.sh`) |
@@ -86,4 +84,4 @@ separate evidence requirements.
 
 The headless tests, which need no window and no Dock, are `DWPayloadRestoreIdentityTests.m`, `DWPayloadForwardOperationsTests.m`
 (alpha de-duplication, drift correction, failed readback, identity loss during an alpha readback, veil ordering and exact restoration),
-`DWLoaddRequestTests.m` and `DWHelperClientTests.py`.
+and `DWHelperClientTests.py`.

@@ -241,8 +241,6 @@ window, event, permission or Dock; the live ones start disposable fixture window
 | `family-geometry.sh` | renderer queries for window families | no |
 | `ipc-limits.sh` | IPC limits and the atomic screenshot write on the production server and writer | no |
 | `mac-wallpaper-refresh.sh` | the wallpaper refresh timing policy | no |
-| `native-daemon.sh` | the launch daemon's and Dock reloader's decisions, caller requirement and artifact checks | no |
-| `native-launcher.sh` | the bundled launcher's modes against stub tools and a throwaway HOME | no |
 | `native-display-space-cache.sh`, `native-family-recovery.sh`, `native-placement-validation.sh` | the native presenter, views, placement, input policy and recovery logic | no |
 | `native-focus.sh` | the focus adapter refuses an identity that is not a live window | no |
 | `privileged-regression.sh` | the Dock payload and its C client with substituted native calls | no |

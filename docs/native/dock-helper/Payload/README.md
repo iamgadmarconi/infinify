@@ -237,7 +237,7 @@ What remains of the earlier rules:
 is refused whole and untouched. There is no migration: the launcher (`scripts/native-desktop-launcher.sh`) reads the retired helper
 journal's `v` first and, when it is not 4, prints that nothing was recovered, archives the launch record and the journal under
 `retired-launch.*` in its state directory, leaves the retired runtime alone and starts fresh, so an old journal never blocks later
-starts (`tests/e2e/native-launcher.sh`). The loader refuses a recovery journal that is not `v: 4`.
+starts. The loader refuses a recovery journal that is not `v: 4`.
 
 `DWPayloadLayerTests.m` covers this on the modelled window server of `DWPayloadPlacementTests.m` (placement 0 following the native
 frame, the helper's layer, an extra placement of another writer): adoption with a non-natural foreign placement, a native move while

@@ -128,7 +128,7 @@ static void layerCases(struct dw2_identity who) {
 
     // (iii) A journal of the previous schema is refused whole: it names the absolute original in a field this schema no longer has, so
     // its rows cannot be decoded, and nothing is written. The launcher archives such a journal and starts fresh
-    // (tests/e2e/native-launcher.sh); the payload leaves the file as it found it.
+    // The payload leaves the file as it found it.
     clearTables();modelReset(CGRectMake(25,35,300,200));
     v2Apply(&frame,1,&status);assert(status==DW2_APPLIED);
     journal=readJournal();assert([journal[@"v"]isEqual:@4]);

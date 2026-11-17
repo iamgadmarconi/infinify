@@ -306,8 +306,7 @@ and the config stay. The Homebrew cask that `scripts/build-release.sh` writes ca
 brew opens it again after an upgrade.
 
 `tests/e2e/setup-assistant.sh` covers the decisions, the pieces of uninstall that touch no registration, and every pane
-drawn off screen in light and dark from made-up states; `tests/e2e/native-launcher.sh` covers the launcher's hand-over,
-and runs only where no Infinify is running (the guest; 136 checks passed there on 2026-10-30).
+drawn off screen in light and dark from made-up states.
 
 Run in the guest on 2026-10-30 (macOS 27.0.1, SIP relaxed, a build signed with the Developer ID, payload included,
 driven by Return key presses and read back by screenshots and the commands' own status): a plain launch showed the

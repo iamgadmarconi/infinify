@@ -125,8 +125,8 @@ journal remain untouched. Journals of any schema but 4 are refused as recovery i
 (see [Payload](../Payload/README.md#the-original-is-the-layer)), which is what makes handoff exact, and the
 launcher never reconstructs transforms from native bounds. A retired journal whose schema number is a different integer (the
 absolute originals of schema 3) is not migrated and does not block: the launcher says so, archives the launch record and the journal
-under `retired-launch.*`, leaves the retired runtime untouched and starts fresh, as for a record of an earlier boot
-(`tests/e2e/native-launcher.sh` shows it, run in the guest because it needs a machine without a running Infinify). A journal with no
+under `retired-launch.*`, leaves the retired runtime untouched and starts fresh, as for a record of an earlier boot.
+A journal with no
 integer schema number still blocks, preserved for inspection. A same-boot journal
 with a mismatched boot-session UUID, unresolved recovery, a live or uncertain
 prior Dock, or invalid payloads blocks startup and preserves all state. There is

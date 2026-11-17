@@ -438,12 +438,10 @@ commands; their source lists continue on following lines in those scripts.
 | `ipc-limits.sh` | 12 |
 | `live-guest-lib.sh` | 57 |
 | `mac-wallpaper-refresh.sh` | 9 |
-| `native-daemon.sh` | 15, 18, 32 |
 | `native-display-space-cache.sh` | 10 |
 | `native-drag-drop.sh` | 93 |
 | `native-family-recovery.sh` | 10 |
 | `native-focus.sh` | 12, 14, 16 |
-| `native-launcher.sh` | 43 |
 | `native-placement-validation.sh` | 10 |
 | `package-dmg.sh` | 21 |
 | `physical-resize-edge.py` | 317 |

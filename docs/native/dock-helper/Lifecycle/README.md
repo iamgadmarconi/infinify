@@ -63,4 +63,4 @@ Compile-only verification is not evidence of a usable helper. No load, reload, r
 
 ## Deferred test migration
 
-No test is run or changed in this phase. `tests/e2e/native-daemon.sh` and `tests/e2e/setup-assistant.sh` have standalone compile lists that now need the lifecycle sources. Their existing Objective-C cases can cross the lifecycle interface instead of relying on reloader/request translation units to supply the shared definitions. `tests/e2e/native-launcher.sh` and `NativeLauncherFixture.c` assume the shell owns all decisions; replace that decision harness with a temporary-directory/fake-Dock launcher adapter, retaining separate wrapper integrity checks. Existing legacy `/tmp` creation expectations in that script were already stale before this refactor.
+The setup assistant standalone compile list needs the lifecycle sources.
