@@ -170,11 +170,14 @@ rejected by the adapter; they do not create committed geometry.
 ## Uncertainty and lifecycle
 
 An attempted setter without a trustworthy observation emits exactly one
-read-only diagnostic effect. Its result ends the transaction: complete when
-it observed the window, committing that actual size, otherwise failed with
-`the window did not answer the size request in time`. This includes AX
-CannotComplete (-25204). A setter may land later; that is an external native
-size change, adopted by the next `observe`, rather than a promise that a
+read-only diagnostic effect. A successful read commits the actual size. A
+still-held pointer grab continues from that size, including motion queued
+during the setter/read; a matching read counts as applied, not as release.
+A released grab or non-pointer size request ends as before. A failed read
+ends the transaction with `the window did not answer the size request in time`.
+This includes AX CannotComplete (-25204): that setter error alone does not
+end a held grab. A setter may land later; that is an external native size
+change, adopted by the next `observe`, rather than a promise that a
 successful read proved future quiescence.
 
 A fullscreen native-frame restore retains its obligation through the final read.

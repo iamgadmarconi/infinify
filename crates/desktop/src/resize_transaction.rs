@@ -1005,24 +1005,31 @@ impl Controller {
             t.uncertain_mutation = true;
         }
         if t.uncertain_mutation && effect.requested.is_none() {
-            // The diagnostic read's answer ends the transaction either way:
-            // the size it found is committed above, and a setter that lands
-            // after it is a native size change, which `observe` adopts.
+            // A successful diagnostic reconciles the mutation, not the
+            // pointer's lifetime. Keep its queued motion and continue from
+            // the size committed above while the grab is still held.
             t.uncertain_mutation = false;
-            t.coalesced_latest = None;
-            t.phase = if result.observed && !t.cancelled {
-                Phase::Complete
-            } else {
-                Phase::Failed
-            };
-            return Ok(if result.observed {
-                json!({"effect":null})
-            } else {
-                json!({"effect":null,"failure":"the window did not answer the size request in time"})
-            });
+            if !result.observed || !t.interactive || t.released || t.cancelled {
+                t.coalesced_latest = None;
+                t.phase = if result.observed && !t.cancelled {
+                    Phase::Complete
+                } else {
+                    Phase::Failed
+                };
+                return Ok(if result.observed {
+                    json!({"effect":null})
+                } else {
+                    json!({"effect":null,"failure":"the window did not answer the size request in time"})
+                });
+            }
+            // The ambiguous setter is no longer an outstanding request.
+            // If it did not land, the next pointer packet may ask it again.
+            t.last_sent = None;
         }
         if t.uncertain_mutation {
-            t.coalesced_latest = None;
+            if !t.interactive || t.released || t.cancelled {
+                t.coalesced_latest = None;
+            }
             // Exactly one diagnostic read follows an ambiguous setter.
             if effect.requested.is_some() {
                 return self.emit_resize(None);
