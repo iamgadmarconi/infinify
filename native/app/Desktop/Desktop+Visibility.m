@@ -31,6 +31,7 @@
     DWSource *binding=[self visibilityBinding:source];
     if(!binding||![self.controller sourceVisibilityPendingWindow:source.logical identity:DWControllerIdentity(source.identity) generation:binding.generation])return;
     source.nativeVisibilityRevision++;source.nativeVisibilityWanted=YES;source.nativeVisibilityRetryAt=0;
+    if(DWDebugTrace())fprintf(stderr,"debug: visibility audit requested window=#%s revision=%llu\n",source.logical.description.UTF8String,(unsigned long long)source.nativeVisibilityRevision);
     source.nativeVisibilityStable=nil;source.nativeVisibilityRestore=nil;
     source.observationToken=++self.observationEpoch;[source invalidateNativeButtons];
     [self cancelNativeHoverForWindow:source.logical];[self cancelCapturedInputForWindow:source.logical];
@@ -138,6 +139,7 @@ static bool DWVisibilityAllowed(DWFocusIdentity selected,void *context) {
     DWControllerReply *reply=[self.controller observeVisibilityWindow:source.logical identity:DWControllerIdentity(source.identity) generation:binding.generation minimized:minimized];if(!reply)return;
     source.nativeVisibilityWanted=NO;source.nativeVisibilityStable=nil;
     source.nativeMinimized=minimized;
+    if(DWDebugTrace())fprintf(stderr,"debug: native visibility observed window=#%s minimized=%d revision=%llu\n",source.logical.description.UTF8String,minimized,(unsigned long long)source.nativeVisibilityRevision);
     if(minimized){if(reply.changed.boolValue)self.sceneDirty=YES;source.nativeVisibilityRestore=nil;[self forgetNativeFamily:source];self.nativeViewSnapshot=nil;[self render];return;}
     // Rebind the fresh native basis while preserving the controller's world
     // rectangle. The restore placement is presentable but never a hit target.

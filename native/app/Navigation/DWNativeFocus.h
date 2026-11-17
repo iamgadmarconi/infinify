@@ -37,7 +37,8 @@ void dw_focus_set_bounds(bool (*read)(uint32_t window, CGRect *bounds));
 // includes unknown/expired reads; revalidate before executing a queued action.
 bool dw_focus_frontmost(DWFocusIdentity *out);
 // Read-only AXMinimized for one exact PID/birth/WID, using the same bounded
-// resolver and before/after ownership checks as focus. Unknown is not false.
+// messaging deadline and exact AX PID/birth/WID checks. A minimized window
+// need not have a WindowServer record or native bounds. Unknown is not false.
 bool dw_focus_minimized(DWFocusIdentity identity, bool *minimized);
 // An explicit product minimize/deminimize request. Never closes or focuses.
 // The guard must still approve the exact live binding immediately before write.

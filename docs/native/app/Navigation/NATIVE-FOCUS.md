@@ -58,10 +58,14 @@ The other entry points, as documented in `DWNativeFocus.h`:
   PID/window ownership, birth and foreground afterward. It does no AXWindows
   enumeration, retry or activation. False zeroes the output and covers unknown and
   expired reads; revalidate before executing a queued action.
-- `dw_focus_minimized` reads AXMinimized for one exact identity with the same bounded
-  resolver and before/after ownership checks. Unknown is not false.
-- `dw_focus_set_minimized` is an explicit minimize/deminimize request. It never closes or
-  focuses, and the guard must approve the exact live binding immediately before the write.
+- `dw_focus_minimized` reads AXMinimized for one exact identity under an 80 ms
+  deadline. Its visibility-only resolver checks process birth, AX element PID and
+  exact `_AXUIElementGetWindow` id before and after the read, without requiring
+  a WindowServer record or native bounds: AppKit may remove those while minimized.
+  Unknown is not false. Focus and input retain their stricter native-owner resolver.
+- `dw_focus_set_minimized` uses that same exact AX identity for an explicit
+  minimize/deminimize request under a 500 ms deadline. It never closes or focuses;
+  the guard must approve the exact live binding immediately before the write.
 
 ## Test
 

@@ -115,6 +115,10 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
             if(!born)source.failure=@"process identity could not be read";
             else if(![born isEqual:expected]){source.state=DWWindowObservationIdentityChanged;source.failure=@"process instance changed";}
             else {
+                // AppKit may remove the CG record as soon as minimization
+                // begins. AX visibility is independent of native geometry.
+                if(request[@"visibility_revision"]){bool minimized=false;DWFocusIdentity selected={.pid=pid.intValue,.window=wid.unsignedIntValue,.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
+                    if(dw_focus_minimized(selected,&minimized))source.minimized=@(minimized);}
                 NSDictionary *info=reuseBatchList?onScreen[wid]:nil;BOOL read=YES;
                 // A bound window may be parked, minimized or otherwise absent
                 // from discovery, or read after the batch-start list aged.
@@ -125,8 +129,6 @@ static DWWindowObservationSnapshot *observeWindows(uint64_t generation,NSArray<N
                 else if(!info){source.state=DWWindowObservationAbsent;source.failure=@"window server has no current window record";}
                 else if([info[(id)kCGWindowOwnerPID]intValue]!=pid.intValue){source.state=DWWindowObservationIdentityChanged;source.failure=@"window owner changed";}
                 else {source.info=info;CGRect own=CGRectZero;BOOL nativeBounds=[request[@"native_bounds"]boolValue];
-                    if(request[@"visibility_revision"]){bool minimized=false;DWFocusIdentity selected={.pid=pid.intValue,.window=wid.unsignedIntValue,.seconds=[identity[@"birth_sec"]unsignedLongLongValue],.microseconds=[identity[@"birth_usec"]unsignedLongLongValue]};
-                        if(dw_focus_minimized(selected,&minimized))source.minimized=@(minimized);}
                     NSDictionary *frame=info[(id)kCGWindowBounds];
                     BOOL hasBounds=nativeBounds?DWNativeBounds(wid.unsignedIntValue,&own):([frame isKindOfClass:NSDictionary.class]&&CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)frame,&own));
                     if(hasBounds){

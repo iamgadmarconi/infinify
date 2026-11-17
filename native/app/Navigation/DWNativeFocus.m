@@ -79,22 +79,59 @@ static AXUIElementRef resolve(DWFocusIdentity i,double end,DWFocusResult *r) {
     } while(now()<end);
     r->outcome=DWFocusTimedOut;return NULL;
 }
+// Visibility retains exact AX identity even while AppKit removes the CG record.
+// Focus and input resolvers still require current native ownership and bounds.
+static AXUIElementRef resolve_visibility(DWFocusIdentity i,double end,DWFocusResult *r) {
+    if(!i.window||!fresh(i)){r->outcome=DWFocusStale;return NULL;}
+    GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");
+    if(!AXIsProcessTrusted()||!get){r->outcome=DWFocusUnavailable;return NULL;}
+    AXUIElementRef app=AXUIElementCreateApplication(i.pid);CFTypeRef list=NULL;
+    r->ax_error=copy(app,kAXWindowsAttribute,&list,end);CFRelease(app);
+    if(r->ax_error||!list||CFGetTypeID(list)!=CFArrayGetTypeID()){if(list)CFRelease(list);r->outcome=DWFocusUnavailable;return NULL;}
+    AXUIElementRef found=NULL;int matches=0;bool valid=true;r->outcome=DWFocusReadbackFailed;
+    for(CFIndex n=0;n<CFArrayGetCount(list);n++){
+        AXUIElementRef window=(AXUIElementRef)CFArrayGetValueAtIndex(list,n);uint32_t wid=0;pid_t pid=0;
+        if(now()>=end){r->outcome=DWFocusTimedOut;valid=false;break;}
+        if(CFGetTypeID(window)!=AXUIElementGetTypeID()||(r->ax_error=timeout(window,end))){valid=false;break;}
+        r->ax_error=get(window,&wid);
+        if(r->ax_error==kAXErrorIllegalArgument&&windowless_scroll_area(window,i.pid,end)){r->ax_error=kAXErrorSuccess;continue;}
+        if(r->ax_error){valid=false;break;}
+        if(wid==i.window){
+            if((r->ax_error=AXUIElementGetPid(window,&pid))||pid!=i.pid){valid=false;break;}
+            matches++;if(!found)found=(AXUIElementRef)CFRetain(window);
+        }
+    }
+    CFRelease(list);
+    uint32_t wid=0;pid_t pid=0;
+    if(valid&&matches==1&&now()<end&&fresh(i)&&!AXUIElementGetPid(found,&pid)&&pid==i.pid&&!get(found,&wid)&&wid==i.window)return found;
+    if(now()>=end)r->outcome=DWFocusTimedOut;
+    else if(!fresh(i))r->outcome=DWFocusStale;
+    else if(valid&&matches==0)r->outcome=DWFocusMissing;
+    else if(valid&&matches>1)r->outcome=DWFocusAmbiguous;
+    if(found)CFRelease(found);return NULL;
+}
+
 bool dw_focus_minimized(DWFocusIdentity identity,bool *minimized) { @autoreleasepool {
     if(!minimized)return false;
-    double end=now()+.08;DWFocusResult result={0};AXUIElementRef window=resolve(identity,end,&result);if(!window)return false;
-    CFTypeRef value=NULL;AXError error=copy(window,kAXMinimizedAttribute,&value,end);CFRelease(window);
-    bool known=error==kAXErrorSuccess&&value&&CFGetTypeID(value)==CFBooleanGetTypeID()&&now()<end&&dw_focus_owner(identity,NULL);
+    double end=now()+.08;DWFocusResult result={0};AXUIElementRef window=resolve_visibility(identity,end,&result);if(!window)return false;
+    CFTypeRef value=NULL;AXError error=copy(window,kAXMinimizedAttribute,&value,end);
+    GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");uint32_t wid=0;pid_t pid=0;
+    bool known=error==kAXErrorSuccess&&value&&CFGetTypeID(value)==CFBooleanGetTypeID()&&now()<end&&fresh(identity)
+        &&!AXUIElementGetPid(window,&pid)&&pid==identity.pid&&get&&!get(window,&wid)&&wid==identity.window;
+    CFRelease(window);
     if(known)*minimized=CFBooleanGetValue(value);
     if(value)CFRelease(value);return known;
 } }
 DWFocusResult dw_focus_set_minimized(DWFocusIdentity identity,bool minimized,DWFocusGuard guard,void *context) { @autoreleasepool {
     DWFocusResult result={.outcome=DWFocusDenied};double end=now()+.5;
     if(!guard||!guard(identity,context))return result;
-    AXUIElementRef window=resolve(identity,end,&result);if(!window)return result;
-    if(!guard(identity,context)||!dw_focus_owner(identity,NULL)||now()>=end){CFRelease(window);result.outcome=DWFocusStale;return result;}
+    AXUIElementRef window=resolve_visibility(identity,end,&result);if(!window)return result;
+    GetWindow get=(GetWindow)dlsym(RTLD_DEFAULT,"_AXUIElementGetWindow");uint32_t wid=0;pid_t pid=0;
+    if(!guard(identity,context)||!fresh(identity)||now()>=end||AXUIElementGetPid(window,&pid)||pid!=identity.pid||!get||get(window,&wid)||wid!=identity.window){CFRelease(window);result.outcome=DWFocusStale;return result;}
     result.ax_error=timeout(window,end);
     if(!result.ax_error){result.mutation_attempted=true;result.ax_error=AXUIElementSetAttributeValue(window,kAXMinimizedAttribute,minimized?kCFBooleanTrue:kCFBooleanFalse);}
-    CFRelease(window);result.outcome=result.ax_error?DWFocusAXFailed:DWFocusObserved;return result;
+    bool current=fresh(identity)&&!AXUIElementGetPid(window,&pid)&&pid==identity.pid&&!get(window,&wid)&&wid==identity.window;
+    CFRelease(window);result.outcome=!current?DWFocusStale:result.ax_error?DWFocusAXFailed:DWFocusObserved;return result;
 } }
 static bool focusedWindow(AXUIElementRef app,pid_t expected,CGWindowID *wid,double end,AXError *e) {
     CFTypeRef w=NULL;*e=copy(app,kAXFocusedWindowAttribute,&w,end);pid_t pid=0;

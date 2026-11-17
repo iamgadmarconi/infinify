@@ -80,7 +80,10 @@ ACK from an earlier minimize/restore cycle cannot release a later one.
 
 The native shell reads AXMinimized only after a visibility event or an explicit
 request, on the existing observation worker with its identity and freshness
-fences. Unknown is never interpreted as false. It withholds the exact native
+fences. This read is independent of WindowServer-record and native-bounds
+availability, since AppKit may remove both while minimized. It still checks
+process birth and the exact AX element PID/window id. Unknown is never
+interpreted as false. It withholds the exact native
 family while minimized and preserves the helper's restoration journal. Restore
 waits for two unchanged native geometry observations and then a new complete
 placement ACK (or a parking ACK for an off-canvas slot). An API setter return,
