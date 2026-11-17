@@ -506,8 +506,13 @@ impl Controller {
         identity: SourceIdentity,
         output: Option<OutputId>,
     ) -> Result<Value, Error> {
-        self.guard_resize_structure(Some(window))?;
         self.fresh(window, &identity)?;
+        // A confirmed destruction cannot owe more native size work. Retire only
+        // this binding's transaction; late adapter results remain stale and an
+        // unrelated window's transaction keeps its structural guard.
+        if self.resize_slot().is_some_and(|slot| slot.window == window) {
+            self.native_resize = None;
+        }
         if output.is_some_and(|output| self.scene.output(output).is_none()) {
             return Err(Error::Invalid("unknown output"));
         }

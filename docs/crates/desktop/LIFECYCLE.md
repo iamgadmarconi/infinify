@@ -98,7 +98,10 @@ defer owed-size delivery without asserting minimization, keeps the family omitte
 and drains the resize before accepting the observation. An adapter call already
 in progress can finish its internal native operations; cancellation cannot
 retract an AX call already issued. A real destruction still follows the close
-path. A reconciled on-screen record of a known-minimized source requests one
+path. Once the exact source identity has been validated, `window_closed` retires
+that window's native size transaction rather than waiting for an impossible
+result from the destroyed window. Late results cannot mutate a replacement
+binding, and other windows' size transactions are not affected. A reconciled on-screen record of a known-minimized source requests one
 fresh AX read to recover a missed deminiaturization notification.
 
 This first slice retains AppKit's minimize/deminimize animation. It does not

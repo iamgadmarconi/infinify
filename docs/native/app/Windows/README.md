@@ -4,6 +4,16 @@ What the shell does with native windows: which ones it manages, how it follows t
 
 ## Managed windows
 
+Bound-source reconciliation checks kernel process identity independently of AX
+reads and native visibility/size handoffs. A process which has exited or changed
+birth identity follows the normal close path, including `suspend_on_close`, even
+when a native size result or focus restore is still pending. Failed reads alone
+are not proof of destruction. A trusted AX destruction hint confirmed off screen
+also follows the close path without waiting for a size result. Windows closed in
+a living application whose destroy notification is missed continue through the
+existing reconciliation path, unchanged from 0.4.0. Debug tracing names confirmed
+process death or AX destruction and its reason.
+
 In DriftWM every toplevel is managed from the moment it exists. This is that
 rule for native Mac windows: the app finds the ordinary windows itself, places
 them, follows their titles and lets them go when they close. The decisions are

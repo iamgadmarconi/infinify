@@ -2,6 +2,8 @@
 // Split from native/desktop/main.m at 37b27b1, moved verbatim.
 // Desktop window lifecycle: attach, discovery (DWWindowHost), tracking, close. Visibility is Desktop+Visibility.m, the --manual chooser Desktop+Chooser.m.
 #import "Desktop+Private.h"
+#include <errno.h>
+#include <signal.h>
 #import <unistd.h>
 #import "DWDebugTrace.h"
 #import "DWNativeFocus.h"
@@ -12,6 +14,13 @@
 
 // How long a window the manager does not take for its own, but that belongs to a placed root's family, is left to the family reconciliation before the helper's veil is released for it.
 static const NSTimeInterval DWFamilyChildGrace=.25;
+// Kernel identity loss is terminal; an unreadable identity alone is not.
+static NSString *DWSourceProcessDeath(LiveSource *source) {
+    NSArray *current=birth(source.router.pid);
+    if(current)return [current isEqual:source.router.processBirth]?nil:@"process birth changed";
+    if(kill(source.router.pid,0)==-1&&errno==ESRCH)return @"process exited";
+    return nil;
+}
 // Only the AXMoved callback may publish this translated cache. A generic
 // observation may retain it privately, but cannot make it hit-test authority.
 static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *identity,CGRect native) {
@@ -124,9 +133,10 @@ static NSDictionary *DWNativeMovedButtons(NSDictionary *report,NSDictionary *ide
 // A refusal keeps the world place the way a lost source always did.
 - (void)closed:(LiveSource *)source {
     if(source.detached)return;
+    if([[self.sizeTransition busyWindow]isEqual:source.logical]||[self grabbed:source])[self.sizeTransition cancel];
     NSNumber *output=[self viewOutput];
     DWControllerReply *reply=[self.controller windowClosed:source.logical identity:DWControllerIdentity(source.identity) output:output];
-    if(!reply){[self detach:source];return;}
+    if(!reply){if(DWDebugTrace())fprintf(stderr,"debug: window close refused window=#%s reason=%s\n",source.logical.description.UTF8String,self.statusText.UTF8String);[self detach:source];return;}
     [self drop:source];[self follow:reply];[self render];
 }
 - (BOOL)managesWindow:(CGWindowID)window pid:(pid_t)pid {
@@ -217,6 +227,10 @@ static void observeStats(NSUInteger sources,BOOL all) {
 }
 - (void)requestWindowObservation {
     if(self.cleaning||self.sessionInactive||self.native.ended||!self.manager)return;
+    // Do not let a busy AX lane, visibility ticket or size handoff retain a
+    // process which the kernel already says is gone. This check cannot fail
+    // closed on a timeout or a failed WindowServer enumeration.
+    for(LiveSource *source in self.sources.allValues)if(!source.detached&&DWSourceProcessDeath(source))[self track:source info:nil];
     if(!self.windowObserver)self.windowObserver=[DWWindowObserver new];if(self.windowObserver.inFlight){self.observationFollowUp=YES;return;}
     // One batch in flight: what arrived meanwhile is one follow-up. The batch owns what it takes, and gives it back if its read is rejected.
     BOOL auditAll=self.auditAllWanted;NSSet<NSNumber *> *auditPIDs=self.auditPIDs.count?self.auditPIDs.copy:nil,*auditLogicals=self.auditLogicals.count?self.auditLogicals.copy:nil;
@@ -326,6 +340,19 @@ static void observeStats(NSUInteger sources,BOOL all) {
 - (void)track:(LiveSource *)source info:(NSDictionary *)w observation:(DWWindowObservation *)observation {
         source.observationToken=++self.observationEpoch;
         if(self.native&&(self.sessionInactive||self.native.ended)){[self forgetNativeFamily:source];return;}
+        NSString *death=DWSourceProcessDeath(source);
+        if(death){
+            if(DWDebugTrace())fprintf(stderr,"debug: window source ended window=#%s pid=%d wid=%u reason=%s\n",source.logical.description.UTF8String,source.router.pid,source.router.wid,death.UTF8String);
+            [self forgetNativeFamily:source];
+            if(self.manager||[self marked:source])[self closed:source];else [self detach:source];
+            return;
+        }
+        if([self destroyed:source info:w]){
+            if(DWDebugTrace())fprintf(stderr,"debug: window source ended window=#%s pid=%d wid=%u reason=AX destruction confirmed off screen\n",source.logical.description.UTF8String,source.router.pid,source.router.wid);
+            [self forgetNativeFamily:source];
+            if(self.manager||[self marked:source])[self closed:source];else [self detach:source];
+            return;
+        }
         // Miniaturization can temporarily remove a WindowServer record. A
         // live process without a destroy hint keeps its minimized binding.
         if(!w&&(source.nativeMinimized||(source.nativeVisibilityHeld&&source.nativeVisibilityWanted))&&!source.destroyed
