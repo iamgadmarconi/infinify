@@ -481,7 +481,7 @@ Physical path reads do not.
 | `tests/native/app/Canvas/DWCanvasRendererTests.m:4` | `IFCompositor.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Canvas/IFBGTiffSourceTests.m:13` | `IFBGTiffSource.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Canvas/IFCompositorRendererTests.m:7` | `IFCompositor.h` | Bare import: retained via Private search path. |
-| `tests/native/app/Desktop/DWSnapshotMirrorTests.m:5` | `DWSnapshotMirror.h` | Bare import: retained via Private search path. |
+| `tests/native/app/Desktop/DWSnapshotMirrorTests.m:5` | `DWSnapshotMirror.h` | Bare import: resolved through the Controller/Private search path. |
 
 Full-path references above are comments. This does not imply bare-import tests
 compile after earlier interface refactors.

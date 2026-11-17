@@ -10,7 +10,7 @@ task_dir=$(mktemp -d "${TMPDIR:-/tmp}/infinify-snapshot-mirror.XXXXXX")
 trap 'rm -rf "$task_dir"' EXIT HUP INT TERM
 . scripts/native-includes.sh
 xcrun clang -arch arm64 -mmacosx-version-min=26.0 -fobjc-arc -Wall -Wextra -Werror $native_includes \
-  native/app/Desktop/DWSnapshotMirror.m tests/native/app/Desktop/DWSnapshotMirrorTests.m \
+  native/app/Controller/DWSnapshotMirror.m tests/native/app/Desktop/DWSnapshotMirrorTests.m \
   target/release/libdriftwm_desktop.a -framework Foundation -framework Security -framework SystemConfiguration \
   -o "$task_dir/snapshot-mirror"
 "$task_dir/snapshot-mirror"
