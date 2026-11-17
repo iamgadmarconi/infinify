@@ -100,16 +100,48 @@ creation, first frame, configuration, retirement and fixed failure codes. These
 opt-in records contain numeric identities, density and cadence, without titles
 or image content.
 
-Overlay exports request full-resolution one-shot ScreenCaptureKit samples when
-the live stream has a smaller raster, including a stopped source needed by the
-export. Preparation is asynchronous and returns an IPC reply after actual pixels
-arrive, with a two-second deadline. The main queue remains available during
-capture setup. Temporary samples leave stream budgets unchanged and are released
-after composition; cancellation prevents a late callback from installing them.
-No snapshot is requested without existing Screen Recording access. Offscreen
-Metal composition and readback still run on main after capture finishes; PNG
-compression and file writing use a serial utility worker holding an immutable
-image.
+Screenshot exports (`window --id`, `all`, viewport and region) prepare separate
+one-shot images without changing the camera, focus, window placement or live-stream
+configuration. Native export first copies the untransformed WindowServer backing
+surface on a read-only worker (`DWNativeCopyWindowImage`); this avoids
+ScreenCaptureKit's display lookup for windows parked outside every display and
+keeps source detail independent of camera zoom. All native windows first use
+the same legacy `CGWindowListCreateImage` entry point, resolved by name at runtime.
+Its ABI is recorded from the SDK's `CoreGraphics/CGWindow.h:271-274`; although
+unavailable at compile time in current SDKs, it may still be present at runtime.
+Missing symbols or NULL images fall back to the existing ScreenCaptureKit path.
+Transparent or uniform images retry on the worker for at most one second and
+are skipped if still empty. An off-viewport window is captured as last drawn by
+its application; applications may redraw asynchronously after their state changes.
+This can lag application state: one guest TextEdit probe still showed its old body
+immediately after an off-viewport text change; a later follow-up showed the new
+digits, but the change-to-repaint latency was not measured. There is no repaint-
+latency guarantee; timed TextEdit and browser checks remain for the final live test.
+No snapshot is requested without existing Screen Recording access, and export
+does not call a permission-request API. The legacy API's permission behavior on
+a normally launched installation and on Retina still requires live verification.
+
+
+A failed live root is omitted with its entire attached family, including its
+chrome, rather than aborting other windows. Minimized windows are skipped, not
+drawn from an earlier frame. The CLI prints one sanitized line per skipped root
+to stderr (including the logical id, PID and title). Successful replies may carry
+`Ok.Screenshot.warnings`; stdout remains the PNG path, JSON or PNG bytes as
+requested. Export fails clearly if none of the requested live windows produced
+pixels. Stand-in-only window or canvas exports still succeed without warnings:
+stand-ins are canvas drawings, not live capture requests. Closed-window stand-ins
+and the controller's whole-canvas framing remain unchanged, so a skipped root
+does not shrink the `all` image.
+
+Preparation is asynchronous. A two-second capture deadline discards incomplete
+families and finishes with any complete, revalidated families. Native identities,
+bindings, root/member bounds and family membership are checked before composition;
+late capture completions cannot install pixels. One-shot images are released
+after composition. Offscreen Metal composition and readback still run on main;
+PNG compression and file writing use a serial utility worker holding an immutable
+image. Backing-surface raster dimensions come from WindowServer, not the current
+display's backing scale; requested export dimensions remain canvas units times
+`--scale`.
 
 The release app compiles its native C/Objective-C adapters with `-O2`, alongside
 the optimized Rust release library. An active frame driver holds a balanced

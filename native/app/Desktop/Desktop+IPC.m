@@ -93,15 +93,26 @@ static NSData *ipcError(NSString *message) { return [NSJSONSerialization dataWit
     DWShellEffect *capture=nil;if(data&&!data.externalReplyObject)for(DWShellEffect *effect in data.arrayShellEffects)if(effect.kind==DWEffectScreenshot)capture=effect;
     if(capture){
         self.screenshotBusy=YES;DWScene *snapshot=self.controller.scene;
+        __weak Desktop *exportOwner=self;
+        [self canvasRenderer].exportSkip=^BOOL(NSNumber *window){return exportOwner.exportWarnings[window]!=nil;};
         [self prepareScreenshot:capture completed:^(NSString *preparation){
-            if(self.cleaning){self.exportSources=nil;self.exportAttachments=nil;self.exportOrdering=nil;self.screenshotBusy=NO;deferred(ipcError(@"screenshot cancelled during shutdown"));return;}
+            if(self.cleaning){self.exportSources=nil;self.exportAttachments=nil;self.exportOrdering=nil;self.exportWarnings=nil;self.compositor.exportSkip=nil;self.screenshotBusy=NO;deferred(ipcError(@"screenshot cancelled during shutdown"));return;}
             void (^finish)(NSDictionary *)=^(NSDictionary *rendered){
-                self.exportSources=nil;self.exportAttachments=nil;self.exportOrdering=nil;self.screenshotBusy=NO;
+                NSMutableArray *warnings=[NSMutableArray array];
+                for(NSNumber *logical in [self.exportWarnings.allKeys sortedArrayUsingSelector:@selector(compare:)])[warnings addObject:self.exportWarnings[logical]];
+                self.exportSources=nil;self.exportAttachments=nil;self.exportOrdering=nil;self.exportWarnings=nil;self.compositor.exportSkip=nil;self.screenshotBusy=NO;
                 if(self.cleaning){deferred(ipcError(@"screenshot cancelled during shutdown"));return;}
                 NSMutableDictionary *result=[rendered mutableCopy];result[@"op"]=@"screenshot_result";
                 NSData *response=nil;DWControllerReply *answered=[self.controller executeExternalCommand:result rawResponse:&response];
                 if(!answered.externalReplyObject){NSString *error=answered?@"invalid controller reply":self.statusText?:@"controller error";self.statusText=status;deferred(ipcError(error));return;}
                 [self applyReply:data];
+                if(warnings.count){
+                    NSDictionary *reply=answered.externalReplyObject;NSDictionary *ok=DWTyped(reply[@"Ok"],NSDictionary.class),*shot=DWTyped(ok[@"Screenshot"],NSDictionary.class);
+                    if(shot){NSMutableDictionary *body=[shot mutableCopy];body[@"warnings"]=warnings;
+                        deferred([NSJSONSerialization dataWithJSONObject:@{@"Ok":@{@"Screenshot":body}} options:NSJSONWritingWithoutEscapingSlashes error:nil]);return;}
+                    NSString *failure=DWTyped(reply[@"Err"],NSString.class);
+                    if(failure){deferred(ipcError([NSString stringWithFormat:@"%@\n%@",[warnings componentsJoinedByString:@"\n"],failure]));return;}
+                }
                 deferred(jsonMember(jsonMember(response,"data"),"reply")?:[NSJSONSerialization dataWithJSONObject:answered.externalReplyObject options:NSJSONWritingWithoutEscapingSlashes error:nil]);
             };
             DWCanvasRenderer *renderer=[self canvasRenderer];

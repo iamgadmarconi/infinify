@@ -10,10 +10,12 @@
 @interface DWExportFrame : NSObject {
 @public
     _Atomic BOOL completed;
+    _Atomic BOOL captureExpired; // deadline stops capture callbacks; final validation may still complete
     CMSampleBufferRef sample;
     CVPixelBufferRef pixels;
     NSString *failure;
     NSArray<NSDictionary *> *nativeItems;
+    NSUInteger nativeIndex; // main-only capture cursor, independent of a failed root index
     DWNativePresenter *presenter;
     BOOL nativeFamilies;
 }

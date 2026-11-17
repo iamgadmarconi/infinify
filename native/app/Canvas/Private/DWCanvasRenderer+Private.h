@@ -119,6 +119,7 @@
 @end
 @interface DWCanvasRenderer ()
 @property (copy) DWCanvasSource source;
+@property(nonatomic,readwrite) BOOL exporting;
 @property NSMutableDictionary<NSNumber *,DWCanvasOutput *> *states;
 @property IFBackgroundProgram *program;
 @property(readwrite) BOOL inheritsMacBackground;

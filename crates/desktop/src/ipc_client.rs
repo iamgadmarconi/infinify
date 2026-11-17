@@ -589,6 +589,18 @@ fn invoke(args: &[String]) -> Result<(), Stop> {
     }
     let reply: Reply =
         serde_json::from_str(line.trim_end()).map_err(|e| failed(format!("invalid reply: {e}")))?;
+    // The native adapter can complete a partial export. Warnings stay off
+    // stdout, including when stdout belongs to PNG bytes or --json.
+    if matches!(invocation.request, Request::Screenshot { .. })
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim_end())
+        && let Some(warnings) = value
+            .pointer("/Ok/Screenshot/warnings")
+            .and_then(serde_json::Value::as_array)
+    {
+        for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
+            eprintln!("{warning}");
+        }
+    }
     let pretty = |reply: &Reply| serde_json::to_string_pretty(reply).map_err(failed);
 
     // `-o -` claims stdout for the PNG bytes, so it takes precedence over --json.

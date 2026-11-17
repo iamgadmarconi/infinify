@@ -207,6 +207,8 @@ static inline BOOL DWNativeTitleRefused(BOOL early,const char *reason,NSNumber *
 - (void)captureNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt content:(SCShareableContent *)content completed:(void (^)(NSString *))completed;
 - (void)requestNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt completed:(void (^)(NSString *))completed;
 - (void)retryNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt error:(NSError *)error completed:(void (^)(NSString *))completed;
+- (void)skipNativeExport:(DWExportFrame *)request index:(NSUInteger)index reason:(NSString *)reason completed:(void (^)(NSString *))completed;
+- (void)installNativeExport:(DWExportFrame *)request index:(NSUInteger)index pixels:(CVPixelBufferRef)pixels completed:(void (^)(NSString *))completed;
 - (CMTime)captureInterval;
 - (BOOL)startCapture:(LiveSource *)source size:(CGSize)pixels interval:(CMTime)interval;
 - (void)stopCapture:(LiveSource *)source;

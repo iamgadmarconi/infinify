@@ -21,22 +21,25 @@ static BOOL DWExportRetryable(NSError *error) {
 }
 // Immutable native capture plan, made on a read-only worker. Geometry is kept
 // here in native coordinates; the renderer receives normalized image offsets.
-static NSArray<NSDictionary *> *DWNativeExportPlan(NSArray<NSDictionary *> *roots,BOOL families,NSString *__autoreleasing *why) {
+static NSArray<NSDictionary *> *DWNativeExportPlan(NSArray<NSDictionary *> *roots,BOOL families,NSMutableDictionary *skipped,NSString *__autoreleasing *why) {
     NSMutableDictionary<NSNumber *,NSNumber *> *rank=[NSMutableDictionary dictionary],*owners=[NSMutableDictionary dictionary];
     // Only OnScreenOnly promises front-to-back ordering. Offscreen families
     // remain capturable, but supply no authority to interleave export families.
     NSArray *ordered=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly,kCGNullWindowID));
     for(NSUInteger i=0;i<ordered.count;i++){NSNumber *wid=DWTyped(ordered[i][(id)kCGWindowNumber],NSNumber.class),*pid=DWTyped(ordered[i][(id)kCGWindowOwnerPID],NSNumber.class);if(wid&&pid){if(rank[wid]){*why=@"native export stacking observation has duplicate windows";return nil;}rank[wid]=@(i);owners[wid]=pid;}}
     NSMutableArray<NSMutableDictionary *> *items=[NSMutableArray array];NSMutableSet *seen=[NSMutableSet set];
-    for(NSDictionary *root in roots){NSDictionary *identity=root[@"identity"];CGRect own=CGRectZero;
+    for(NSDictionary *root in roots){
+        NSMutableArray *rootItems=[NSMutableArray array];NSMutableSet *rootSeen=[NSMutableSet set];
+        NSArray *(^planRoot)(void)=^NSArray *{
+        NSDictionary *identity=root[@"identity"];CGRect own=CGRectZero;
         if(!((NSString *)DWTyped(root[@"capture_key"],NSString.class)).length||!DWNativeBounds([identity[@"wid"]unsignedIntValue],&own)||!isfinite(own.size.width)||!isfinite(own.size.height)||own.size.width<=0||own.size.height<=0){*why=@"native export could not read the root's own bounds";return nil;}
         NSArray *members=nil;
         if(families){NSDictionary *family=DWNativeWindowFamily(identity,why);if(!family)return nil;members=family[@"members"];}
         else members=@[@{@"identity":identity,@"native_bounds":DWRectJSON(own)}];
         BOOL hasRoot=NO,rankedFamily=YES;for(NSDictionary *member in members){NSDictionary *named=member[@"identity"];NSNumber *wid=named[@"wid"];
-            if((rank[wid]&&![owners[wid]isEqual:named[@"pid"]])||[seen containsObject:wid]){*why=@"native export family changed during the stacking read";return nil;}
+            if((rank[wid]&&![owners[wid]isEqual:named[@"pid"]])||[seen containsObject:wid]||[rootSeen containsObject:wid]){*why=@"native export family changed during the stacking read";return nil;}
             if(!rank[wid])rankedFamily=NO;
-            [seen addObject:wid];if([named isEqual:identity])hasRoot=YES;}
+            [rootSeen addObject:wid];if([named isEqual:identity])hasRoot=YES;}
         if(!hasRoot){*why=@"native export family omitted its root";return nil;}
         members=[members sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){
             NSNumber *aw=a[@"identity"][@"wid"],*bw=b[@"identity"][@"wid"];
@@ -50,7 +53,12 @@ static NSArray<NSDictionary *> *DWNativeExportPlan(NSArray<NSDictionary *> *root
             CGRect unit=CGRectMake((r.origin.x-own.origin.x)/own.size.width,(r.origin.y-own.origin.y)/own.size.height,r.size.width/own.size.width,r.size.height/own.size.height);
             NSMutableDictionary *item=[root mutableCopy];item[@"member"]=member[@"identity"];item[@"native_bounds"]=member[@"native_bounds"];item[@"root_bounds"]=DWRectJSON(own);item[@"unit_rect"]=DWRectJSON(unit);
             item[@"capture_member_key"]=[NSString stringWithFormat:@"%@:%lu",root[@"capture_key"],(unsigned long)memberIndex++];if(rankedFamily)item[@"stack_rank"]=rank[member[@"identity"][@"wid"]];
-            [items addObject:item];}
+            [rootItems addObject:item];}
+        return rootItems.copy;
+        };
+        NSArray *family=planRoot();
+        if(!family){if(!skipped)return nil;skipped[root[@"window"]]=*why?:@"native family is unavailable";*why=nil;continue;}
+        [seen unionSet:rootSeen];[items addObjectsFromArray:family];
     }
     // Compare only relative ranks inside this request. An unrelated window can
     // enter the desktop without invalidating otherwise identical captured order.
@@ -58,6 +66,16 @@ static NSArray<NSDictionary *> *DWNativeExportPlan(NSArray<NSDictionary *> *root
     NSArray *ranked=[eligible sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"stack_rank"]compare:b[@"stack_rank"]];}];
     for(NSUInteger i=0;i<ranked.count;i++)ranked[i][@"stack_rank"]=@(i);
     NSMutableArray *frozen=[NSMutableArray arrayWithCapacity:items.count];for(NSDictionary *item in items)[frozen addObject:item.copy];return frozen.copy;
+}
+static NSString *DWExportWarning(NSNumber *logical,LiveSource *source,NSString *reason) {
+    NSString *label=[NSString stringWithFormat:@"screenshot: skipped window #%@ pid=%d \"%@\": %@",logical,source.router.pid,source.title?:@"",reason?:@"capture unavailable"];
+    return [[label componentsSeparatedByCharactersInSet:NSCharacterSet.controlCharacterSet]componentsJoinedByString:@" "];
+}
+static NSUInteger DWExportRootCount(NSArray *items) {NSMutableSet *roots=[NSMutableSet set];for(NSDictionary *item in items)[roots addObject:item[@"window"]];return roots.count;}
+static NSArray *DWExportGeometry(NSArray *items) {
+    NSMutableArray *geometry=[NSMutableArray array];
+    for(NSDictionary *item in items){NSMutableDictionary *copy=[item mutableCopy];[copy removeObjectForKey:@"stack_rank"];[geometry addObject:copy];}
+    return geometry.copy;
 }
 // Frozen one-shot evidence is separate from the live replica stream cohort.
 static NSDictionary *DWExportOrderCohort(NSArray<NSDictionary *> *items) {
@@ -274,9 +292,8 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
         }
     });}];
 }
-// Exports draw at canvas scale, independent of zoom. Native one-shot capture sees
-// the transformed window's pixel density; request that raster instead of padding
-// it to an untransformed size. It cannot recover detail lost at an overview zoom.
+// Exports draw at canvas scale, independent of zoom. Copy native backing surfaces
+// without altering presentation; ScreenCaptureKit remains the compatibility fallback.
 // Cold ScreenCaptureKit setup
 // can require the main queue: return the IPC handler before waiting for it. The
 // request owns its snapshots, leaves live-stream configuration alone, and expires
@@ -287,54 +304,91 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
     if(!CGPreflightScreenCaptureAccess()){completed(@"Screen Recording access is unavailable; no snapshot requested");return;}
     if(self.native.ended){completed(@"native presentation has ended");return;}
     DWScreenshotWindowTarget *alone=effect.target.window;DWFocus *focus=self.controller.scene.focus;NSNumber *wanted=alone?(alone.window?:focus.intent):nil;
-    NSArray *windows=alone?(wanted?@[wanted]:@[]):self.sources.allKeys;self.exportSources=[NSMutableDictionary dictionary];self.exportAttachments=[NSMutableDictionary dictionary];self.exportOrdering=nil;
+    NSArray *windows=alone?(wanted?@[wanted]:@[]):self.sources.allKeys;self.exportSources=[NSMutableDictionary dictionary];self.exportAttachments=[NSMutableDictionary dictionary];self.exportOrdering=nil;self.exportWarnings=[NSMutableDictionary dictionary];
+    BOOL liveRequested=NO;for(NSNumber *logical in windows)if(self.sources[logical]){liveRequested=YES;break;}
     DWExportFrame *request=[DWExportFrame new];
-    void (^finish)(NSString *)=^(NSString *failure){if(atomic_exchange(&request->completed,YES))return;completed(failure);};
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{finish(@"full-resolution snapshot did not arrive within two seconds");});
+    void (^finish)(NSString *)=^(NSString *failure){if(atomic_exchange(&request->completed,YES))return;
+        if(!failure&&liveRequested){BOOL captured=NO;for(LiveSource *source in self.exportSources.allValues)if(source.pixels){captured=YES;break;}
+            if(!captured)failure=@"no windows could be captured";}
+        completed(failure);};
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+        if(atomic_load(&request->completed))return;
+        if(!request->nativeItems){finish(@"full-resolution snapshot did not arrive within two seconds");return;}
+        atomic_store(&request->captureExpired,YES);
+        NSMutableDictionary *counts=[NSMutableDictionary dictionary];NSMutableSet *incomplete=[NSMutableSet set];
+        for(NSDictionary *item in request->nativeItems){NSNumber *logical=item[@"window"];counts[logical]=@([counts[logical]unsignedIntegerValue]+1);}
+        for(NSNumber *logical in counts)if(!self.exportSources[logical].pixels||self.exportAttachments[logical].count+1!=[counts[logical]unsignedIntegerValue])[incomplete addObject:logical];
+        NSMutableArray *ready=[NSMutableArray array];
+        for(NSDictionary *item in request->nativeItems){NSNumber *logical=item[@"window"];
+            if([incomplete containsObject:logical]){self.exportWarnings[logical]=DWExportWarning(logical,item[@"source"],@"snapshot deadline expired");LiveSource *empty=[LiveSource new];empty.logical=logical;self.exportSources[logical]=empty;[self.exportAttachments removeObjectForKey:logical];}
+            else [ready addObject:item];}
+        request->nativeItems=ready.copy;
+        [self captureNativeExport:request index:ready.count attempt:0 content:nil completed:finish];
+    });
     // Native presentation has neither an SCWindow nor a capture stream. Enumerate
     // once, then select only the fresh identities already bound by this run.
     if(windows.count){
         NSMutableArray *roots=[NSMutableArray array];DWScene *snapshot=self.controller.scene;
         for(NSNumber *logical in windows){LiveSource *source=self.sources[logical];if(!source)continue;DWSource *binding=nil;
             for(DWWindow *window in snapshot.windows)if([window.window isEqual:logical])binding=window.source;
-            if(source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||!binding.generation){finish(@"native screenshot binding expired");return;}
+            LiveSource *empty=[LiveSource new];empty.logical=logical;self.exportSources[logical]=empty;
+            if(source.detached||source.nativeMinimized||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||!binding.generation){self.exportWarnings[logical]=DWExportWarning(logical,source,source.nativeMinimized?@"window is minimized":@"native screenshot binding expired");continue;}
             [roots addObject:@{@"window":logical,@"source":source,@"identity":[source.identity copy],@"generation":binding.generation,@"capture_key":NSUUID.UUID.UUIDString}];}
         NSArray *asked=roots.copy;request->presenter=self.native;request->nativeFamilies=!self.native||self.native.familiesNeeded;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-            NSString *failure=nil;NSArray *plan=DWNativeExportPlan(asked,request->nativeFamilies,&failure);
+            NSString *failure=nil;NSMutableDictionary *skipped=[NSMutableDictionary dictionary];
+            NSArray *plan=DWNativeExportPlan(asked,request->nativeFamilies,skipped,&failure);
             if(!plan){dispatch_async(dispatch_get_main_queue(),^{if(!atomic_load(&request->completed))finish(failure?:@"native screenshot family is unavailable");});return;}
             if(atomic_load(&request->completed))return;
             dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed))return;
-                request->nativeItems=plan;[self requestNativeExport:request index:0 attempt:0 completed:finish];});
+                for(NSDictionary *root in asked)if(skipped[root[@"window"]])self.exportWarnings[root[@"window"]]=DWExportWarning(root[@"window"],root[@"source"],skipped[root[@"window"]]);request->nativeItems=plan;[self requestNativeExport:request index:0 attempt:0 completed:finish];});
         });
     }else [self captureExportWindows:windows index:0 content:nil request:request completed:finish];
 }
 - (void)retryNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt error:(NSError *)error completed:(void (^)(NSString *))completed {
-    if(atomic_load(&request->completed))return;
-    if(attempt>=2||!DWExportRetryable(error)){completed(error.localizedDescription?:@"native screenshot capture failed");return;}
+    if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
+    if(attempt>=3||!DWExportRetryable(error)){[self skipNativeExport:request index:index reason:error.localizedDescription completed:completed];return;}
     // Re-enumeration never changes the audited family plan or its bindings.
     // Each new attempt repeats identity, parent-chain and own-bounds checks.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.08*(1u<<attempt)*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.08*(1u<<(attempt?attempt-1:0))*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
         if(!atomic_load(&request->completed))[self requestNativeExport:request index:index attempt:attempt+1 completed:completed];});
 }
 - (void)requestNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt completed:(void (^)(NSString *))completed {
-    if(atomic_load(&request->completed))return;
+    if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
+    request->nativeIndex=index;
     if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
+    if(index>=request->nativeItems.count){[self captureNativeExport:request index:index attempt:attempt content:nil completed:completed];return;}
+    if(!attempt){
+        NSDictionary *item=request->nativeItems[index];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+            DWExportFrame *result=[DWExportFrame new];CGImageRef image=NULL;BOOL empty=NO;
+            if(!atomic_load(&request->completed)&&DWNativeExportCurrent(item,request->nativeFamilies))image=DWNativeCopyWindowImage([item[@"member"][@"wid"]unsignedIntValue],&empty);
+            if(image){result->pixels=DWExportPixels(image);CGImageRelease(image);}
+            if(result->pixels&&!DWNativeExportCurrent(item,request->nativeFamilies)){CVPixelBufferRelease(result->pixels);result->pixels=NULL;}
+            dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
+                if(result->pixels){[self installNativeExport:request index:index pixels:result->pixels completed:completed];return;}
+                if(empty){[self skipNativeExport:request index:index reason:@"window surface remained empty for one second" completed:completed];return;}
+                // A missing symbol, unreadable or blank surface takes today's
+                // ScreenCaptureKit path, not a successful empty export.
+                [self requestNativeExport:request index:index attempt:1 completed:completed];
+            });
+        });return;
+    }
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content,NSError *error){
-        dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed))return;
+        dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
             if(error){[self retryNativeExport:request index:index attempt:attempt error:error completed:completed];return;}
-            if(!content){completed(@"native screenshot supplied no window list");return;}
+            if(!content){[self skipNativeExport:request index:index reason:@"native screenshot supplied no window list" completed:completed];return;}
             [self captureNativeExport:request index:index attempt:attempt content:content completed:completed];});
     }];
 }
 - (void)captureNativeExport:(DWExportFrame *)request index:(NSUInteger)index attempt:(NSUInteger)attempt content:(SCShareableContent *)content completed:(void (^)(NSString *))completed {
-    if(atomic_load(&request->completed))return;
+    if(atomic_load(&request->completed)||(atomic_load(&request->captureExpired)&&index<request->nativeItems.count))return;
     if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
     DWScene *snapshot=self.controller.scene;
-    for(NSDictionary *item in request->nativeItems){LiveSource *source=item[@"source"];DWSource *binding=nil;
+    if(index<request->nativeItems.count)for(NSDictionary *item in request->nativeItems){LiveSource *source=item[@"source"];DWSource *binding=nil;
         for(DWWindow *window in snapshot.windows)if([window.window isEqual:item[@"window"]])binding=window.source;
         if(self.sources[item[@"window"]]!=source||source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,item[@"identity"])
-            ||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||![binding.generation isEqual:item[@"generation"]]){completed(@"native screenshot binding changed during capture");return;}}
+            ||!boundIdentity(source.identity,DWNativeIdentity(binding.identity))||![binding.generation isEqual:item[@"generation"]]){[self skipNativeExport:request index:[request->nativeItems indexOfObject:item] reason:@"native screenshot binding changed during capture" completed:completed];return;}}
     if(index>=request->nativeItems.count){
         // Re-read the complete family before composition. A new/removed child,
         // changed bounds or changed child order cannot silently produce a partial
@@ -342,16 +396,36 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
         NSMutableArray *roots=[NSMutableArray array];NSMutableSet *seen=[NSMutableSet set];
         for(NSDictionary *item in request->nativeItems)if(![seen containsObject:item[@"window"]]){
             [seen addObject:item[@"window"]];[roots addObject:@{@"window":item[@"window"],@"source":item[@"source"],@"identity":item[@"identity"],@"generation":item[@"generation"],@"capture_key":item[@"capture_key"]}];}
-        NSArray *asked=roots.copy;
+        NSArray *asked=roots.copy,*frozen=request->nativeItems;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-            NSString *failure=nil;NSArray *fresh=DWNativeExportPlan(asked,request->nativeFamilies,&failure);BOOL same=[fresh isEqual:request->nativeItems];
+            NSMutableDictionary *skipped=[NSMutableDictionary dictionary];NSString *why=nil;
+            NSArray *fresh=DWNativeExportPlan(asked,request->nativeFamilies,skipped,&why);
+            for(NSDictionary *root in asked){
+                NSMutableArray *old=[NSMutableArray array],*now=[NSMutableArray array];
+                for(NSDictionary *item in frozen)if([item[@"window"]isEqual:root[@"window"]])[old addObject:item];
+                for(NSDictionary *item in fresh)if([item[@"window"]isEqual:root[@"window"]])[now addObject:item];
+                if(!fresh||![DWExportGeometry(now)isEqual:DWExportGeometry(old)])skipped[root[@"window"]]=skipped[root[@"window"]]?:why?:@"native screenshot family changed before composition";}
+            // Validate relative stacking across the complete surviving cohort,
+            // not one root at a time. Unrelated windows may change absolute ranks.
+            NSMutableDictionary *newRanks=[NSMutableDictionary dictionary];
+            for(NSDictionary *item in fresh)if(item[@"stack_rank"])newRanks[item[@"capture_member_key"]]=item[@"stack_rank"];
+            for(NSUInteger i=0;i<frozen.count;i++){NSDictionary *a=frozen[i];NSNumber *ar=a[@"stack_rank"],*an=newRanks[a[@"capture_member_key"]];
+                if(!ar||!an||skipped[a[@"window"]])continue;
+                for(NSUInteger j=i+1;j<frozen.count;j++){NSDictionary *b=frozen[j];NSNumber *br=b[@"stack_rank"],*bn=newRanks[b[@"capture_member_key"]];
+                    if(!br||!bn||skipped[b[@"window"]])continue;
+                    if([ar compare:br]!=[an compare:bn]){skipped[a[@"window"]]=@"native screenshot stacking changed during capture";skipped[b[@"window"]]=@"native screenshot stacking changed during capture";}}}
             dispatch_async(dispatch_get_main_queue(),^{if(atomic_load(&request->completed))return;
                 if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
                 DWScene *current=self.controller.scene;NSMutableDictionary *bindings=[NSMutableDictionary dictionary];for(DWWindow *window in current.windows)if(window.source)bindings[window.window]=window.source;
-                for(NSDictionary *item in request->nativeItems){DWSource *binding=bindings[item[@"window"]];LiveSource *source=item[@"source"];
-                    if(self.sources[item[@"window"]]!=source||source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,item[@"identity"])||!boundIdentity(item[@"identity"],DWNativeIdentity(binding.identity))||![item[@"generation"]isEqual:binding.generation]){completed(@"native screenshot source changed before composition");return;}}
-                if(same)self.exportOrdering=DWExportOrderCohort(request->nativeItems);
-                completed(same?nil:failure?:@"native screenshot family changed before composition");
+                for(NSDictionary *item in frozen){DWSource *binding=bindings[item[@"window"]];LiveSource *source=item[@"source"];
+                    if(self.sources[item[@"window"]]!=source||source.detached||!DWInScope(self.scope,source.router.pid)||!boundIdentity(source.identity,item[@"identity"])||!boundIdentity(item[@"identity"],DWNativeIdentity(binding.identity))||![item[@"generation"]isEqual:binding.generation])skipped[item[@"window"]]=@"native screenshot source changed before composition";}
+                NSMutableArray *accepted=[NSMutableArray array];
+                for(NSDictionary *item in frozen){NSNumber *logical=item[@"window"];NSString *why=skipped[logical];
+                    if(why){self.exportWarnings[logical]=DWExportWarning(logical,item[@"source"],why);LiveSource *empty=[LiveSource new];empty.logical=logical;self.exportSources[logical]=empty;[self.exportAttachments removeObjectForKey:logical];}
+                    else [accepted addObject:item];}
+                self.exportOrdering=DWExportOrderCohort(accepted);
+                if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"export: captured_roots=%lu skipped_roots=%lu\n",(unsigned long)DWExportRootCount(accepted),(unsigned long)self.exportWarnings.count);
+                completed(nil);
             });
         });return;
     }
@@ -364,35 +438,58 @@ static SCStreamConfiguration *windowCaptureConfiguration(CGSize pixels,CMTime in
     }
     CGRect bounds=DWRectFromJSON(item[@"native_bounds"]);SCContentFilter *filter=[[SCContentFilter alloc]initWithDesktopIndependentWindow:capturable];
     CGRect area=filter.contentRect;double density=filter.pointPixelScale;
-    if(!(isfinite(area.size.width)&&isfinite(area.size.height)&&area.size.width>0&&area.size.height>0&&isfinite(density)&&density>0)){completed(@"native screenshot has no capturable pixel area");return;}
+    if(!(isfinite(area.size.width)&&isfinite(area.size.height)&&area.size.width>0&&area.size.height>0&&isfinite(density)&&density>0)){[self skipNativeExport:request index:index reason:@"native screenshot has no capturable pixel area" completed:completed];return;}
     CGSize available=CGSizeMake(ceil(area.size.width*density),ceil(area.size.height*density));
     double shrink=fmin(1,fmin(ceil(bounds.size.width*2)/available.width,ceil(bounds.size.height*2)/available.height));
     CGSize pixels=CGSizeMake(MAX(1,floor(available.width*shrink)),MAX(1,floor(available.height*shrink)));
-    if(pixels.width>16384||pixels.height>16384){completed(@"window snapshot exceeds the 16384px per-side limit");return;}
+    if(pixels.width>16384||pixels.height>16384){[self skipNativeExport:request index:index reason:@"window snapshot exceeds the 16384px per-side limit" completed:completed];return;}
     SCScreenshotConfiguration *config=[SCScreenshotConfiguration new];config.width=(NSInteger)pixels.width;config.height=(NSInteger)pixels.height;config.destinationRect=CGRectMake(0,0,pixels.width,pixels.height);config.showsCursor=NO;config.ignoreShadows=YES;config.ignoreClipping=YES;config.includeChildWindows=NO;config.dynamicRange=SCScreenshotDynamicRangeSDR;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-        if(atomic_load(&request->completed))return;
-        if(!DWNativeExportCurrent(item,request->nativeFamilies)){dispatch_async(dispatch_get_main_queue(),^{if(!atomic_load(&request->completed))completed(@"native family member changed before screenshot capture");});return;}
+        if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
+        if(!DWNativeExportCurrent(item,request->nativeFamilies)){dispatch_async(dispatch_get_main_queue(),^{if(!atomic_load(&request->completed))[self skipNativeExport:request index:index reason:@"native family member changed before screenshot capture" completed:completed];});return;}
         [SCScreenshotManager captureScreenshotWithFilter:filter configuration:config completionHandler:^(SCScreenshotOutput *output,NSError *error){
-            if(atomic_load(&request->completed))return;
+            if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
             DWExportFrame *result=[DWExportFrame new];result->failure=error.localizedDescription;
             if(!result->failure&&!DWNativeExportCurrent(item,request->nativeFamilies))result->failure=@"native family member changed identity, ancestry or own bounds during capture";
             if(!result->failure)result->pixels=DWExportPixels(output.sdrImage);
             if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"export: native window=%s member=%s requested=%.0fx%.0f image=%zux%zu\n",logical.stringValue.UTF8String,[identity[@"wid"]stringValue].UTF8String,pixels.width,pixels.height,output.sdrImage?CGImageGetWidth(output.sdrImage):0,output.sdrImage?CGImageGetHeight(output.sdrImage):0);
             dispatch_async(dispatch_get_main_queue(),^{
-                if(atomic_load(&request->completed))return;
-                if(self.cleaning||DWStopSignal||source.detached||self.sources[logical]!=source||self.native!=request->presenter||self.native.ended){completed(@"native screenshot source or session ended during capture");return;}
+                if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
+                if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot session ended during capture");return;}
+                if(source.detached||self.sources[logical]!=source){[self skipNativeExport:request index:index reason:@"native screenshot source ended during capture" completed:completed];return;}
                 if(error){[self retryNativeExport:request index:index attempt:attempt error:error completed:completed];return;}
-                if(result->failure){completed(result->failure);return;}
-                if(!result->pixels||CVPixelBufferGetWidth(result->pixels)<pixels.width||CVPixelBufferGetHeight(result->pixels)<pixels.height){completed(@"native snapshot supplied fewer pixels than requested");return;}
-                if([identity[@"wid"]isEqual:item[@"identity"][@"wid"]]){
-                    LiveSource *export=[LiveSource new];export.logical=logical;export.frames=source.frames;[export installPixels:result->pixels];self.exportSources[logical]=export;
-                }else{DWCanvasAttachment *image=[DWCanvasAttachment new];image.key=item[@"capture_member_key"];image.buffer=result->pixels;image.unitRect=DWRectFromJSON(item[@"unit_rect"]);
-                    NSMutableArray *family=self.exportAttachments[logical];if(!family){family=[NSMutableArray array];self.exportAttachments[logical]=family;}[family addObject:image];}
-                [self captureNativeExport:request index:index+1 attempt:0 content:content completed:completed];
+                if(result->failure){[self skipNativeExport:request index:index reason:result->failure completed:completed];return;}
+                if(!result->pixels||CVPixelBufferGetWidth(result->pixels)<pixels.width||CVPixelBufferGetHeight(result->pixels)<pixels.height){[self skipNativeExport:request index:index reason:@"native snapshot supplied fewer pixels than requested" completed:completed];return;}
+                [self installNativeExport:request index:index pixels:result->pixels completed:completed];
             });
         }];
     });
+}
+// Failures belong to a complete root family, never to unrelated windows.
+- (void)skipNativeExport:(DWExportFrame *)request index:(NSUInteger)index reason:(NSString *)reason completed:(void (^)(NSString *))completed {
+    if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
+    if(index>=request->nativeItems.count){completed(reason);return;}
+    NSDictionary *failed=request->nativeItems[index];NSNumber *logical=failed[@"window"];
+    self.exportWarnings[logical]=DWExportWarning(logical,failed[@"source"],reason);
+    LiveSource *empty=[LiveSource new];empty.logical=logical;self.exportSources[logical]=empty;[self.exportAttachments removeObjectForKey:logical];
+    NSMutableArray *remaining=[NSMutableArray array];NSUInteger next=0,cursor=request->nativeIndex;
+    for(NSUInteger i=0;i<request->nativeItems.count;i++){NSDictionary *item=request->nativeItems[i];
+        if([item[@"window"]isEqual:logical])continue;[remaining addObject:item];if(i<cursor)next++;}
+    request->nativeItems=remaining.copy;[self requestNativeExport:request index:next attempt:0 completed:completed];
+}
+- (void)installNativeExport:(DWExportFrame *)request index:(NSUInteger)index pixels:(CVPixelBufferRef)pixels completed:(void (^)(NSString *))completed {
+    if(atomic_load(&request->completed)||atomic_load(&request->captureExpired))return;
+    NSDictionary *item=request->nativeItems[index],*identity=item[@"member"];LiveSource *source=item[@"source"];NSNumber *logical=item[@"window"];
+    DWSource *binding=[self.controller.scene windowWithID:logical].source;
+    if(self.cleaning||DWStopSignal||self.sessionInactive||self.native!=request->presenter||self.native.ended){completed(@"native screenshot cancelled or its session ended");return;}
+    if(self.sources[logical]!=source||source.detached||!boundIdentity(source.identity,item[@"identity"])||!boundIdentity(item[@"identity"],DWNativeIdentity(binding.identity))||![binding.generation isEqual:item[@"generation"]]){
+        [self skipNativeExport:request index:index reason:@"native screenshot binding changed during capture" completed:completed];return;}
+    if([identity[@"wid"]isEqual:item[@"identity"][@"wid"]]){
+        LiveSource *export=[LiveSource new];export.logical=logical;export.frames=source.frames;[export installPixels:pixels];self.exportSources[logical]=export;
+    }else{DWCanvasAttachment *image=[DWCanvasAttachment new];image.key=item[@"capture_member_key"];image.buffer=pixels;image.unitRect=DWRectFromJSON(item[@"unit_rect"]);
+        NSMutableArray *family=self.exportAttachments[logical];if(!family){family=[NSMutableArray array];self.exportAttachments[logical]=family;}[family addObject:image];}
+    if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"export: accepted window=%s member=%s image=%zux%zu\n",logical.stringValue.UTF8String,[identity[@"wid"]stringValue].UTF8String,CVPixelBufferGetWidth(pixels),CVPixelBufferGetHeight(pixels));
+    [self requestNativeExport:request index:index+1 attempt:0 completed:completed];
 }
 - (void)captureExportWindows:(NSArray<NSNumber *> *)windows index:(NSUInteger)index content:(SCShareableContent *)content request:(DWExportFrame *)request completed:(void (^)(NSString *))completed {
     (void)content; // Native exports use the separately audited family plan above.

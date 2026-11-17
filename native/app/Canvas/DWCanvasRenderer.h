@@ -61,8 +61,13 @@ typedef struct { NSUInteger requests,flushes,drawn,presented;double flushSeconds
 // Replaces only changed output programs and schedules their redraw. The resolver
 // must retain explicit configured sources and perform no per-frame disk work.
 - (void)refreshBackgrounds;
+// True only during synchronous screenshot composition, not async preparation.
+@property(nonatomic,readonly) BOOL exporting;
 // Used only by screenshot composition. Onscreen rendering never calls this.
 @property(copy) NSArray<DWCanvasAttachment *> *(^exportAttachments)(NSNumber *window);
+// Export-only: omit a failed live root entirely, retaining the controller's region.
+// Nil outside an export; never consulted by ordinary rendering.
+@property(copy) BOOL (^exportSkip)(NSNumber *window);
 // Optional one-shot ordering, independent of live output order and evidence.
 // The shell freezes and revalidates the export's own cohort before composition.
 // Its roots/children use {window,bucket} / {window,key,bucket}; stand-ins and

@@ -308,8 +308,14 @@ window framed by `[zoom] fit_padding`, `region` for a canvas rectangle or, with
 unit, whatever the zoom is. The controller resolves the region and refuses what
 upstream refuses; the shell renders it at zoom 1 into a transparent target,
 without output outlines and, for `window`, without the background, and reports
-the size of the image it wrote. A window that is on no output is drawn from the
-last picture its stream delivered, or as the placeholder fill. A `window`
+the size of the image it wrote. Native live windows on any part of the canvas
+use independent, read-only one-shot backing images, not a stopped stream's old
+frame. Unreadable or minimized live roots are skipped with their families and
+reported on stderr; the controller's `all` framing and closed-window stand-ins
+stay unchanged. The renderer's `exporting` flag selects export images only during
+synchronous composition and resets on every exit; asynchronous preparation never
+replaces a replica's live source. See [Desktop capture](../Desktop/README.md).
+A `window`
 capture of a live window is framed with room for its shadow, as upstream's is,
 and drawn at its rule's `opacity`, else opaque, whatever `[decorations]
 opacity` makes of it on screen: upstream captures an isolated window as

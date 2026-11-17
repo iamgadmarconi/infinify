@@ -454,7 +454,11 @@ is its spec, joined by single spaces. Parsing is by hand; there is no clap.
   blank line. Without `--json` a line that is not an event ends the client with
   status 1. An `Err` ack is reported like any other `Err` reply.
 - `screenshot` builds upstream's request (an absolute path) and prints the path
-  of the reply. For `-o -` (v0.21.0) the client first reserves a file of its own,
+  of the reply. A partial native export may include `warnings` in the
+  `Ok.Screenshot` body; the client prints each skipped-window line to stderr,
+  including with `--json` or `-o -`, without contaminating stdout. It succeeds
+  when at least one requested live root was captured and fails clearly when all
+  requested live roots failed. For `-o -` (v0.21.0) the client first reserves a file of its own,
   created new with mode 0600 in the directory of the socket (which the app only
   serves from when it is yours and not writable by group or others), puts that
   path in the request, relays the file's bytes to stdout whatever path the reply

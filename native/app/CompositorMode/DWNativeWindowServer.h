@@ -11,6 +11,11 @@
 // [80,937,320,232] untouched, at half size and parked). NO when the window server
 // does not answer for that window. Any thread.
 bool DWNativeBounds(uint32_t wid,CGRect *out);
+// Retained, untransformed window surface, without a display lookup or placement
+// changes. NULL when unavailable or empty; callers retain their SCK fallback.
+// Empty surfaces retry for at most one second; *empty distinguishes exhaustion.
+// Read-only, any thread; the caller must check Screen Recording authorization.
+CGImageRef DWNativeCopyWindowImage(uint32_t wid,BOOL *empty) CF_RETURNS_RETAINED;
 // Balanced, bounded by the caller, on this app connection. Private signatures
 // follow pinned yabai; success alone does not prove cross-process atomicity.
 CGError DWNativeScreenUpdates(BOOL enabled);

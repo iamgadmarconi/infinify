@@ -9,6 +9,7 @@
 #import "DWNativeWindowServer.h"
 #import "DWGeometryJSON.h"
 #include <dlfcn.h>
+#include <unistd.h>
 
 bool DWNativeBounds(uint32_t wid,CGRect *out) {
     static int (*connection)(void);static CGError (*bounds)(int,uint32_t,CGRect *);static dispatch_once_t once;
@@ -16,6 +17,36 @@ bool DWNativeBounds(uint32_t wid,CGRect *out) {
     CGRect r=CGRectZero;if(!connection||!bounds||!wid||bounds(connection(),wid,&r)!=kCGErrorSuccess)return false;
     if(!isfinite(r.origin.x)||!isfinite(r.origin.y)||!isfinite(r.size.width)||!isfinite(r.size.height)||r.size.width<=0||r.size.height<=0)return false;
     if(out)*out=r;return true;
+}
+
+// Public ABI: SDK System/Library/Frameworks/CoreGraphics.framework/Headers/
+// CGWindow.h:271-274, CGWindowListCreateImage (SDK declaration
+// SCREEN_CAPTURE_OBSOLETE(10.5,14.0,15.0)). Resolve by name like our private
+// adapters: current systems may still provide it, but future ones need not.
+// IncludingWindow + CGRectNull reads the backing surface even while the
+// presentation transform parks it beyond every display. It changes no placement.
+CGImageRef DWNativeCopyWindowImage(uint32_t wid,BOOL *empty) {
+    if(empty)*empty=NO;
+    static CGImageRef (*capture)(CGRect,CGWindowListOption,CGWindowID,CGWindowImageOption);static dispatch_once_t once;
+    dispatch_once(&once,^{capture=dlsym(RTLD_DEFAULT,"CGWindowListCreateImage");});
+    if(!capture||!wid)return NULL;
+    for(NSUInteger attempt=0;attempt<5;attempt++){
+    CGImageRef image=capture(CGRectNull,kCGWindowListOptionIncludingWindow,wid,kCGWindowImageBoundsIgnoreFraming|kCGWindowImageBestResolution);
+    if(!image)return NULL;
+    size_t width=CGImageGetWidth(image),height=CGImageGetHeight(image);
+    if(!width||!height||width>16384||height>16384){CGImageRelease(image);return NULL;}
+    // An empty/transparent surface is not a successful screenshot. Sample on
+    // this worker before installation; uniform surfaces fall back conservatively.
+    uint32_t sample[32*32]={0};CGColorSpaceRef space=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context=CGBitmapContextCreate(sample,32,32,8,32*4,space,kCGImageAlphaPremultipliedFirst|kCGBitmapByteOrder32Little);CGColorSpaceRelease(space);
+    BOOL opaque=NO,varied=NO;
+    if(context){CGContextDrawImage(context,CGRectMake(0,0,32,32),image);CGContextRelease(context);
+        for(NSUInteger i=0;i<32*32;i++){if(sample[i]>>24)opaque=YES;if(sample[i]!=sample[0])varied=YES;}}
+    if(opaque&&varied)return image;
+    CGImageRelease(image);
+    if(attempt<4)usleep(250000);
+    }
+    if(empty)*empty=YES;return NULL;
 }
 
 // yabai dd845723416f5fe92af49fad5ebab00369e07edd src/misc/extern.h:23-24;

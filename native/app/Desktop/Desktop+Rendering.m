@@ -273,7 +273,7 @@ static NSArray<NSDictionary *> *DWExportOrderedTokens(NSArray<NSDictionary *> *t
     if(self.compositor||self.cleaning)return self.compositor;
     __weak Desktop *weak=self;
     self.compositor=[[DWCanvasRenderer alloc]initWithSource:^DWCanvasContent(NSNumber *window,DWPlacement *placement){
-        LiveSource *source=weak.exportSources[window]?:weak.sources[window];DWCanvasContent none={NULL,0,CGRectNull,CGSizeZero,CGSizeZero};
+        LiveSource *source=weak.compositor.exporting?(weak.exportSources[window]?:weak.sources[window]):weak.sources[window];DWCanvasContent none={NULL,0,CGRectNull,CGSizeZero,CGSizeZero};
         if(!source||source.detached||!source.pixels||(source.nativeReplica&&source.error))return none;
         // The native size Router caches whenever router.bounds is set: no per-window decode per frame.
         Router *router=source.router;CGSize native=router?router.nativeSize:CGSizeZero;

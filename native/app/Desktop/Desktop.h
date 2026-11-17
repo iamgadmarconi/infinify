@@ -58,6 +58,7 @@
 @property NSMutableDictionary<NSNumber *,LiveSource *> *exportSources; // one-shot export frames; native pixels retain the transformed window's density
 @property NSMutableDictionary<NSNumber *,NSMutableArray<DWCanvasAttachment *> *> *exportAttachments;
 @property NSDictionary *exportOrdering; // accepted immutable one-shot cohort only
+@property NSMutableDictionary<NSNumber *,NSString *> *exportWarnings; // one line per skipped root; export only
 @property BOOL frameFlying; // the frame timer serves camera motion, not only what the compositor animates by itself (a background, a window opening or leaving)
 @property CFTimeInterval lastObservation;
 @property CFTimeInterval lastResizeObservation;

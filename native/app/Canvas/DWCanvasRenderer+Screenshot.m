@@ -84,11 +84,15 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
     return CGRectMake(round(camera.x+(x-corner.x)/zoom),round(camera.y+(y-corner.y)/zoom),round(w/zoom),round(h/zoom));
 }
 - (NSDictionary *)screenshotPixels:(DWShellEffect *)effect snapshot:(DWScene *)snapshot {
+    @try {
     NSString *path=effect.path,*refused=nil;double scale=effect.scale?[effect.scale doubleValue]:NAN;
     if(!path.isAbsolutePath)return refusal(@"screenshot path must be absolute");
     if(!snapshot)return refusal(@"no renderer available for capture");
     if(!snapshot.hasCurrentOutputPlacements)return refusal(@"snapshot placements do not match the current schema");
+    // configure updates ordinary cached elements too: it must read live sources.
     [self configure:snapshot];
+    self.exporting=YES;
+    if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"export: composition begin exporting=1\n");
     // A window target is composed alone on transparency, its shadow included. The controller resolved the selector.
     DWScreenshotTarget *target=effect.target;IFCompositorElement *isolate=nil;DWScreenshotWindowTarget *alone=target.window;
     NSNumber *wanted=alone?alone.window?:snapshot.focus.intent:nil;
@@ -115,6 +119,7 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
         // An isolated export has exactly this family's token set. Other roots
         // neither constrain its order nor borrow pixels into this composition.
         if(alone&&![window isEqual:wanted])continue;
+        if(self.exportSkip&&self.exportSkip(window))continue;
         if(w.isPinned&&![window isEqual:wanted])continue;
         if(!p)p=w.capturePlacement;
         if(!p.isCurrentDrawnPlacement)return refusal(@"snapshot window entries do not match the current schema");
@@ -220,5 +225,6 @@ static NSDictionary *refusal(NSString *message) { return @{@"error":message}; }
     }
     long pixelsWide=(long)CGImageGetWidth(image),pixelsHigh=(long)CGImageGetHeight(image);
     return @{@"image":CFBridgingRelease(image),@"path":path,@"width":@(pixelsWide),@"height":@(pixelsHigh)};
+    } @finally {self.exporting=NO;if(getenv("INFINIFY_DEBUG"))fprintf(stderr,"export: composition end exporting=0\n");}
 }
 @end
