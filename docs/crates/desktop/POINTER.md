@@ -356,7 +356,9 @@ controller's `hit` gives the same answer and is not asked, to keep the
 per-packet cost nil). The decision is `DWPickMotion` (`DWControllerHit.h`),
 run in `DWControllerHitTests.m` against the real controller's snapshot
 and hit at zoom 1, 0.4 and exactly 0.5 and over empty canvas, a widget and
-malformed input.
+malformed input. Packet-level contract: a claimed moved packet is dropped; an
+unclaimed one, and one during a held native button, are returned untouched; a
+tagged one is not offered.
 
 Measured in the UTM guest (macOS 27.0.1, compositor mode, default
 `interact_min` 0.5, no config file), real HID events posted at the HID tap

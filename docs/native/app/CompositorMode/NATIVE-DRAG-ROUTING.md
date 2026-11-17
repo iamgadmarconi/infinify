@@ -202,7 +202,8 @@ offered to the consumer, and the consumer ends WindowServer's drag with one left
 source, carrying the source's lifetime tag (which both taps let through, as for every posted copy); the canvas's hold on the
 physical pair (`-holdsCapturedButton:`) keeps the shell's lost-release watchdog from ending the gesture because the system's button
 state now reads up. Other native pairs, including content drags, resizes and
-drag-and-drop sessions, are untouched: only a press whose own application starts moving the native window is taken. That the application and WindowServer accept the tagged release is
+drag-and-drop sessions, are untouched: only a press whose own application starts moving the native window is taken. The taken packet is swallowed, the tails are offered to the consumer, and the
+next press is native again. That the application and WindowServer accept the tagged release is
 a guest observation recorded in [COMPOSITOR-MODE.md](COMPOSITOR-MODE.md#dragging-resizing-and-context-menus-of-a-transformed-window-full-desktop-dock-helper).
 The takeover does not put the application's native frame back: WindowServer has already moved it (to where the window was drawn), and the
 helper restores the window's original placement-1 layer, which is relative to the native frame, so a taken-over window is restored consistent
