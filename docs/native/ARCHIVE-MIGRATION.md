@@ -438,9 +438,7 @@ commands; their source lists continue on following lines in those scripts.
 | `ipc-limits.sh` | 12 |
 | `live-guest-lib.sh` | 57 |
 | `mac-wallpaper-refresh.sh` | 9 |
-| `native-chrome-input.sh` | 20 |
 | `native-daemon.sh` | 15, 18, 32 |
-| `native-decorations.sh` | 12 |
 | `native-display-space-cache.sh` | 10 |
 | `native-drag-drop.sh` | 93 |
 | `native-family-recovery.sh` | 10 |
@@ -494,7 +492,6 @@ Physical path reads do not.
 | `tests/native/app/Desktop/DWRootCaptureMailboxTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |
 | `tests/native/app/Desktop/DWSnapshotMirrorTests.m:5` | `DWSnapshotMirror.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Desktop/DesktopCapturedInputTests.m:2` | `Desktop+Private.h` | Documentation-only path/name. |
-| `tests/native/app/Desktop/DesktopNativeChromeTests.m:8` | `DWControllerHit.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Input/DWNativeInputTests.m:14` | `DWNativeToolbarExtent.h` | Bare import: retained via Private search path. |
 | `tests/native/app/Input/DWNativeInputTests.m:180` | `DWNativeToolbarExtent.h` | Documentation-only path/name. |
 | `tests/native/app/System/DWSetupAssistantFixture.m:8` | `DWSetupButton.h` | Bare import: retained via Private search path. |
@@ -509,7 +506,6 @@ interface refactors.
 | Script | Existing public archive interface | Why migration is not just a linker edit |
 | --- | --- | --- |
 | `family-geometry.sh` | `DWCanvasRenderer.h`: readonly `hasGeometryTransitions` and `hasFamilyGeometryTransitions`. | `DWCanvasRendererTests.m` defines fake `DWCanvasOutput`, `GeometryRenderer`, `GeometryFrame`, `GeometryElement`, then compiles sliced methods into its fake renderer. There is no public injection interface for the fabricated renderer states/frame lifecycle. Linking Canvas exposes queries but does not feed these test states. Remove conflicting production class substitutes and exercise the real renderer, or deliberately introduce a separate state-query seam later. Headless isolation is not automatically preserved. |
-| `native-chrome-input.sh` | `DWPressAdmission.h`: `initWithDesktop:scene:native:`, `consume:event:stage:`, `mouseDown:view:`, `prepareDrag:at:view:`; protocols `DWPressNativeLookup`, `DWPressSceneLookup`, `DWPressController`. | Its slices target `DWNativeChromeFrameMatches` and `earlyNativeTitle:` in `Desktop+NativeTitles.m`; admission now owns the consumer and the old marker is stale. `DesktopNativeChromeTests.m` includes `DWNativeInput.m`, defines fake `LiveSource`/other production receivers and returns dictionary controller responses. Typed scenes/replies and admission adapters must replace them. Static chrome predicates have no exported pure-function ABI; exercise acceptance through admission rather than renaming a slice. |
 | `root-capture-mailbox.sh` | `DWRootCaptureMailbox.h`: `initWithSource:stream:`, `queue`, `currentImageAvailable`, `cancel`, inline `DWRootCaptureCrop`; `LiveSource.h`: `acceptCapturedSample:stream:received:forceInstall:`, `installPixels:`/`installPixels:contentRect:`. Captured press/Fill scenarios can use admission/size-transition entries above. | It slices mailbox/source internals, static transition image-geometry helpers, private captured-input predicates, DesktopView forwarding, title-click and Fill methods. It reads deleted `Desktop+Fill.m` before slicing, plus moved `Desktop+Private.h`. `DWRootCaptureMailboxTests.m` substitutes sample storage/install/dispatch and includes generated interface/implementation fragments; `DesktopCapturedInputTests.m` substitutes multiple receivers. Real mailbox APIs do not inject every substitution. `DWNativeTransitionCapture +captureIdentity:nativeBounds:screenRect:validate:completion:` performs native capture, not the static pure geometry predicates. Split scenarios by actual boundary and explicitly design missing native-free seams in the later test phase. |
 
 A public header is an available entry point, not proof that a fixture's fake

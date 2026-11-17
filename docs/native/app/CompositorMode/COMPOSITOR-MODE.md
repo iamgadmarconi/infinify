@@ -151,10 +151,6 @@ macOS 27.0.1 guest:
   classifier now accepts only the measured title row, excluding controls. It
   does not infer a title-bar height or claim inaccessible content below that row.
 
-`sh tests/e2e/native-chrome-input.sh` exercises the actual early consumer and
-tap-pair handling with substituted controller/native reads (22 checks).
-`sh tests/e2e/native-decorations.sh` covers the classifier (187 checks).
-
 Real-HID replays against the Dock helper passed for all four edges at zoom 0.5,
 top at zoom 1, and moves at zoom 0.25, 0.5 and 0.75. Repeating the original
 1560×640 native-window top resize produced zero dragged-edge reversals; the

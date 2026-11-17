@@ -255,7 +255,7 @@ The `before` double-click and tab/omnibox rows show that the application kept ge
 reliable, so that row is not claimed. Not measured: Aside's browser window (the guest's Aside only reached its sign-in screen), Electron windows with a hidden
 title bar, a window with many tabs (the 150 ms lookup was not timed; no `title_deadline` reason was logged in the after run with three tabs), and the owner's Mac.
 
-`sh tests/e2e/native-decorations.sh` runs the classifier over the Accessibility shapes recorded in the guest (Chrome with three tabs, one tab and an infobar, Aside's sign-in window, TextEdit, Finder; 57 checks, the first 57 of the script's 179 (the vertical-tabs shapes are described in "Chromium's vertical tab strip" below): caption points owned, tab, close button, New Tab, tab search, traffic lights, omnibox, toolbar and web content points the application's, the TextEdit and Finder cases unchanged, and mutations of the Chrome tree that must keep the old rejection). With the audit disabled 16 of those checks fail. It substitutes the AX calls, so it is a statement about the classifier, not about a live press.
+Recorded Accessibility shapes were replayed through the classifier with substituted AX calls; this was not a live press.
 
 COMPOSITOR-MODE.md's numbers row for the drag lane lists "Chrome tab strip" at 0 samples before and after at zoom 0.5; the points of that row are not
 recorded, and the empty-strip points of this section are the ones that showed 11 and 27.
@@ -362,10 +362,7 @@ Not measured, or not covered: Aside itself (above); the sidebar collapsed to its
 `vcaption_sidebar_geometry` and the window stays the application's, which the after run's log shows twice, once per "Collapse Tabs" test, so a collapsed Aside sidebar still flickers); a window with many tabs (the band walk's budget is covered by a test on a recorded tree, not timed in the guest: no
 `title_deadline` reason was logged with three tabs; the 150 ms lookup on Aside's 2056x1291 tree with its pinned grid was not timed); Chromium builds other than Chrome 156; the owner's Mac.
 
-`sh tests/e2e/native-decorations.sh` (179 checks, 57 of them the earlier horizontal, TextEdit and Finder cases, unchanged) replays Chrome 156's vertical-tabs tree and Aside's real window through the real
-classifier: the measured gaps, margins and the empty band are owned, and the lights, "Collapse Tabs", the header's popups, every toolbar item and the omnibox's edge, the leaf groups, the resize handle's slider
-and zone, the sidebar's margins, each tab and the gap between two tabs, "New tab", the separator, the Ask Aside popup, web content, Aside's pinned tabs, empty tab list and footer stay the application's; a
-dozen mutations keep today's rejection and its reason, and the band is dropped, not guessed, for a scroll area, too many controls or a container that stops short.
+Recorded Chrome vertical-tabs and Aside shapes were replayed through the classifier, including controls, content and mutation cases.
 
 ### A press the shell does not recognise (clicks, double-clicks and the first 50 ms of a press)
 
