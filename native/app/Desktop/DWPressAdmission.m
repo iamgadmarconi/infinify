@@ -983,7 +983,7 @@ static uint64_t DWClickRevertToken;
             &&CGRectContainsPoint((view?view.nativeScreenBounds:CGRectZero),CGEventGetLocation(event));
         held[@"click_start"]=pointJSON(CGEventGetLocation(event));held[@"click_possible"]=@(root);
         // Each press of a double-click answers for its own displacement: a pending or finished revert belongs to the press before.
-        [held removeObjectsForKeys:@[@"click_ended",@"revert",@"revert_token",@"takeover_tried"]];[self watchNativePress:source];
+        [held removeObjectsForKeys:@[@"click_ended",@"revert",@"revert_token",@"early_tried"]];[self watchNativePress:source];
         if(root)[self.desktop.navigation beginNativeClick:held[@"click_binding"] output:output];return;
     }
     CGRect initialNative,initialScreen;NSDictionary *initialRow=[self.nativeLookup windowInfo:source.router.wid];
@@ -1037,9 +1037,7 @@ static uint64_t DWClickRevertToken;
         return NO;}
     NSNumber *output=held[@"output"];DesktopView *view=nil;
     for(DesktopView *candidate in self.desktop.views)if([[candidate outputAt:start]isEqual:output]){view=candidate;break;}
-    // Once the native frame proves a drag, the watcher gets one admission
-    // attempt. A refusal must not repeat the full handoff every four ms.
-    held[@"takeover_tried"]=@YES;
+    if(early)held[@"early_tried"]=@YES;
     if(!view||view.gesture||view.heldPress||view.pressedSource||view.pressedTablet||view.pressedPointerGrab||self.gestureView||self.desktop.nativeOwnershipTransfer||self.desktop.nativeHoverTransfer
         ||[[self.desktop.sizeTransition busyWindow]isEqual:source.logical]||![[self.desktop.nativeViews desiredOwnerForWindow:source.logical]isEqual:output])return no("view_state");
     DWScene *snapshot=[self.scene.controller scene];DWWindow *record=nil;DWOutput *pose=nil;
@@ -1072,21 +1070,18 @@ static uint64_t DWClickRevertToken;
     if(DWDebugTrace())fprintf(stderr,"debug: native window drag taken over%s window=#%s native=%g,%g drawn=%g,%g\n",early?" at the press":"",source.logical.description.UTF8String,native.origin.x,native.origin.y,drawn.origin.x,drawn.origin.y);
     return YES;
 }
-// WindowServer can begin a native drag after the down or after a forwarded
-// motion packet. Watch the native frame every four ms while held, both before
-// and after pointer motion, rather than waiting for another packet to retry.
-// A click or control drag whose native frame has not moved is left alone.
+// A press forwarded to a transformed window can become the application's own window drag without one pointer packet: the application
+// calls performWindowDragWithEvent: at the down and WindowServer moves the native frame then. Nothing on the event tap sees that, so the
+// press is watched at 4 ms while the button is down, and takes over as soon as the origin moves with the pointer still at rest.
 - (void)watchNativePress:(LiveSource *)source {
     NSMutableDictionary *held=mutableMouseOwnership(source);if(!held||[(NSTimer *)held[@"watch"]isValid])return;
     __weak Desktop *weak=self.desktop;__weak LiveSource *weakSource=source;
     NSTimer *timer=[NSTimer timerWithTimeInterval:.004 repeats:YES block:^(NSTimer *tick){
         Desktop *desktop=weak;LiveSource *owner=weakSource;NSMutableDictionary *current=mutableMouseOwnership(owner);
-        if(!desktop||!owner||current!=held||current[@"watch"]!=tick||[current[@"taken"]boolValue]||[current[@"takeover_tried"]boolValue]||desktop.pressAdmission.nativeMouseOwner!=owner
+        if(!desktop||!owner||current!=held||current[@"watch"]!=tick||[current[@"taken"]boolValue]||[current[@"early_tried"]boolValue]||desktop.pressAdmission.nativeMouseOwner!=owner
             ||![self.nativeLookup physicalButton:kCGMouseButtonLeft]){[tick invalidate];return;}
-        CGEventRef here=CGEventCreate(NULL);if(!here)return;
-        CGPoint point=CGEventGetLocation(here),start=jsonPoint(current[@"click_start"]);CFRelease(here);
-        BOOL early=hypot(point.x-start.x,point.y-start.y)<=4;
-        if([desktop.pressAdmission takeOverNativeDrag:owner at:point early:early])[tick invalidate];
+        CGEventRef here=CGEventCreate(NULL);CGPoint point=here?CGEventGetLocation(here):CGPointZero;if(here)CFRelease(here);
+        if([desktop.pressAdmission takeOverNativeDrag:owner at:point early:YES])[tick invalidate];
     }];
     held[@"watch"]=timer;[NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
 }
