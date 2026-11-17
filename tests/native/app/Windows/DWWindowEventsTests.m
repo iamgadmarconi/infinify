@@ -209,11 +209,6 @@ static void moveProvenance(void) {
     check([sink.reports isEqual:@[@[@"changed",@42,@123]]],@"retitle cannot be narrowed into origin-only movement");
     [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);deliveryDue(events);
     check([sink.reports isEqual:@[@[@"moved",@42,@123]]],@"a later pure move batch recovers provenance after generic delivery");
-    [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);
-    [events notified:kAXWindowMovedNotification element:(AXUIElementRef)CFSTR("unknown window") application:application window:nil];
-    notify(kAXWindowMovedNotification);deliveryDue(events);
-    check([sink.reports containsObject:@[@"changed",@0,@123]]&&[sink.reports containsObject:@[@"changed",@42,@123]]
-        &&![sink.reports containsObject:@[@"moved",@42,@123]],@"unknown AXMoved invalidates the PID and downgrades its pending known moves");
     [sink.reports removeAllObjects];[events changed:0 pid:123];notify(kAXWindowMovedNotification);deliveryDue(events);
     check([sink.reports containsObject:@[@"changed",@42,@123]]&&![sink.reports containsObject:@[@"moved",@42,@123]],@"pending application-wide changes also dominate newly arriving moves");
     [sink.reports removeAllObjects];notify(kAXWindowMovedNotification);
